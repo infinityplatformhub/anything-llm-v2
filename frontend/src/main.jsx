@@ -157,7 +157,7 @@ const router = createBrowserRouter([
         },
       },
       {
-        path: "/settings/admin/lark",
+        path: "/settings/authentication/lark",
         lazy: async () => {
           const { default: LarkSettings } = await import(
             "@/pages/Admin/LarkSettings"

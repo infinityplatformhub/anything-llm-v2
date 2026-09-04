@@ -147,8 +147,8 @@ export default {
     lark: () => {
       return "/settings/lark";
     },
-    adminLark: () => {
-      return "/settings/admin/lark";
+    larkAuth: () => {
+      return "/settings/authentication/lark";
     },
     security: () => {
       return "/settings/security";
