@@ -202,9 +202,10 @@ fi
 
 playwright_output=""
 playwright_rc=0
+playwright_skipped=0
 if [[ "${E2E_SKIP_UI:-0}" == "1" ]]; then
-  playwright_output="6 passed (E2E_SKIP_UI=1)"
-  printf '%s\n' "$playwright_output"
+  playwright_skipped=1
+  echo "E2E_UI=SKIPPED"
 elif playwright_output="$(cd "$ROOT" && npx playwright test -c e2e/playwright.config.ts --reporter=line 2>&1)"; then
   playwright_rc=0
   printf '%s\n' "$playwright_output"
@@ -250,6 +251,11 @@ fi
 if [[ "$jest_verdict" != "ok" ]]; then
   result_printed=1
   echo "E2E_RESULT=FAIL reason=$jest_verdict"
+  exit 1
+fi
+if [[ "$playwright_skipped" -ne 0 ]]; then
+  result_printed=1
+  echo "E2E_RESULT=FAIL reason=UI suite skipped"
   exit 1
 fi
 if [[ "$playwright_rc" -ne 0 ]]; then
