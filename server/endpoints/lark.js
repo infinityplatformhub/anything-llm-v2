@@ -144,6 +144,12 @@ function larkEndpoints(app) {
       if (!oauthState || !new Set(["login", "connect"]).has(oauthState.mode))
         return loginError(response);
       mode = oauthState.mode;
+      if (
+        mode === "connect" &&
+        (oauthState.user_id == null ||
+          !Number.isFinite(Number(oauthState.user_id)))
+      )
+        return connectError(response);
       if (error)
         return oauthError(
           response,
@@ -151,8 +157,6 @@ function larkEndpoints(app) {
           error === "access_denied" ? "denied" : "unknown"
         );
       if (!code) return oauthError(response, mode);
-      if (mode === "connect" && oauthState.user_id == null)
-        return connectError(response);
 
       const encryption = new EncryptionManager();
       const verifier = encryption.decrypt(oauthState.code_verifier);
@@ -211,7 +215,14 @@ function larkEndpoints(app) {
     "/lark/identity",
     [validatedRequest],
     async (_request, response) => {
-      await LarkIdentity.delete({ user_id: response.locals.user.id });
+      const deleted = await LarkIdentity.delete({
+        user_id: response.locals.user.id,
+      });
+      if (!deleted)
+        return response.status(500).json({
+          success: false,
+          error: "Failed to disconnect Lark.",
+        });
       return response.json({
         success: true,
         remoteRevoked: false,

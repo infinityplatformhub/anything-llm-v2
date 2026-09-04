@@ -260,6 +260,29 @@ test("binds connect callback to user ID stored in state", async () => {
   expect(res.redirect).toHaveBeenCalledWith("/settings/lark?lark=connected");
 });
 
+test("rejects invalid connect owner before provider error", async () => {
+  LarkOauthState.consume.mockResolvedValue({
+    mode: "connect",
+    user_id: null,
+    code_verifier: "encrypted:verifier",
+  });
+  const { larkEndpoints } = require("../../../endpoints/lark");
+  const app = fakeApp();
+  larkEndpoints(app);
+
+  const res = await invoke(
+    app.routes["GET /lark/auth/callback"],
+    request({
+      query: { state: "state-value", error: "access_denied" },
+    })
+  );
+
+  expect(res.redirect).toHaveBeenCalledWith(
+    "/settings/lark?lark_error=unknown"
+  );
+  expect(oauth.exchangeCode).not.toHaveBeenCalled();
+});
+
 test("rejects open_id already owned by another user", async () => {
   LarkOauthState.consume.mockResolvedValue({
     mode: "connect",
@@ -364,6 +387,21 @@ test("disconnects only requesting user's identity", async () => {
   expect(res.json).toHaveBeenCalledWith(
     expect.objectContaining({ success: true })
   );
+});
+
+test("reports local disconnect failure", async () => {
+  LarkIdentity.delete.mockResolvedValue(false);
+  const { larkEndpoints } = require("../../../endpoints/lark");
+  const app = fakeApp();
+  larkEndpoints(app);
+
+  const res = await invoke(app.routes["DELETE /lark/identity"], request());
+
+  expect(res.status).toHaveBeenCalledWith(500);
+  expect(res.json).toHaveBeenCalledWith({
+    success: false,
+    error: "Failed to disconnect Lark.",
+  });
 });
 
 test("does not claim remote token revocation", async () => {
