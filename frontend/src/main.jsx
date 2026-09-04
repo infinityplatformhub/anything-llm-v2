@@ -147,6 +147,15 @@ const router = createBrowserRouter([
         },
       },
       {
+        path: "/settings/lark",
+        lazy: async () => {
+          const { default: LarkSettings } = await import(
+            "@/pages/Admin/LarkSettings"
+          );
+          return { element: <AdminRoute Component={LarkSettings} /> };
+        },
+      },
+      {
         path: "/settings/agents",
         lazy: async () => {
           const { default: AdminAgents } = await import("@/pages/Admin/Agents");

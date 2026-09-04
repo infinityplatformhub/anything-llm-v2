@@ -144,6 +144,9 @@ export default {
     vectorDatabase: () => {
       return "/settings/vector-database";
     },
+    lark: () => {
+      return "/settings/lark";
+    },
     security: () => {
       return "/settings/security";
     },
