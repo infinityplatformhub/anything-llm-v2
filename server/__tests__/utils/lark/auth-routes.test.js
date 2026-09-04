@@ -191,6 +191,7 @@ test("consumes state before exchanging callback code", async () => {
     order.push("exchange");
     throw new Error("provider detail");
   });
+  jest.spyOn(console, "error").mockImplementation(() => {});
   const { larkEndpoints } = require("../../../endpoints/lark");
   const app = fakeApp();
   larkEndpoints(app);

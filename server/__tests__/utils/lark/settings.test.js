@@ -22,6 +22,7 @@ const {
   DEFAULT_LARK_CLI_ALLOWLIST,
   fetchAppAccessToken,
   isLarkLoginEnabled,
+  LARK_AUTH_CALLBACK_PATH,
   loadLarkConfig,
   validateLarkSettings,
 } = require("../../../utils/lark/settings");
@@ -234,6 +235,10 @@ test("returns only enabled boolean from public setup settings", async () => {
   expect(settings.LarkLoginEnabled).toBe(true);
   expect(settings).not.toHaveProperty("LarkAppSecret");
   expect(settings).not.toHaveProperty("lark_app_secret");
+});
+
+test("uses registered Lark auth callback path", () => {
+  expect(LARK_AUTH_CALLBACK_PATH).toBe("/api/lark/auth/callback");
 });
 
 test("uses defaults and derives redirect URI while loading configuration", async () => {

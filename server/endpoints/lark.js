@@ -111,8 +111,8 @@ function larkEndpoints(app) {
       return response.redirect(
         `/sso/lark?token=${encodeURIComponent(issued.token)}`
       );
-    } catch (callbackError) {
-      console.error("Lark login callback failed", callbackError.message);
+    } catch {
+      console.error("Lark login callback failed");
       return loginError(response);
     }
   });

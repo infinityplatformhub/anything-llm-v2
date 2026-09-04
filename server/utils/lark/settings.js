@@ -2,6 +2,7 @@ const { SystemSettings } = require("../../models/systemSettings");
 const { EncryptionManager } = require("../EncryptionManager");
 const { DEFAULT_SCOPES } = require("./constants");
 
+const LARK_AUTH_CALLBACK_PATH = "/api/lark/auth/callback";
 const APP_ACCESS_TOKEN_URL =
   "https://open.larksuite.com/open-apis/auth/v3/app_access_token/internal";
 const DEFAULT_LARK_CLI_ALLOWLIST = [
@@ -154,7 +155,7 @@ async function loadLarkConfig({ encryption } = {}) {
       allowlist,
     };
     if (process.env.SERVER_URL)
-      config.redirectUri = `${process.env.SERVER_URL.replace(/\/$/, "")}/api/lark/auth/callback`;
+      config.redirectUri = `${process.env.SERVER_URL.replace(/\/$/, "")}${LARK_AUTH_CALLBACK_PATH}`;
     return config;
   } catch {
     return null;
@@ -200,6 +201,7 @@ module.exports = {
   DEFAULT_LARK_CLI_ALLOWLIST,
   fetchAppAccessToken,
   isLarkLoginEnabled,
+  LARK_AUTH_CALLBACK_PATH,
   loadLarkConfig,
   validateLarkSettings,
 };
