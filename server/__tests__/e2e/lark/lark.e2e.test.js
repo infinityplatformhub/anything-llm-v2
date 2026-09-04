@@ -2,7 +2,8 @@
  * End-to-end coverage for the Lark feature: a real server child process, a real
  * sqlite database, a mock Lark, and a fake CLI. Nothing in this file mocks our
  * own modules; the only test-only shim is helpers/preload.js, which repoints the
- * Prisma datasource and the one hardcoded Lark host at the throwaway fixtures.
+ * Prisma datasource at the throwaway database. Every Lark host is reached
+ * through LARK_BASE_URL / LARK_ACCOUNTS_URL, which are ordinary configuration.
  */
 require("./helpers/preload");
 
@@ -100,11 +101,9 @@ beforeAll(async () => {
   lark = await new MockLark().start();
   process.env.LARK_BASE_URL = lark.baseUrl;
   process.env.LARK_ACCOUNTS_URL = lark.baseUrl;
-  process.env.E2E_LARK_HOST_REWRITE = `https://open.larksuite.com=>${lark.baseUrl}`;
   server = await startServer(environment, {
     LARK_BASE_URL: lark.baseUrl,
     LARK_ACCOUNTS_URL: lark.baseUrl,
-    E2E_LARK_HOST_REWRITE: `https://open.larksuite.com=>${lark.baseUrl}`,
   });
   const admin = await server.enableMultiUser(ADMIN);
   adminToken = admin.token;
@@ -438,7 +437,20 @@ describe("Lark end-to-end", () => {
         })
       );
       const identityId = stored.id;
-      const originalRefresh = stored.refresh_token;
+      const storedAccessBefore = stored.access_token;
+      const storedRefreshBefore = stored.refresh_token;
+
+      // What Lark actually handed over at login, in the clear.
+      const [firstIssue] = lark.issuedFor(userInfo.open_id);
+      expect(firstIssue.accessToken).toMatch(/^u-/);
+      expect(firstIssue.refreshToken).toMatch(/^ur-/);
+      // Neither column may hold the plaintext it came from.
+      expect(storedAccessBefore).not.toBe(firstIssue.accessToken);
+      expect(storedRefreshBefore).not.toBe(firstIssue.refreshToken);
+      expect(storedAccessBefore).not.toContain(firstIssue.accessToken);
+      expect(storedRefreshBefore).not.toContain(firstIssue.refreshToken);
+      expect(storedAccessBefore).toMatch(/^[0-9a-f]+:[0-9a-f]+$/);
+      expect(storedRefreshBefore).toMatch(/^[0-9a-f]+:[0-9a-f]+$/);
 
       environment.clearInvocations();
       const before = lark.requestsFor("/open-apis/authen/v2/oauth/token").length;
@@ -453,19 +465,34 @@ describe("Lark end-to-end", () => {
         .slice(before)
         .filter((entry) => entry.body?.grant_type === "refresh_token");
       expect(refreshCalls).toHaveLength(1);
+      // The refresh presented the plaintext token from login, decrypted.
+      expect(refreshCalls[0].body.refresh_token).toBe(firstIssue.refreshToken);
 
       const rotated = await withDb(environment, (prisma) =>
         prisma.lark_identities.findUnique({ where: { id: identityId } })
       );
-      expect(rotated.refresh_token).not.toBe(originalRefresh);
+      // Both halves of the pair move, and both stay ciphertext.
+      const secondIssue = lark.issuedFor(userInfo.open_id).at(1);
+      expect(secondIssue.accessToken).not.toBe(firstIssue.accessToken);
+      expect(rotated.access_token).not.toBe(storedAccessBefore);
+      expect(rotated.refresh_token).not.toBe(storedRefreshBefore);
+      expect(rotated.access_token).not.toBe(secondIssue.accessToken);
+      expect(rotated.refresh_token).not.toBe(secondIssue.refreshToken);
+      expect(rotated.access_token).not.toContain(secondIssue.accessToken);
+      expect(rotated.refresh_token).not.toContain(secondIssue.refreshToken);
       expect(rotated.needs_reauth).toBe(false);
+      // The runner handed the freshly issued access token to the CLI.
+      const [refreshedInvocation] = environment.readInvocations();
+      expect(refreshedInvocation.env.LARKSUITE_CLI_USER_ACCESS_TOKEN).toBe(
+        secondIssue.accessToken
+      );
 
       // Force the stale pair back in: the mock rejects a reused refresh token.
       await withDb(environment, (prisma) =>
         prisma.lark_identities.update({
           where: { id: identityId },
           data: {
-            refresh_token: originalRefresh,
+            refresh_token: storedRefreshBefore,
             access_expires_at: new Date(Date.now() + 1000),
           },
         })
@@ -576,7 +603,6 @@ describe("Lark end-to-end", () => {
     expect(denied.approvals).toHaveLength(1);
     expect(denied.approvals[0].skillName).toBe(SKILL_NAME);
     expect(denied.approvals[0].payload.command).toBe(args.join(" "));
-    expect(denied.approvals[0].payload.command).not.toMatch(/u-[A-Za-z0-9]{16,}/);
     expect(environment.readInvocations()).toHaveLength(0);
 
     const approved = build(true);
@@ -584,13 +610,35 @@ describe("Lark end-to-end", () => {
       args,
     });
     expect(approved.approvals).toHaveLength(1);
-    expect(environment.readInvocations()).toHaveLength(1);
+    const invocations = environment.readInvocations();
+    expect(invocations).toHaveLength(1);
     expect(JSON.parse(approvedOutput).argv).toEqual([
       ...args,
       "--as",
       "user",
       "--json",
     ]);
+
+    // The exact live token, as handed to the CLI that just ran. Nothing in the
+    // approval the operator sees may echo it back.
+    const uat = invocations[0].env.LARKSUITE_CLI_USER_ACCESS_TOKEN;
+    expect(uat).toMatch(/^u-/);
+    expect(JSON.stringify(approved.approvals[0])).not.toContain(uat);
+
+    // A command that carries the token in its own arguments still reaches the
+    // operator with the value masked, and a denial keeps the CLI unspawned.
+    environment.clearInvocations();
+    const leaky = build(false);
+    const leakyArgs = ["im", "+messages-send", "--user-id", "ou_x", "--text", uat];
+    const leakyOutput = await leaky.handler.call(leaky.aibitat, {
+      args: leakyArgs,
+    });
+    expect(leakyOutput).toBe("Lark command was not approved.");
+    expect(leaky.approvals).toHaveLength(1);
+    expect(leaky.approvals[0].payload.command).toContain("[redacted]");
+    expect(leaky.approvals[0].payload.command).not.toContain(uat);
+    expect(JSON.stringify(leaky.approvals[0])).not.toContain(uat);
+    expect(environment.readInvocations()).toHaveLength(0);
   });
 
   it("12. denylisted and non-allowlisted commands never reach the CLI", async () => {
@@ -647,6 +695,9 @@ describe("Lark end-to-end", () => {
     const args = ["contact", "+search-user", "--query", "limits"];
 
     try {
+      // The sibling kill path, a hung child hitting TIMEOUT_MS, is proven with
+      // fake timers in __tests__/utils/lark/cli.test.js; both land in
+      // killAndFinish, and a real 60 s wait here would only slow the suite.
       environment.setCliMode("big");
       const big = await runner.runAsUser({ userId: identity.user_id, args });
       expect(big).toMatchObject({ ok: false, truncated: true });
@@ -665,12 +716,6 @@ describe("Lark end-to-end", () => {
       environment.setCliMode("ok");
     }
   });
-
-  // TIMEOUT_MS is a fixed 60 s export with no env override, and the brief
-  // forbids adding env plumbing to cli.js. A real timeout case would idle the
-  // suite for a minute per run, so the kill path is covered by the output-cap
-  // case above, which resolves through the same killAndFinish branch.
-  it.skip("13b. a hung CLI is killed at TIMEOUT_MS (needs a 60s wait; no env override)", () => {});
 
   it("14. every invocation is audited and no raw token is written to the log", async () => {
     const userInfo = nextIdentity("audit");

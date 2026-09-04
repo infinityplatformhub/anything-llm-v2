@@ -1,10 +1,8 @@
 const { SystemSettings } = require("../../models/systemSettings");
 const { EncryptionManager } = require("../EncryptionManager");
-const { DEFAULT_SCOPES } = require("./constants");
+const { APP_ACCESS_TOKEN_URL, DEFAULT_SCOPES } = require("./constants");
 
 const LARK_AUTH_CALLBACK_PATH = "/api/lark/auth/callback";
-const APP_ACCESS_TOKEN_URL =
-  "https://open.larksuite.com/open-apis/auth/v3/app_access_token/internal";
 const DEFAULT_LARK_CLI_ALLOWLIST = [
   "im",
   "docs",

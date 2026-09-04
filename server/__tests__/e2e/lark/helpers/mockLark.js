@@ -3,6 +3,7 @@
  * Implements only what the product calls: authorize, token (code + refresh),
  * user_info, and app_access_token. Records every request for assertions.
  */
+const crypto = require("crypto");
 const http = require("http");
 
 const DEFAULT_USER = {
@@ -53,6 +54,8 @@ class MockLark {
     this.codes = new Map();
     /** refresh token -> {user, used} */
     this.refreshTokens = new Map();
+    /** every plaintext pair issued, in order: {openId, accessToken, refreshToken} */
+    this.issued = [];
     this.counter = 0;
     this.server = null;
     this.port = null;
@@ -72,6 +75,7 @@ class MockLark {
     this.accessTokens.clear();
     this.codes.clear();
     this.refreshTokens.clear();
+    this.issued = [];
   }
 
   setUser(patch = {}) {
@@ -88,12 +92,27 @@ class MockLark {
   }
 
   issueTokens(user) {
-    // Prefix mirrors Lark's real token shape so the runner's redaction regex applies.
-    const accessToken = `u-${this.nextId("uat").replace(/-/g, "")}`;
-    const refreshToken = `ur-${this.nextId("urt").replace(/-/g, "")}`;
+    // Shape mirrors a real Lark token: a `u-` / `ur-` prefix followed by at
+    // least 24 characters. The runner's redaction regex needs 16 or more after
+    // the prefix, so a shorter fixture would silently pass through unredacted
+    // and make every redaction assertion vacuous.
+    const body = () =>
+      `${this.nextId("t").replace(/-/g, "")}${crypto.randomBytes(12).toString("hex")}`;
+    const accessToken = `u-${body()}`;
+    const refreshToken = `ur-${body()}`;
     this.accessTokens.set(accessToken, { ...user });
     this.refreshTokens.set(refreshToken, { user: { ...user }, used: false });
+    this.issued.push({ openId: user?.open_id, accessToken, refreshToken });
     return { accessToken, refreshToken };
+  }
+
+  /**
+   * The plaintext pairs handed to one Lark account, oldest first. Tests use
+   * these to prove the stored columns are ciphertext and that a refresh
+   * presented the previous plaintext token.
+   */
+  issuedFor(openId) {
+    return this.issued.filter((entry) => entry.openId === openId);
   }
 
   async handle(request, response) {

@@ -41,10 +41,10 @@ function main() {
   const mode = state.mode || "ok";
   const token = process.env.LARKSUITE_CLI_USER_ACCESS_TOKEN || "";
 
-  if (mode === "sleep") {
-    // Outlives the runner's TIMEOUT_MS so the kill path is exercised for real.
-    setTimeout(() => process.exit(0), 70_000);
-  } else if (mode === "fail") {
+  // No "sleep" mode: the TIMEOUT_MS kill path is proven with fake timers in
+  // __tests__/utils/lark/cli.test.js, and a real 60 s wait would only stall
+  // this suite.
+  if (mode === "fail") {
     process.stderr.write(`fake cli failed while using token ${token}\n`);
     process.exit(2);
   } else if (mode === "big") {

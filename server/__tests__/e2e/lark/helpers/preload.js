@@ -6,19 +6,16 @@
  * 1. Node >= 24 removed buffer.SlowBuffer, which jsonwebtoken's
  *    buffer-equal-constant-time still reads at require time.
  *    ponytail: drop when jsonwebtoken drops buffer-equal-constant-time.
- * 2. `APP_ACCESS_TOKEN_URL` in utils/lark/settings.js is a hardcoded
- *    open.larksuite.com literal with no env override, so the admin
- *    test-connection route cannot be pointed at the mock the way the other Lark
- *    URLs can. E2E_LARK_HOST_REWRITE redirects that host at the fetch layer,
- *    which leaves the product code path untouched.
- * 3. schema.prisma hardcodes `file:../storage/anythingllm.db` and exposes no
+ * 2. schema.prisma hardcodes `file:../storage/anythingllm.db` and exposes no
  *    DATABASE_URL, so the generated client is repointed at the throwaway
  *    database named by E2E_DATABASE_URL.
  *
- * Both variables are read lazily, per construction and per request, because the
- * Jest worker only learns the temp paths in beforeAll. A missing variable makes
- * the corresponding patch a pass-through, so this file can never redirect a
- * production boot.
+ * The database URL is read lazily, per client construction, because the Jest
+ * worker only learns the temp path in beforeAll. Without the variable the
+ * subclass is a pass-through, so this file can never redirect a production boot.
+ *
+ * Every Lark host now derives from LARK_BASE_URL / LARK_ACCOUNTS_URL, so the
+ * mock is reached through configuration alone and no fetch patching is needed.
  */
 const buffer = require("buffer");
 if (!buffer.SlowBuffer) buffer.SlowBuffer = buffer.Buffer;
@@ -37,22 +34,6 @@ Object.defineProperty(client, "PrismaClient", {
   enumerable: true,
   configurable: true,
 });
-
-const originalFetch = globalThis.fetch;
-globalThis.fetch = function (input, init) {
-  const rewrite = process.env.E2E_LARK_HOST_REWRITE;
-  if (!rewrite) return originalFetch(input, init);
-  const [fromOrigin, toOrigin] = rewrite.split("=>");
-  const target =
-    typeof input === "string"
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input?.url;
-  if (typeof target === "string" && target.startsWith(fromOrigin))
-    return originalFetch(target.replace(fromOrigin, toOrigin), init);
-  return originalFetch(input, init);
-};
 
 // Jest treats every JavaScript file under __tests__ as a suite.
 if (typeof expect !== "undefined" && expect.getState().testPath === __filename)

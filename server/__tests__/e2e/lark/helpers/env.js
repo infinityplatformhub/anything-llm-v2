@@ -23,6 +23,16 @@ const FAKE_CLI = path.join(__dirname, "fakeCli.js");
  */
 function createTempEnvironment() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "allm-lark-e2e-"));
+  try {
+    return buildEnvironment(root);
+  } catch (error) {
+    // Nothing has a handle on the root yet, so a failure here would strand it.
+    fs.rmSync(root, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function buildEnvironment(root) {
   const storageDir = path.join(root, "storage");
   const prismaDir = path.join(root, "prisma");
   const dbFile = path.join(root, "anythingllm.db");

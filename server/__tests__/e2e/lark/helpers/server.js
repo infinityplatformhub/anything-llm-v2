@@ -107,11 +107,60 @@ class TestServer {
 }
 
 /**
+ * Boots the server, retrying once on a lost port. freePort releases its probe
+ * listener before the child binds, so another process on a busy machine can
+ * claim the number in between; that is rare, recoverable, and not worth failing
+ * a run over.
+ *
  * @param {ReturnType<import("./env").createTempEnvironment>} environment
  * @param {Record<string,string>} extraEnv
+ * @param {{firstPort?: number}} options test hook for the retry self-check
  */
-async function startServer(environment, extraEnv = {}) {
-  const port = await freePort();
+async function startServer(environment, extraEnv = {}, options = {}) {
+  const attempts = [options.firstPort ?? (await freePort()), null];
+  let lastError;
+  for (const candidate of attempts) {
+    const port = candidate ?? (await freePort());
+    try {
+      return await startOnPort(environment, extraEnv, port);
+    } catch (error) {
+      lastError = error;
+      if (!isPortTaken(error)) throw error;
+    }
+  }
+  throw lastError;
+}
+
+function isPortTaken(error) {
+  return /EADDRINUSE|address already in use/i.test(error?.message || "");
+}
+
+/** Resolves if nothing is listening, rejects EADDRINUSE-style if something is. */
+function assertPortFree(port) {
+  return new Promise((resolve, reject) => {
+    const probe = net.connect({ port, host: "127.0.0.1" });
+    const done = (error) => {
+      probe.destroy();
+      error ? reject(error) : resolve();
+    };
+    probe.once("connect", () =>
+      done(new Error(`EADDRINUSE: port ${port} was claimed before startup`))
+    );
+    probe.once("error", () => done()); // refused means free
+    probe.setTimeout(1000, () => done());
+  });
+}
+
+/**
+ * @param {ReturnType<import("./env").createTempEnvironment>} environment
+ * @param {Record<string,string>} extraEnv
+ * @param {number} port
+ */
+async function startOnPort(environment, extraEnv, port) {
+  // bootHTTP passes listen errors to a handler that only re-registers signal
+  // traps, so a stolen port makes the child hang silently rather than exit.
+  // Checking first turns that 90 s mystery into an immediate, retryable error.
+  await assertPortFree(port);
   const logs = [];
   const child = spawn(
     process.execPath,
