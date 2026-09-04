@@ -1,6 +1,7 @@
 require("./_polyfill");
 
 jest.mock("../../../utils/lark/cli", () => ({
+  SECRET_PATTERN: /[ut]-[A-Za-z0-9._-]{16,}/g,
   checkPolicy: jest.fn(),
   classify: jest.fn(),
   runAsUser: jest.fn(),
@@ -24,7 +25,13 @@ const cli = require("../../../utils/lark/cli");
 const settings = require("../../../utils/lark/settings");
 const { LarkIdentity } = require("../../../models/larkIdentity");
 const { SystemSettings } = require("../../../models/systemSettings");
-const { larkCli } = require("../../../utils/agents/aibitat/plugins/lark-cli");
+const {
+  larkCli,
+  redactForDisplay,
+} = require("../../../utils/agents/aibitat/plugins/lark-cli");
+const { SECRET_PATTERN: REAL_SECRET_PATTERN } = jest.requireActual(
+  "../../../utils/lark/cli"
+);
 
 const config = {
   enabled: true,
@@ -258,5 +265,27 @@ test("registers plugin once in exports and defaults discovery", async () => {
   const discovered = await agentSkillsFromSystemSettings();
   expect(discovered.filter((name) => name === "lark-cli")).toEqual([
     "lark-cli",
+  ]);
+});
+
+test("approval redaction reuses the runner's single secret pattern", () => {
+  // The plugin must not carry its own copy of the pattern: a drift between the
+  // two would let a token reach the approval card the runner would have hidden.
+  expect(REAL_SECRET_PATTERN).toBeInstanceOf(RegExp);
+  expect(REAL_SECRET_PATTERN.flags).toContain("g");
+
+  const token = `u-${"a".repeat(20)}`;
+  const source = require("fs").readFileSync(
+    require.resolve("../../../utils/agents/aibitat/plugins/lark-cli"),
+    "utf8"
+  );
+  expect(source).toContain("SECRET_PATTERN");
+  expect(source).not.toMatch(/\[ut\]-\[A-Za-z0-9/);
+
+  expect(redactForDisplay(["im", "+messages-send", "--text", token])).toEqual([
+    "im",
+    "+messages-send",
+    "--text",
+    "[redacted]",
   ]);
 });

@@ -14,8 +14,83 @@ const MAX_OUTPUT_BYTES = 65_536;
 // Build default indirectly because a local shell hook blocks the literal executable name.
 const LARK_CLI_BIN = process.env.LARK_CLI_PATH || ["lark", "cli"].join("-");
 const COMMAND_TOKEN = /^[+]?[a-z0-9-]+$/;
-const SAFE_TOKEN = /^[A-Za-z0-9+._:/@=,-]+$/;
+const FLAG_TOKEN = /^--[a-z][a-z0-9-]*$|^-[a-z]$/;
+const MAX_VALUE_LENGTH = 4096;
 const RECONNECT_ERROR = "Reconnect Lark in Settings";
+// One definition of the credential shape, shared with the agent plugin so the
+// approval card and the audit log can never redact different things.
+const SECRET_PATTERN = /[ut]-[A-Za-z0-9._-]{16,}/g;
+
+// The runner appends `--as user --json` itself and owns the identity, the
+// brand, and the config location. A caller-supplied copy of any of those would
+// either override the runner's choice or point the CLI at another account.
+const RUNNER_OWNED_FLAGS = [
+  "--as",
+  "--config",
+  "--profile",
+  "--brand",
+  "--app-id",
+  "--user-access-token",
+  "--tenant-access-token",
+];
+
+// The CLI reads and writes local files through ordinary flag values. Any flag
+// that names a path is denied outright; a value can then never become a file.
+const FILESYSTEM_FLAGS = [
+  "--output",
+  "-o",
+  "--output-dir",
+  "--out",
+  "--local-dir",
+  "--file",
+  "--body-file",
+  "--patch-file",
+  "--data",
+  "--csv",
+  "--image",
+  "--attachment",
+  "--path",
+];
+const FILESYSTEM_FLAG_SUFFIXES = ["-file", "-dir", "-path"];
+
+// Read commands, hand-classified from the subcommand vocabulary of the six
+// default groups. Only verbs that cannot mutate tenant state are listed; every
+// pair absent from this list classifies as a write and needs approval.
+// derived from @larksuite/cli 1.0.93
+const READ_COMMANDS = Object.freeze([
+  "calendar +agenda",
+  "calendar +freebusy",
+  "calendar +get",
+  "calendar +list-attendees",
+  "calendar +meeting",
+  "calendar +room-find",
+  "calendar +search-event",
+  "calendar +suggestion",
+  "contact +get-user",
+  "contact +search-bot",
+  "contact +search-user",
+  "docs +fetch",
+  "docs +history-list",
+  "docs +media-preview",
+  "im +chat-list",
+  "im +chat-members-list",
+  "im +chat-messages-list",
+  "im +chat-search",
+  "im +feed-group-list",
+  "im +feed-group-query-item",
+  "im +feed-shortcut-list",
+  "im +flag-list",
+  "im +message-read-users",
+  "im +messages-mget",
+  "im +messages-read-status",
+  "im +messages-search",
+  "im +threads-messages-list",
+  "wiki +member-list",
+  "wiki +node-get",
+  "wiki +node-list",
+  "wiki +space-list",
+]);
+const READ_COMMAND_SET = new Set(READ_COMMANDS);
 
 class AuditedError extends Error {
   constructor(reason) {
@@ -33,6 +108,31 @@ function logFailure(reason, error, secrets = []) {
   );
 }
 
+function isDeniedFlag(flag) {
+  return (
+    RUNNER_OWNED_FLAGS.includes(flag) ||
+    FILESYSTEM_FLAGS.includes(flag) ||
+    FILESYSTEM_FLAG_SUFFIXES.some((suffix) => flag.endsWith(suffix))
+  );
+}
+
+// A flag value is never allowed to name a file. `@path` makes the CLI read a
+// local file as the value, and an absolute or traversing path names one
+// directly; both are how an unapproved read of server secrets would happen.
+function isSafeValue(value) {
+  if (value.length > MAX_VALUE_LENGTH) return false;
+  if (value.startsWith("@")) return false;
+  if (value.startsWith("/") || value.startsWith("\\")) return false;
+  if (/^[A-Za-z]:[\\/]/.test(value)) return false;
+  if (value.includes("..")) return false;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(value)) return false;
+  return true;
+}
+
+// Every token is checked. The shape is exactly two positional command tokens
+// followed by flags and their values, so a second subcommand cannot ride along
+// behind a read-shaped one and reach the CLI without approval.
 function validateArgs(args) {
   if (!Array.isArray(args) || args.length === 0)
     return { ok: false, reason: "Arguments must be a non-empty array" };
@@ -43,15 +143,29 @@ function validateArgs(args) {
   }
   if (args[0].startsWith("-"))
     return { ok: false, reason: "Command cannot start with a flag" };
+  if (args.length < 2)
+    return { ok: false, reason: "Command requires a group and a subcommand" };
 
-  for (let index = 0; index < args.length; index += 1) {
-    if (index < 2) {
-      if (!COMMAND_TOKEN.test(args[index]))
-        return { ok: false, reason: "Malformed command token" };
+  for (let index = 0; index < 2; index += 1) {
+    if (!COMMAND_TOKEN.test(args[index]))
+      return { ok: false, reason: "Malformed command token" };
+  }
+
+  let expectsValue = false;
+  for (let index = 2; index < args.length; index += 1) {
+    const token = args[index];
+    if (token.startsWith("-")) {
+      if (!FLAG_TOKEN.test(token))
+        return { ok: false, reason: "Malformed flag token" };
+      if (isDeniedFlag(token))
+        return { ok: false, reason: "Flag is not permitted" };
+      expectsValue = true;
       continue;
     }
-    if (!SAFE_TOKEN.test(args[index]) && !args[index - 1].startsWith("-"))
-      return { ok: false, reason: "Malformed argument token" };
+    if (!expectsValue) return { ok: false, reason: "Malformed argument token" };
+    if (!isSafeValue(token))
+      return { ok: false, reason: "Malformed argument value" };
+    expectsValue = false;
   }
   return { ok: true };
 }
@@ -79,23 +193,15 @@ function checkPolicy(args, allowlist) {
   return { allowed: true, reason: "Command is allowlisted" };
 }
 
+// Fail closed: only an exact pinned `group +subcommand` pair reads. After
+// validateArgs a third positional token cannot exist, so tokens 0 and 1 are
+// the whole command.
 function classify(args) {
-  const tokens = Array.isArray(args)
-    ? args
-        .slice(0, args[1]?.startsWith("-") ? 1 : 2)
-        .map((arg) => arg.toLowerCase())
-    : [];
-  return tokens.some(
-    (token) =>
-      token === "+search-user" ||
-      token === "+fetch" ||
-      token === "status" ||
-      token.endsWith("-list") ||
-      token.endsWith("-get") ||
-      token.endsWith("-search")
-  )
-    ? "read"
-    : "write";
+  if (!Array.isArray(args) || args.length < 2) return "write";
+  const group = normalizeCommandToken(args[0]);
+  const subcommand = normalizeCommandToken(args[1]);
+  if (!group || !subcommand) return "write";
+  return READ_COMMAND_SET.has(`${group} +${subcommand}`) ? "read" : "write";
 }
 
 function redact(value, secrets) {
@@ -104,7 +210,7 @@ function redact(value, secrets) {
     if (typeof secret === "string" && secret.length > 0)
       output = output.split(secret).join("[redacted]");
   }
-  return output.replace(/[ut]-[A-Za-z0-9._-]{16,}/g, "[redacted]");
+  return output.replace(SECRET_PATTERN, "[redacted]");
 }
 
 function redactData(value, secrets) {
@@ -286,8 +392,7 @@ async function runAsUser({ userId, args, encryption } = {}) {
     // Still pre-token: fixed reasons only, and never user-controlled args.
     await audit(userId, {
       outcome: "error",
-      reason:
-        error instanceof AuditedError ? error.reason : "identity_missing",
+      reason: error instanceof AuditedError ? error.reason : "identity_missing",
       exitCode: undefined,
       timedOut: false,
       truncated: false,
@@ -372,6 +477,8 @@ module.exports = {
   LARK_CLI_BIN,
   MAX_OUTPUT_BYTES,
   PERMANENT_DENYLIST,
+  READ_COMMANDS,
+  SECRET_PATTERN,
   TIMEOUT_MS,
   checkPolicy,
   classify,

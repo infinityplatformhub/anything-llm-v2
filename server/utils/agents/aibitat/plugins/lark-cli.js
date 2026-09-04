@@ -1,6 +1,7 @@
 const { LarkIdentity } = require("../../../../models/larkIdentity");
 const { SystemSettings } = require("../../../../models/systemSettings");
 const {
+  SECRET_PATTERN,
   checkPolicy,
   classify,
   runAsUser,
@@ -14,10 +15,11 @@ const {
 const NOT_CONNECTED =
   "Lark is not connected for this user. Connect Lark in Settings.";
 
+// The app secret and the user access token are not resolved at approval time,
+// so the card cannot be redacted by exact value. It reuses the runner's single
+// credential pattern instead, so the two can never drift apart.
 function redactForDisplay(args) {
-  return args.map((arg) =>
-    arg.replace(/[ut]-[A-Za-z0-9._-]{16,}/g, "[redacted]")
-  );
+  return args.map((arg) => arg.replace(SECRET_PATTERN, "[redacted]"));
 }
 
 const larkCli = {

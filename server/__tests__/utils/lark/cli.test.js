@@ -36,6 +36,8 @@ const {
   MAX_OUTPUT_BYTES,
   PERMANENT_DENYLIST,
   TIMEOUT_MS,
+  READ_COMMANDS,
+  SECRET_PATTERN,
   checkPolicy,
   classify,
   runAsUser,
@@ -133,7 +135,7 @@ test("denies non-allowlisted and malformed argument arrays without spawn", async
     ["-contact"],
     ["contact\0bad"],
     ["contact", "bad command"],
-    ["contact", "search", "bad value"],
+    ["contact", "search", "bad\u0007value"],
   ];
 
   for (const args of malformed) expect(validateArgs(args).ok).toBe(false);
@@ -159,18 +161,159 @@ test("denies non-allowlisted and malformed argument arrays without spawn", async
   expect(spawn).not.toHaveBeenCalled();
 });
 
-test("classifies exact read forms and defaults unknown forms to write", () => {
-  expect(classify(["+search-user"])).toBe("read");
+test("classifies only allowlisted read pairs and defaults everything to write", () => {
+  expect(classify(["contact", "+search-user"])).toBe("read");
   expect(classify(["docs", "+fetch"])).toBe("read");
-  expect(classify(["status"])).toBe("read");
-  expect(classify(["contact", "user-list"])).toBe("read");
-  expect(classify(["docs", "document-get"])).toBe("read");
-  expect(classify(["contact", "user-search"])).toBe("read");
+  expect(classify(["im", "+chat-list"])).toBe("read");
+  expect(classify(["wiki", "+node-list"])).toBe("read");
+  expect(classify(["calendar", "+agenda"])).toBe("read");
+  // Case and the optional + prefix are normalized before the lookup.
+  expect(classify(["CONTACT", "search-user"])).toBe("read");
+
   expect(classify(["im", "+messages-send"])).toBe("write");
+  expect(classify(["contact", "list"])).toBe("write");
+  expect(classify(["docs", "+create"])).toBe("write");
+  // The old suffix heuristic read these as safe; the allowlist does not.
+  expect(classify(["im", "+messages-delete-list"])).toBe("write");
+  expect(classify(["docs", "+blocks-batch-update-get"])).toBe("write");
+  expect(classify(["wiki", "+spaces-node-move-get"])).toBe("write");
+  // Read pairs stay read no matter what flags follow; unknown flags cannot
+  // exist because validateArgs rejects them first.
+  expect(classify(["docs", "+fetch", "--doc", "document-get"])).toBe("read");
   expect(classify(["im", "+messages-send", "--text", "document-get"])).toBe(
     "write"
   );
-  expect(classify(["contact", "list"])).toBe("write");
+  // A single token is not a group/subcommand pair.
+  expect(classify(["status"])).toBe("write");
+  expect(classify(["+search-user"])).toBe("write");
+});
+
+test("READ_COMMANDS is a frozen pinned pair allowlist", () => {
+  expect(Array.isArray(READ_COMMANDS)).toBe(true);
+  expect(Object.isFrozen(READ_COMMANDS)).toBe(true);
+  expect(READ_COMMANDS).toContain("contact +search-user");
+  expect(READ_COMMANDS).toContain("docs +fetch");
+  for (const pair of READ_COMMANDS)
+    expect(pair).toMatch(/^[a-z][a-z0-9-]* \+[a-z][a-z0-9-]*$/);
+  // Nothing mutating may sit in the allowlist.
+  for (const pair of READ_COMMANDS)
+    expect(pair).not.toMatch(
+      /\+(create|update|delete|remove|send|reply|edit|move|copy|add|revert|insert|upload|download|transfer|rsvp|join|cancel|script)/
+    );
+});
+
+test("validates every argument token, not only the first two", () => {
+  const rejected = [
+    // Security PoC: arbitrary file write through a filesystem flag.
+    [
+      ["docs", "+fetch", "--doc", "https://x", "--output", "/app/x/handler.js"],
+      "Flag is not permitted",
+    ],
+    [
+      ["docs", "+fetch", "--doc", "x", "--output-dir", "storage"],
+      "Flag is not permitted",
+    ],
+    [
+      ["docs", "+fetch", "--doc", "x", "-o", "out.json"],
+      "Flag is not permitted",
+    ],
+    [
+      ["docs", "+fetch", "--doc", "x", "--local-dir", "storage"],
+      "Flag is not permitted",
+    ],
+    [
+      ["docs", "+fetch", "--doc", "x", "--body-file", "b"],
+      "Flag is not permitted",
+    ],
+    [
+      ["docs", "+fetch", "--doc", "x", "--cover-path", "c"],
+      "Flag is not permitted",
+    ],
+    // Runner-owned flags the model may never set.
+    [["im", "+chat-list", "--as", "bot"], "Flag is not permitted"],
+    [["im", "+chat-list", "--config", "/etc/x"], "Flag is not permitted"],
+    [["im", "+chat-list", "--profile", "evil"], "Flag is not permitted"],
+    [["im", "+chat-list", "--brand", "feishu"], "Flag is not permitted"],
+    [["im", "+chat-list", "--app-id", "cli_x"], "Flag is not permitted"],
+    [["im", "+chat-list", "--user-access-token", "x"], "Flag is not permitted"],
+    [
+      ["im", "+chat-list", "--tenant-access-token", "x"],
+      "Flag is not permitted",
+    ],
+    // Security PoC: @file makes the CLI read a local file as the value.
+    [
+      ["contact", "+search-user", "--query", "@/app/server/.env"],
+      "Malformed argument value",
+    ],
+    [["docs", "+fetch", "--doc", "/etc/passwd"], "Malformed argument value"],
+    [["docs", "+fetch", "--doc", "C:\\Windows\\x"], "Malformed argument value"],
+    [
+      ["docs", "+fetch", "--doc", "../../etc/passwd"],
+      "Malformed argument value",
+    ],
+    [["docs", "+fetch", "--doc", "a\nb"], "Malformed argument value"],
+    [["docs", "+fetch", "--doc", "a".repeat(4097)], "Malformed argument value"],
+    // Security PoC: a third positional token smuggles a second subcommand.
+    [
+      ["im", "+chat-list", "+messages-send", "--text", "hi"],
+      "Malformed argument token",
+    ],
+    [
+      ["im", "status", "+messages-send", "--text", "x"],
+      "Malformed argument token",
+    ],
+    [["api", "get", "/x"], "Malformed argument token"],
+    // A flag-shaped token that is not a well-formed flag.
+    [["docs", "+fetch", "--Doc", "x"], "Malformed flag token"],
+    [["docs", "+fetch", "--output=/app/x"], "Malformed flag token"],
+    [["docs", "+fetch", "-abc", "x"], "Malformed flag token"],
+    // Fewer than two command tokens is not a command.
+    [["contact"], "Command requires a group and a subcommand"],
+  ];
+
+  for (const [args, reason] of rejected) {
+    const result = validateArgs(args);
+    expect({ args, ...result }).toEqual({ args, ok: false, reason });
+  }
+
+  const accepted = [
+    ["contact", "+search-user", "--query", "somchai"],
+    ["im", "+messages-send", "--user-id", "ou_x", "--text", "hello world"],
+    ["docs", "+fetch", "--doc", "https://x.larksuite.com/docx/abc"],
+    ["im", "+chat-list", "--page-size", "50"],
+    ["contact", "search", "--query", "Jane Doe"],
+  ];
+  for (const args of accepted)
+    expect({ args, ...validateArgs(args) }).toEqual({ args, ok: true });
+
+  expect(classify(["contact", "+search-user", "--query", "somchai"])).toBe(
+    "read"
+  );
+  expect(
+    classify([
+      "im",
+      "+messages-send",
+      "--user-id",
+      "ou_x",
+      "--text",
+      "hello world",
+    ])
+  ).toBe("write");
+});
+
+test("rejected argument policy never reaches spawn", async () => {
+  const result = await runAsUser({
+    userId: 4,
+    args: ["docs", "+fetch", "--doc", "x", "--output", "/app/evil.js"],
+    encryption,
+  });
+  expect(result).toEqual({ ok: false, error: "Flag is not permitted" });
+  expect(spawn).not.toHaveBeenCalled();
+  expect(EventLogs.logEvent).toHaveBeenCalledWith(
+    "lark_cli_invocation",
+    { argCount: 6, outcome: "rejected", reason: "Flag is not permitted" },
+    4
+  );
 });
 
 test("spawns with isolated exact Lark environment and required suffix flags", async () => {
@@ -441,10 +584,9 @@ test("omits arguments from config failure and missing config audits", async () =
     expect(metadata).not.toHaveProperty("args");
     expect(metadata.outcome).toBe("error");
   }
-  expect(EventLogs.logEvent.mock.calls.map(([, metadata]) => metadata.reason)).toEqual([
-    "config_load_failed",
-    "Lark is not configured",
-  ]);
+  expect(
+    EventLogs.logEvent.mock.calls.map(([, metadata]) => metadata.reason)
+  ).toEqual(["config_load_failed", "Lark is not configured"]);
   expect(JSON.stringify(EventLogs.logEvent.mock.calls)).not.toContain(
     "config failed"
   );

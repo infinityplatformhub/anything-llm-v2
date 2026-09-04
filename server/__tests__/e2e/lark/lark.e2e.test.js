@@ -453,7 +453,9 @@ describe("Lark end-to-end", () => {
       expect(storedRefreshBefore).toMatch(/^[0-9a-f]+:[0-9a-f]+$/);
 
       environment.clearInvocations();
-      const before = lark.requestsFor("/open-apis/authen/v2/oauth/token").length;
+      const before = lark.requestsFor(
+        "/open-apis/authen/v2/oauth/token"
+      ).length;
       const result = await runnerModule().runAsUser({
         userId: stored.user_id,
         args: ["contact", "+search-user", "--query", "refresh"],
@@ -567,7 +569,9 @@ describe("Lark end-to-end", () => {
     const parsed = JSON.parse(output);
     expect(parsed.argv).toEqual(invocation.argv);
     // The CLI echoes the token back; the runner redacts it before returning.
-    expect(output).not.toContain(invocation.env.LARKSUITE_CLI_USER_ACCESS_TOKEN);
+    expect(output).not.toContain(
+      invocation.env.LARKSUITE_CLI_USER_ACCESS_TOKEN
+    );
     expect(parsed.env.LARKSUITE_CLI_USER_ACCESS_TOKEN).toBe("[redacted]");
   });
 
@@ -629,7 +633,14 @@ describe("Lark end-to-end", () => {
     // operator with the value masked, and a denial keeps the CLI unspawned.
     environment.clearInvocations();
     const leaky = build(false);
-    const leakyArgs = ["im", "+messages-send", "--user-id", "ou_x", "--text", uat];
+    const leakyArgs = [
+      "im",
+      "+messages-send",
+      "--user-id",
+      "ou_x",
+      "--text",
+      uat,
+    ];
     const leakyOutput = await leaky.handler.call(leaky.aibitat, {
       args: leakyArgs,
     });
@@ -653,22 +664,37 @@ describe("Lark end-to-end", () => {
     for (const args of [
       ["auth", "login"],
       ["contact", "+config"],
-      ["api", "get", "/x"],
+      ["api", "get"],
     ]) {
       const result = await runner.runAsUser({ userId: identity.user_id, args });
       expect(result.ok).toBe(false);
       expect(result.error).toMatch(/denied|not allowlisted/);
     }
-    // The literal `api GET /x` is stopped one step earlier still: the command
-    // grammar only accepts lowercase tokens in the first two positions.
-    const uppercase = await runner.runAsUser({
-      userId: identity.user_id,
-      args: ["api", "GET", "/x"],
-    });
-    expect(uppercase).toMatchObject({
-      ok: false,
-      error: "Malformed command token",
-    });
+    // The argument grammar stops several shapes one step earlier still: the
+    // first two positions accept only lowercase command tokens, and nothing
+    // after them may be a bare positional or name a local file.
+    for (const [args, reason] of [
+      [["api", "GET"], "Malformed command token"],
+      [["api", "get", "/x"], "Malformed argument token"],
+      [
+        ["im", "+chat-list", "+messages-send", "--text", "hi"],
+        "Malformed argument token",
+      ],
+      [
+        ["contact", "+search-user", "--query", "@/app/server/.env"],
+        "Malformed argument value",
+      ],
+      [
+        ["docs", "+fetch", "--doc", "x", "--output", "/app/evil.js"],
+        "Flag is not permitted",
+      ],
+    ]) {
+      const rejected = await runner.runAsUser({
+        userId: identity.user_id,
+        args,
+      });
+      expect({ args, ...rejected }).toEqual({ args, ok: false, error: reason });
+    }
     expect(environment.readInvocations()).toHaveLength(0);
 
     // `api` cannot even be allowlisted: the settings validator refuses it.
