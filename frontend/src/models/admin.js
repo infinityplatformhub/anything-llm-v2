@@ -195,8 +195,10 @@ const Admin = {
         headers: baseHeaders(),
       }
     )
-      .then((res) => (res.ok ? res.json() : { enabledSkills: [] }))
-      .catch(() => ({ enabledSkills: [] }));
+      .then((res) =>
+        res.ok ? res.json() : { enabledSkills: null, error: res.status }
+      )
+      .catch((e) => ({ enabledSkills: null, error: e.message }));
   },
   updateWorkspaceAgentSkills: async (slug, enabledSkills = []) => {
     return await fetch(
@@ -207,7 +209,9 @@ const Admin = {
         body: JSON.stringify({ enabledSkills }),
       }
     )
-      .then((res) => res.json())
+      .then((res) =>
+        res.ok ? res.json() : { success: false, error: `HTTP ${res.status}` }
+      )
       .catch((e) => ({ success: false, error: e.message }));
   },
 
