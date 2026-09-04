@@ -56,6 +56,7 @@ export default function AdminAgents() {
 
   const [workspaceSlug, setWorkspaceSlug] = useState(null);
   const [agentSkills, setAgentSkills] = useState([]);
+  const [skillsLoadFailed, setSkillsLoadFailed] = useState(true);
   const [importedSkills, setImportedSkills] = useState([]);
 
   const [agentFlows, setAgentFlows] = useState([]);
@@ -142,22 +143,41 @@ export default function AdminAgents() {
     fetchSettings();
   }, []);
 
+  const loadWorkspaceSkills = async (slug, isCancelled = () => false) => {
+    setSkillsLoadFailed(true);
+    setAgentSkills([]);
+    const { enabledSkills, error } = await Admin.workspaceAgentSkills(slug);
+    if (isCancelled()) return false;
+    if (enabledSkills === null) {
+      showToast(error || "Failed to load workspace skills.", "error", {
+        clear: true,
+      });
+      return false;
+    }
+
+    setAgentSkills(enabledSkills);
+    setSkillsLoadFailed(false);
+    setHasChanges(false);
+    return true;
+  };
+
   useEffect(() => {
     if (!workspaceSlug) return;
 
     let cancelled = false;
-    Admin.workspaceAgentSkills(workspaceSlug).then(({ enabledSkills = [] }) => {
-      if (cancelled) return;
-      setAgentSkills(enabledSkills);
-      setHasChanges(false);
-    });
-
+    loadWorkspaceSkills(workspaceSlug, () => cancelled);
     return () => {
       cancelled = true;
     };
   }, [workspaceSlug]);
 
+  const handleCancel = () => {
+    if (!workspaceSlug) return;
+    loadWorkspaceSkills(workspaceSlug);
+  };
+
   const toggleAgentSkill = (skillName) => {
+    if (skillsLoadFailed) return;
     setAgentSkills((prev) => {
       const updatedSkills = prev.includes(skillName)
         ? prev.filter((name) => name !== skillName)
@@ -216,30 +236,45 @@ export default function AdminAgents() {
       return;
     }
 
-    const [{ success: preferencesSaved }, { success: skillsSaved }] =
-      await Promise.all([
-        Admin.updateSystemPreferences(data.system),
-        Admin.updateWorkspaceAgentSkills(workspaceSlug, agentSkills),
-        System.updateSystem(data.env),
-      ]);
-
-    if (preferencesSaved && skillsSaved) {
-      const [_settings, _preferences, { enabledSkills = [] }] =
-        await Promise.all([
-          System.keys(),
-          Admin.systemPreferencesByFields(["imported_agent_skills"]),
-          Admin.workspaceAgentSkills(workspaceSlug),
-        ]);
-      setSettings({ ..._settings, preferences: _preferences.settings } ?? {});
-      setImportedSkills(_preferences.settings?.imported_agent_skills ?? []);
-      setAgentSkills(enabledSkills);
-      setHasChanges(false);
-      showToast(`Agent preferences saved successfully.`, "success", {
-        clear: true,
-      });
-    } else {
-      showToast(`Agent preferences failed to save.`, "error", { clear: true });
+    if (skillsLoadFailed) {
+      showToast(
+        "Workspace skills are unavailable. Reload before saving.",
+        "error",
+        {
+          clear: true,
+        }
+      );
+      return;
     }
+
+    const [preferencesRes, skillRes] = await Promise.all([
+      Admin.updateSystemPreferences(data.system),
+      Admin.updateWorkspaceAgentSkills(workspaceSlug, agentSkills),
+      System.updateSystem(data.env),
+    ]);
+
+    if (!preferencesRes.success || !skillRes.success) {
+      showToast(
+        skillRes.error ||
+          preferencesRes.error ||
+          "Agent preferences failed to save.",
+        "error",
+        { clear: true }
+      );
+      return;
+    }
+
+    const [_settings, _preferences, skillsReloaded] = await Promise.all([
+      System.keys(),
+      Admin.systemPreferencesByFields(["imported_agent_skills"]),
+      loadWorkspaceSkills(workspaceSlug),
+    ]);
+    setSettings({ ..._settings, preferences: _preferences.settings } ?? {});
+    setImportedSkills(_preferences.settings?.imported_agent_skills ?? []);
+    if (!skillsReloaded) return;
+    showToast(`Agent preferences saved successfully.`, "success", {
+      clear: true,
+    });
   };
 
   let SelectedSkillComponent = null;
@@ -357,8 +392,9 @@ export default function AdminAgents() {
     return (
       <SkillLayout
         hasChanges={hasChanges}
-        handleCancel={() => setHasChanges(false)}
+        handleCancel={handleCancel}
         handleSubmit={handleSubmit}
+        saveDisabled={skillsLoadFailed}
       >
         <form
           onSubmit={handleSubmit}
@@ -391,6 +427,7 @@ export default function AdminAgents() {
               selectedSkill={selectedSkill}
               handleClick={handleDefaultSkillClick}
               activeSkills={agentSkills}
+              disabled={skillsLoadFailed}
             />
             {/* Configurable skills */}
             <SkillList
@@ -398,6 +435,7 @@ export default function AdminAgents() {
               selectedSkill={selectedSkill}
               handleClick={handleDefaultSkillClick}
               activeSkills={agentSkills}
+              disabled={skillsLoadFailed}
             />
 
             {Object.keys(appIntegrationSkills).length > 0 && (
@@ -411,6 +449,7 @@ export default function AdminAgents() {
                   selectedSkill={selectedSkill}
                   handleClick={handleSkillClick}
                   activeSkills={agentSkills}
+                  disabled={skillsLoadFailed}
                 />
               </>
             )}
@@ -568,8 +607,9 @@ export default function AdminAgents() {
   return (
     <SkillLayout
       hasChanges={hasChanges}
-      handleCancel={() => setHasChanges(false)}
+      handleCancel={handleCancel}
       handleSubmit={handleSubmit}
+      saveDisabled={skillsLoadFailed}
     >
       <form
         onSubmit={handleSubmit}
@@ -615,6 +655,7 @@ export default function AdminAgents() {
                   selectedSkill={selectedSkill}
                   handleClick={handleSkillClick}
                   activeSkills={agentSkills}
+                  disabled={skillsLoadFailed}
                 />
                 {/* Configurable skills */}
                 <SkillList
@@ -622,6 +663,7 @@ export default function AdminAgents() {
                   selectedSkill={selectedSkill}
                   handleClick={handleSkillClick}
                   activeSkills={agentSkills}
+                  disabled={skillsLoadFailed}
                 />
 
                 {Object.keys(appIntegrationSkills).length > 0 && (
@@ -635,6 +677,7 @@ export default function AdminAgents() {
                       selectedSkill={selectedSkill}
                       handleClick={handleSkillClick}
                       activeSkills={agentSkills}
+                      disabled={skillsLoadFailed}
                     />
                   </>
                 )}
@@ -783,7 +826,13 @@ export default function AdminAgents() {
   );
 }
 
-function SkillLayout({ children, hasChanges, handleSubmit, handleCancel }) {
+function SkillLayout({
+  children,
+  hasChanges,
+  handleSubmit,
+  handleCancel,
+  saveDisabled,
+}) {
   return (
     <div
       id="workspace-agent-settings-container"
@@ -795,11 +844,16 @@ function SkillLayout({ children, hasChanges, handleSubmit, handleCancel }) {
         className="relative md:ml-[2px] md:mr-[16px] md:my-[16px] md:rounded-[16px] w-full h-full flex"
       >
         {children}
-        <ContextualSaveBar
-          showing={hasChanges}
-          onSave={handleSubmit}
-          onCancel={handleCancel}
-        />
+        <fieldset
+          disabled={saveDisabled}
+          className={saveDisabled ? "[&_button:last-child]:opacity-50" : ""}
+        >
+          <ContextualSaveBar
+            showing={hasChanges}
+            onSave={handleSubmit}
+            onCancel={handleCancel}
+          />
+        </fieldset>
       </div>
     </div>
   );
@@ -812,6 +866,7 @@ function SkillList({
   handleClick = null,
   activeSkills = [],
   Icon = null,
+  disabled = false,
 }) {
   if (skills.length === 0) return null;
 
@@ -831,12 +886,17 @@ function SkillList({
               index === Object.keys(skills).length - 1
                 ? "rounded-b-xl"
                 : "border-b border-white/10"
-            } cursor-pointer transition-all duration-300  hover:bg-theme-bg-primary ${
+            } ${
+              disabled
+                ? "cursor-not-allowed opacity-50"
+                : "cursor-pointer hover:bg-theme-bg-primary"
+            } transition-all duration-300 ${
               selectedSkill === skill
                 ? "bg-white/10 light:bg-theme-bg-sidebar"
                 : ""
             }`}
-            onClick={() => handleClick?.(skill)}
+            onClick={() => !disabled && handleClick?.(skill)}
+            aria-disabled={disabled}
           >
             <div className="flex items-center gap-x-2">
               {settings.Icon ? (
