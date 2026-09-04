@@ -233,15 +233,19 @@ if [[ ! -f "$STATE/jest.json" ]]; then
   echo "E2E_RESULT=FAIL reason=jest result file missing"
   exit 1
 fi
+# Total is pinned so a deleted or renamed suite file cannot report PASS with
+# less coverage than the contract. Update alongside e2e/README.md.
+EXPECTED_TOTAL_TESTS=75
 # shellcheck disable=SC2016
 jest_verdict="$(node -e '
 const fs = require("fs");
-const [file, expected] = process.argv.slice(1);
+const [file, expected, expectedTotal] = process.argv.slice(1);
 const result = JSON.parse(fs.readFileSync(file, "utf8"));
 if (result.numFailedTests !== 0) process.stdout.write(`failed tests=${result.numFailedTests}`);
+else if (result.numTotalTests !== Number(expectedTotal)) process.stdout.write(`total tests=${result.numTotalTests}, contract=${expectedTotal}`);
 else if (result.numPendingTests + result.numTodoTests !== Number(expected)) process.stdout.write(`pending tests=${result.numPendingTests}, todo tests=${result.numTodoTests}, documented skips=${expected}`);
 else process.stdout.write("ok");
-' "$STATE/jest.json" "$skip_count")"
+' "$STATE/jest.json" "$skip_count" "$EXPECTED_TOTAL_TESTS")"
 
 if [[ "$jest_rc" -ne 0 ]]; then
   result_printed=1
