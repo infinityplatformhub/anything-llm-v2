@@ -57,7 +57,7 @@ const WORKSPACE_AGENT = {
    * @param {import("@prisma/client").workspaces | null} workspace
    * @param {import("@prisma/client").users | null} user
    * @param {string} [prompt] - Current user message for memory reranking
-   * @returns {Promise<{ role: string, functions: object[] }>}
+   * @returns {Promise<{ role: string, functions: string[] }>}
    */
   getDefinition: async (
     _provider = null,
