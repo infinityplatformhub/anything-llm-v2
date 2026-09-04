@@ -17,6 +17,13 @@ const COMMAND_TOKEN = /^[+]?[a-z0-9-]+$/;
 const SAFE_TOKEN = /^[A-Za-z0-9+._:/@=,-]+$/;
 const RECONNECT_ERROR = "Reconnect Lark in Settings";
 
+class AuditedError extends Error {
+  constructor(reason) {
+    super(reason);
+    this.reason = reason;
+  }
+}
+
 function validateArgs(args) {
   if (!Array.isArray(args) || args.length === 0)
     return { ok: false, reason: "Arguments must be a non-empty array" };
@@ -230,12 +237,14 @@ async function runAsUser({ userId, args, encryption } = {}) {
   try {
     config = await loadLarkConfig({ encryption: manager });
   } catch (error) {
-    const message = redact(error.message, []);
+    // Audits before both secrets resolve carry fixed reasons only; the real
+    // error is never a safe audit payload because it can echo config values.
+    console.error("Lark CLI config load failed", error);
     await audit(userId, {
       outcome: "error",
-      reason: message,
+      reason: "config_load_failed",
     });
-    return { ok: false, error: message };
+    return { ok: false, error: "Lark configuration could not be loaded" };
   }
 
   const secrets = [config?.appSecret];
@@ -248,28 +257,33 @@ async function runAsUser({ userId, args, encryption } = {}) {
     return { ok: false, error };
   }
 
-  let identity;
   let accessToken;
   try {
-    identity = await LarkIdentity.get({ user_id: Number(userId) });
-    if (!identity || identity.needs_reauth) throw new Error(RECONNECT_ERROR);
-    accessToken = await getFreshAccessToken({
-      identityId: identity.id,
-      config,
-      encryption: manager,
-    });
+    const identity = await LarkIdentity.get({ user_id: Number(userId) });
+    if (!identity) throw new AuditedError("identity_missing");
+    if (identity.needs_reauth) throw new AuditedError("identity_needs_reauth");
+    try {
+      accessToken = await getFreshAccessToken({
+        identityId: identity.id,
+        config,
+        encryption: manager,
+      });
+    } catch (error) {
+      console.error("Lark CLI token refresh failed", error);
+      throw new AuditedError("token_refresh_failed");
+    }
     secrets.push(accessToken);
   } catch (error) {
-    const message = redact(error.message, secrets);
+    // Still pre-token: fixed reasons only, and never user-controlled args.
     await audit(userId, {
       outcome: "error",
-      reason: message,
+      reason: error.reason || "identity_missing",
       exitCode: undefined,
       timedOut: false,
       truncated: false,
       secrets,
     });
-    return { ok: false, error: message };
+    return { ok: false, error: RECONNECT_ERROR };
   }
 
   if (

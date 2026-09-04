@@ -87,10 +87,12 @@ beforeEach(() => {
   LarkIdentity.get.mockResolvedValue({ id: 17, needs_reauth: false });
   getFreshAccessToken.mockResolvedValue("user-access-token");
   EventLogs.logEvent.mockResolvedValue({ eventLog: {}, message: null });
+  jest.spyOn(console, "error").mockImplementation(() => {});
 });
 
 afterEach(() => {
   jest.useRealTimers();
+  jest.restoreAllMocks();
 });
 
 test("allows configured canonical contact search docs fetch and message send", () => {
@@ -437,10 +439,15 @@ test("omits arguments from config failure and missing config audits", async () =
 
   for (const [, metadata] of EventLogs.logEvent.mock.calls) {
     expect(metadata).not.toHaveProperty("args");
-    expect(metadata).toEqual(
-      expect.objectContaining({ outcome: "error", reason: expect.any(String) })
-    );
+    expect(metadata.outcome).toBe("error");
   }
+  expect(EventLogs.logEvent.mock.calls.map(([, metadata]) => metadata.reason)).toEqual([
+    "config_load_failed",
+    "Lark is not configured",
+  ]);
+  expect(JSON.stringify(EventLogs.logEvent.mock.calls)).not.toContain(
+    "config failed"
+  );
   expect(JSON.stringify(EventLogs.logEvent.mock.calls)).not.toContain(
     "arbitrary-secret"
   );
@@ -458,7 +465,7 @@ test("omits arguments from missing identity audit", async () => {
   expect(metadata).toEqual(
     expect.objectContaining({
       outcome: "error",
-      reason: "Reconnect Lark in Settings",
+      reason: "identity_missing",
     })
   );
   expect(metadata).not.toHaveProperty("args");
@@ -521,4 +528,108 @@ test("ignores cleanup failure and returns process result", async () => {
   await expect(
     runAsUser({ userId: 4, args: ["contact", "search"], encryption })
   ).resolves.toEqual({ ok: true, data: { ok: true } });
+});
+
+test("audits needs-reauth identity with a fixed reason and no arguments", async () => {
+  LarkIdentity.get.mockResolvedValue({ id: 17, needs_reauth: true });
+
+  await expect(
+    runAsUser({
+      userId: 4,
+      args: ["contact", "search", "--query", "arbitrary-secret"],
+      encryption,
+    })
+  ).resolves.toEqual({ ok: false, error: "Reconnect Lark in Settings" });
+
+  const metadata = EventLogs.logEvent.mock.calls[0][1];
+  expect(metadata).toEqual(
+    expect.objectContaining({
+      outcome: "error",
+      reason: "identity_needs_reauth",
+    })
+  );
+  expect(metadata).not.toHaveProperty("args");
+  expect(JSON.stringify(EventLogs.logEvent.mock.calls)).not.toContain(
+    "arbitrary-secret"
+  );
+});
+
+test("audits token refresh failure with a fixed reason and no arguments", async () => {
+  getFreshAccessToken.mockRejectedValue(
+    new Error("refresh rejected for u-abcdefghijklmnopqrst")
+  );
+
+  await expect(
+    runAsUser({
+      userId: 4,
+      args: ["contact", "search", "--query", "arbitrary-secret"],
+      encryption,
+    })
+  ).resolves.toEqual({ ok: false, error: "Reconnect Lark in Settings" });
+
+  const metadata = EventLogs.logEvent.mock.calls[0][1];
+  expect(metadata).toEqual(
+    expect.objectContaining({
+      outcome: "error",
+      reason: "token_refresh_failed",
+    })
+  );
+  expect(metadata).not.toHaveProperty("args");
+  expect(spawn).not.toHaveBeenCalled();
+  expect(JSON.stringify(EventLogs.logEvent.mock.calls)).not.toContain(
+    "refresh rejected"
+  );
+});
+
+test("audits policy rejection with recursively redacted arguments", async () => {
+  const result = await runAsUser({
+    userId: 4,
+    args: ["calendar", "list", "--note", "u-abcdefghijklmnopqrst"],
+    encryption,
+  });
+
+  expect(result).toEqual({
+    ok: false,
+    error: "Command is not allowlisted",
+  });
+  expect(spawn).not.toHaveBeenCalled();
+  expect(EventLogs.logEvent).toHaveBeenCalledWith(
+    "lark_cli_invocation",
+    expect.objectContaining({
+      args: ["calendar", "list", "--note", "[redacted]"],
+      outcome: "rejected",
+      reason: "Command is not allowlisted",
+    }),
+    4
+  );
+  const audited = JSON.stringify(EventLogs.logEvent.mock.calls);
+  expect(audited).not.toContain("u-abcdefghijklmnopqrst");
+  expect(audited).not.toContain("user-access-token");
+});
+
+test("audits successful run with recursively redacted arguments", async () => {
+  spawn.mockImplementation(() => closeChild({ stdout: '{"sent":true}' }));
+
+  await expect(
+    runAsUser({
+      userId: 4,
+      args: ["im", "+messages-send", "--text", "u-abcdefghijklmnopqrst"],
+      encryption,
+    })
+  ).resolves.toEqual({ ok: true, data: { sent: true } });
+
+  expect(EventLogs.logEvent).toHaveBeenLastCalledWith(
+    "lark_cli_invocation",
+    {
+      args: ["im", "+messages-send", "--text", "[redacted]"],
+      outcome: "success",
+      exitCode: 0,
+      timedOut: false,
+      truncated: false,
+    },
+    4
+  );
+  expect(JSON.stringify(EventLogs.logEvent.mock.calls)).not.toContain(
+    "u-abcdefghijklmnopqrst"
+  );
 });
