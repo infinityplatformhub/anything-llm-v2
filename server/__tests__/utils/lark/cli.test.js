@@ -114,7 +114,11 @@ test("denies permanent subcommands even when allowlisted", () => {
   const allowlist = [...PERMANENT_DENYLIST, "contact"];
   for (const command of PERMANENT_DENYLIST) {
     expect(checkPolicy([command], allowlist).allowed).toBe(false);
+    expect(checkPolicy([`+${command}`], allowlist).allowed).toBe(false);
     expect(checkPolicy(["contact", command], allowlist).allowed).toBe(false);
+    expect(checkPolicy(["contact", `+${command}`], allowlist).allowed).toBe(
+      false
+    );
   }
   expect(checkPolicy(["API"], allowlist).allowed).toBe(false);
 });
@@ -161,6 +165,9 @@ test("classifies exact read forms and defaults unknown forms to write", () => {
   expect(classify(["docs", "document-get"])).toBe("read");
   expect(classify(["contact", "user-search"])).toBe("read");
   expect(classify(["im", "+messages-send"])).toBe("write");
+  expect(classify(["im", "+messages-send", "--text", "document-get"])).toBe(
+    "write"
+  );
   expect(classify(["contact", "list"])).toBe("write");
 });
 
@@ -331,18 +338,55 @@ test("audits policy rejection and process outcome with redacted args", async () 
   spawn.mockImplementation(() => closeChild({ stdout: '{"sent":true}' }));
   await runAsUser({
     userId: 4,
-    args: ["im", "+messages-send", "--text", "app-secret user-access-token"],
+    args: ["im", "+messages-send", "--text", "hello"],
     encryption,
   });
   expect(EventLogs.logEvent).toHaveBeenLastCalledWith(
     "lark_cli_invocation",
     {
-      args: ["im", "+messages-send", "--text", "[redacted] [redacted]"],
+      args: ["im", "+messages-send", "--text", "hello"],
       outcome: "success",
       exitCode: 0,
       timedOut: false,
       truncated: false,
     },
+    4
+  );
+});
+
+test("rejects credentials in arguments before spawn with redacted audit", async () => {
+  const result = await runAsUser({
+    userId: 4,
+    args: ["im", "+messages-send", "--text", "app-secret user-access-token"],
+    encryption,
+  });
+
+  expect(result).toEqual({
+    ok: false,
+    error: "Arguments may not contain credentials",
+  });
+  expect(spawn).not.toHaveBeenCalled();
+  expect(EventLogs.logEvent).toHaveBeenCalledWith(
+    "lark_cli_invocation",
+    expect.objectContaining({
+      args: ["im", "+messages-send", "--text", "[redacted] [redacted]"],
+      outcome: "rejected",
+    }),
+    4
+  );
+});
+
+test("redacts token patterns from malformed argument audits", async () => {
+  const token = "u-abcdefghijklmnop";
+  await runAsUser({
+    userId: 4,
+    args: ["bad command", token],
+    encryption,
+  });
+
+  expect(EventLogs.logEvent).toHaveBeenCalledWith(
+    "lark_cli_invocation",
+    expect.objectContaining({ args: ["bad command", "[redacted]"] }),
     4
   );
 });

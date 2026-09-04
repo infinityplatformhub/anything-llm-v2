@@ -40,12 +40,19 @@ function validateArgs(args) {
   return { ok: true };
 }
 
+function normalizeCommandToken(token) {
+  return String(token || "")
+    .replace(/^\+/, "")
+    .toLowerCase();
+}
+
 function checkPolicy(args, allowlist) {
   const first = String(args?.[0] || "").toLowerCase();
-  const second = String(args?.[1] || "").toLowerCase();
-  if (PERMANENT_DENYLIST.includes(first))
+  const firstCommand = normalizeCommandToken(args?.[0]);
+  const secondCommand = normalizeCommandToken(args?.[1]);
+  if (PERMANENT_DENYLIST.includes(firstCommand))
     return { allowed: false, reason: "Command is permanently denied" };
-  if (PERMANENT_DENYLIST.includes(second))
+  if (PERMANENT_DENYLIST.includes(secondCommand))
     return { allowed: false, reason: "Grouped command is permanently denied" };
 
   const allowedCommands = Array.isArray(allowlist)
@@ -58,7 +65,9 @@ function checkPolicy(args, allowlist) {
 
 function classify(args) {
   const tokens = Array.isArray(args)
-    ? args.map((arg) => arg.toLowerCase())
+    ? args
+        .slice(0, args[1]?.startsWith("-") ? 1 : 2)
+        .map((arg) => arg.toLowerCase())
     : [];
   return tokens.some(
     (token) =>
@@ -79,7 +88,7 @@ function redact(value, secrets) {
     if (typeof secret === "string" && secret.length > 0)
       output = output.split(secret).join("[redacted]");
   }
-  return output;
+  return output.replace(/\b[ut]-[A-Za-z0-9._-]{16,}\b/g, "[redacted]");
 }
 
 function redactData(value, secrets) {
@@ -262,6 +271,7 @@ async function runAsUser({ userId, args, encryption } = {}) {
 
   let tmp;
   let result;
+  let rejected = false;
   try {
     const identity = await LarkIdentity.get({ user_id: Number(userId) });
     if (!identity || identity.needs_reauth) throw new Error(RECONNECT_ERROR);
@@ -274,20 +284,35 @@ async function runAsUser({ userId, args, encryption } = {}) {
       encryption: manager,
     });
     secrets.push(accessToken);
-    tmp = await fs.promises.mkdtemp(
-      path.join(os.tmpdir(), "anythingllm-lark-")
-    );
-    const env = {
-      ...safeInheritedEnv(),
-      LARKSUITE_CLI_BRAND: "lark",
-      LARKSUITE_CLI_APP_ID: config.appId,
-      LARKSUITE_CLI_USER_ACCESS_TOKEN: accessToken,
-      LARKSUITE_CLI_CONFIG_DIR: tmp,
-      LARKSUITE_CLI_DATA_DIR: tmp,
-      HOME: tmp,
-      CI: "1",
-    };
-    result = await execute(args, env, secrets);
+    if (
+      args.some((arg) =>
+        secrets.some(
+          (secret) =>
+            typeof secret === "string" && secret && arg.includes(secret)
+        )
+      )
+    ) {
+      result = {
+        ok: false,
+        error: "Arguments may not contain credentials",
+      };
+      rejected = true;
+    } else {
+      tmp = await fs.promises.mkdtemp(
+        path.join(os.tmpdir(), "anythingllm-lark-")
+      );
+      const env = {
+        ...safeInheritedEnv(),
+        LARKSUITE_CLI_BRAND: "lark",
+        LARKSUITE_CLI_APP_ID: config.appId,
+        LARKSUITE_CLI_USER_ACCESS_TOKEN: accessToken,
+        LARKSUITE_CLI_CONFIG_DIR: tmp,
+        LARKSUITE_CLI_DATA_DIR: tmp,
+        HOME: tmp,
+        CI: "1",
+      };
+      result = await execute(args, env, secrets);
+    }
   } catch (error) {
     result = { ok: false, error: redact(error.message, secrets) };
   } finally {
@@ -302,7 +327,7 @@ async function runAsUser({ userId, args, encryption } = {}) {
     userId,
     args,
     {
-      outcome: result.ok ? "success" : "error",
+      outcome: result.ok ? "success" : rejected ? "rejected" : "error",
       exitCode: result.ok ? 0 : result.exitCode,
       timedOut: Boolean(result.timedOut),
       truncated: Boolean(result.truncated),
