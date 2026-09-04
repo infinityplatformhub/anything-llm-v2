@@ -1,17 +1,13 @@
 const AgentPlugins = require("./aibitat/plugins");
 const { SystemSettings } = require("../../models/systemSettings");
+const {
+  WorkspaceAgentSettings,
+} = require("../../models/workspaceAgentSettings");
 const { safeJsonParse } = require("../http");
 const Provider = require("./aibitat/providers/ai-provider");
 const ImportedPlugin = require("./imported");
 const { AgentFlows } = require("../agentFlows");
 const MCPCompatibilityLayer = require("../MCP");
-
-// This is a list of skills that are built-in and default enabled.
-const DEFAULT_SKILLS = [
-  AgentPlugins.memory.name,
-  AgentPlugins.docSummarizer.name,
-  AgentPlugins.webScraping.name,
-];
 
 // Skills that must never be injected when the instance is running in multi-user mode.
 const SINGLE_USER_ONLY_SKILLS = new Set(["create-scheduled-job"]);
@@ -86,7 +82,7 @@ const WORKSPACE_AGENT = {
     return {
       role,
       functions: [
-        ...(await agentSkillsFromSystemSettings()),
+        ...(await agentSkillsForWorkspace(workspace)),
         ...clarifyingQuestionsSkills,
         ...ImportedPlugin.activeImportedPlugins(),
         ...AgentFlows.activeFlowPlugins(),
@@ -118,40 +114,22 @@ async function clarifyingQuestionsSkillIfEnabled() {
 }
 
 /**
- * Fetches and preloads the names/identifiers for plugins that will be dynamically
- * loaded later
+ * Built-in skills enabled for this workspace. Deny by default: a workspace
+ * with no settings row gets no built-in skills. Global
+ * `default_agent_skills` / `disabled_agent_skills` are no longer consulted.
+ * @param {import("@prisma/client").workspaces | null} workspace
  * @returns {Promise<string[]>}
  */
-async function agentSkillsFromSystemSettings() {
+async function agentSkillsForWorkspace(workspace) {
+  if (!workspace?.id) return [];
   const systemFunctions = [];
   const isMultiUser = await SystemSettings.isMultiUserMode();
+  const enabled = await WorkspaceAgentSettings.enabledSkills(workspace.id);
 
-  // Load non-imported built-in skills that are configurable, but are default enabled.
-  const _disabledDefaultSkills = safeJsonParse(
-    await SystemSettings.getValueOrFallback(
-      { label: "disabled_agent_skills" },
-      "[]"
-    ),
-    []
-  );
-  DEFAULT_SKILLS.forEach((skill) => {
-    if (!_disabledDefaultSkills.includes(skill))
-      systemFunctions.push(AgentPlugins[skill].name);
-  });
-
-  // Load non-imported built-in skills that are configurable.
-  const _setting = safeJsonParse(
-    await SystemSettings.getValueOrFallback(
-      { label: "default_agent_skills" },
-      "[]"
-    ),
-    []
-  );
-
-  // Pre-load disabled sub-skills and availability for configured skills
+  // Pre-load disabled sub-skills and availability for configured skills (still global in phase 1)
   const skillFilterState = {};
   for (const skillName of Object.keys(SKILL_FILTER_CONFIG)) {
-    if (!_setting.includes(skillName)) continue;
+    if (!enabled.includes(skillName)) continue;
     const config = SKILL_FILTER_CONFIG[skillName];
     skillFilterState[skillName] = {
       available: await config.getAvailability(),
@@ -165,29 +143,23 @@ async function agentSkillsFromSystemSettings() {
     };
   }
 
-  for (const skillName of _setting) {
+  for (const skillName of enabled) {
     if (!AgentPlugins.hasOwnProperty(skillName)) continue;
     if (isMultiUser && SINGLE_USER_ONLY_SKILLS.has(skillName)) continue;
 
-    // This is a plugin module with many sub-children plugins who
-    // need to be named via `${parent}#${child}` naming convention
     if (Array.isArray(AgentPlugins[skillName].plugin)) {
       for (const subPlugin of AgentPlugins[skillName].plugin) {
-        // Check if this skill has filter configuration
         const filterState = skillFilterState[skillName];
         if (filterState) {
           if (!filterState.available) continue;
           if (filterState.disabledSubSkills.includes(subPlugin.name)) continue;
         }
-
         systemFunctions.push(
           `${AgentPlugins[skillName].name}#${subPlugin.name}`
         );
       }
       continue;
     }
-
-    // This is normal single-stage plugin
     systemFunctions.push(AgentPlugins[skillName].name);
   }
   return systemFunctions;
@@ -260,6 +232,7 @@ function resolveAgentSkill(skill = "", { serverName = null } = {}) {
 module.exports = {
   USER_AGENT,
   WORKSPACE_AGENT,
-  agentSkillsFromSystemSettings,
+  agentSkillsFromSystemSettings: agentSkillsForWorkspace,
+  agentSkillsForWorkspace,
   resolveAgentSkill,
 };
