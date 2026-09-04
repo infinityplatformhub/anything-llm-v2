@@ -18,6 +18,8 @@ import Modal, {
 import { useTheme } from "@/hooks/useTheme";
 import { useTranslation } from "react-i18next";
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import paths from "@/utils/paths";
 import { Tooltip } from "react-tooltip";
 import { safeJsonParse } from "@/utils/request";
 import Toggle from "@/components/lib/Toggle";
@@ -30,6 +32,7 @@ import {
 export default function AccountModal({ user, hideModal }) {
   const { pfp, setPfp } = usePfp();
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
@@ -159,6 +162,16 @@ export default function AccountModal({ user, hideModal }) {
             defaultValue={user.bio}
             rows={4}
           />
+          <button
+            type="button"
+            onClick={() => {
+              hideModal();
+              navigate(paths.settings.lark());
+            }}
+            className="w-fit rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-800 light:border-slate-300 light:text-slate-800 light:hover:bg-slate-100"
+          >
+            Lark
+          </button>
           <div className="flex gap-x-16">
             <div className="flex flex-col gap-y-6">
               <ThemePreference />

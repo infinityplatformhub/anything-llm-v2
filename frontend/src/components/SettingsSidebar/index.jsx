@@ -300,7 +300,7 @@ const SidebarOptions = ({ user = null, t }) => (
             },
             {
               btnText: "Lark",
-              href: paths.settings.lark(),
+              href: paths.settings.adminLark(),
               flex: true,
               roles: ["admin"],
             },

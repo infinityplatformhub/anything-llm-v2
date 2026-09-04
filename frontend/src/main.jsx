@@ -5,6 +5,7 @@ import App from "@/App.jsx";
 import PrivateRoute, {
   AdminRoute,
   ManagerRoute,
+  MultiUserRoute,
   SingleUserRoute,
 } from "@/components/PrivateRoute";
 import Login from "@/pages/Login";
@@ -148,6 +149,15 @@ const router = createBrowserRouter([
       },
       {
         path: "/settings/lark",
+        lazy: async () => {
+          const { default: LarkConnection } = await import(
+            "@/pages/GeneralSettings/LarkConnection"
+          );
+          return { element: <MultiUserRoute Component={LarkConnection} /> };
+        },
+      },
+      {
+        path: "/settings/admin/lark",
         lazy: async () => {
           const { default: LarkSettings } = await import(
             "@/pages/Admin/LarkSettings"

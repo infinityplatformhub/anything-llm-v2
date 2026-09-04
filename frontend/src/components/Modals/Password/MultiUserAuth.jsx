@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import System from "../../../models/system";
-import { AUTH_TOKEN, AUTH_USER } from "../../../utils/constants";
+import { API_BASE, AUTH_TOKEN, AUTH_USER } from "../../../utils/constants";
 import paths from "../../../utils/paths";
 import showToast from "@/utils/toast";
 import Modal from "@/components/lib/Modal";
@@ -9,6 +9,32 @@ import RecoveryCodeModal from "@/components/Modals/DisplayRecoveryCodeModal";
 import { useTranslation } from "react-i18next";
 import { t } from "i18next";
 import PasswordInput from "@/components/lib/PasswordInput";
+
+const LARK_LOGIN_ERRORS = {
+  tenant: {
+    title: "Company not allowed",
+    message:
+      "This Lark account belongs to a different company. Sign in with your company account or use your password.",
+  },
+  denied: {
+    title: "Access denied",
+    message: "Lark sign-in was cancelled. Try again when you are ready.",
+  },
+  suspended: {
+    title: "Account suspended",
+    message: "Your AnythingLLM account is suspended. Contact an administrator.",
+  },
+  link_conflict: {
+    title: "Account already linked",
+    message:
+      "This Lark account is connected to another user. Sign in to that account or contact an administrator.",
+  },
+  unknown: {
+    title: "Lark sign-in failed",
+    message:
+      "Something went wrong while completing sign-in. Try again or use your password.",
+  },
+};
 
 const RecoveryForm = ({ onSubmit, setShowRecoveryForm }) => {
   const [username, setUsername] = useState("");
@@ -182,6 +208,11 @@ export default function MultiUserAuth() {
   const [showRecoveryForm, setShowRecoveryForm] = useState(false);
   const [showResetPasswordForm, setShowResetPasswordForm] = useState(false);
   const [customAppName, setCustomAppName] = useState(null);
+  const [larkLoginEnabled, setLarkLoginEnabled] = useState(false);
+  const larkError =
+    LARK_LOGIN_ERRORS[
+      new URLSearchParams(window.location.search).get("lark_error")
+    ] || null;
 
   const {
     isOpen: isRecoveryCodeModalOpen,
@@ -265,12 +296,18 @@ export default function MultiUserAuth() {
   }, [downloadComplete, user, token]);
 
   useEffect(() => {
-    const fetchCustomAppName = async () => {
-      const { appName } = await System.fetchCustomAppName();
-      setCustomAppName(appName || "");
+    const fetchLoginSettings = async () => {
+      const [app, settings] = await Promise.all([
+        System.fetchCustomAppName(),
+        System.keys(),
+      ]);
+      setCustomAppName(app?.appName || "");
+      setLarkLoginEnabled(
+        Boolean(settings?.MultiUserMode && settings?.LarkLoginEnabled)
+      );
       setLoading(false);
     };
-    fetchCustomAppName();
+    fetchLoginSettings();
   }, []);
 
   if (showRecoveryForm) {
@@ -303,6 +340,15 @@ export default function MultiUserAuth() {
           </div>
         </div>
         <div className="w-full px-12">
+          {larkError && (
+            <div
+              role="alert"
+              className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-200 light:text-red-700"
+            >
+              <strong className="block font-semibold">{larkError.title}</strong>
+              <span>{larkError.message}</span>
+            </div>
+          )}
           <div className="w-full flex flex-col gap-y-3">
             <div className="w-full flex flex-col gap-y-2">
               <label className="text-zinc-300 light:text-slate-800 text-sm">
@@ -341,6 +387,63 @@ export default function MultiUserAuth() {
               ? t("login.multi-user.validating")
               : t("login.multi-user.login")}
           </button>
+          {larkLoginEnabled && (
+            <div className="flex w-full flex-col gap-y-4">
+              <div className="flex items-center gap-x-3 text-xs text-zinc-500 light:text-zinc-500">
+                <span className="h-px flex-1 bg-zinc-700 light:bg-slate-300" />
+                or
+                <span className="h-px flex-1 bg-zinc-700 light:bg-slate-300" />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href = `${API_BASE}/lark/auth/start`;
+                }}
+                className="flex h-[34px] w-full items-center justify-center gap-x-2 rounded-lg border border-zinc-700 bg-transparent text-sm font-semibold text-zinc-100 hover:bg-zinc-800 light:border-slate-300 light:text-slate-800 light:hover:bg-slate-100"
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 18 18"
+                  aria-hidden="true"
+                >
+                  <rect
+                    x="2"
+                    y="2"
+                    width="6"
+                    height="6"
+                    rx="1"
+                    fill="#36bffa"
+                  />
+                  <rect
+                    x="10"
+                    y="2"
+                    width="6"
+                    height="6"
+                    rx="1"
+                    fill="#7cd4fd"
+                  />
+                  <rect
+                    x="2"
+                    y="10"
+                    width="6"
+                    height="6"
+                    rx="1"
+                    fill="#7cd4fd"
+                  />
+                  <rect
+                    x="10"
+                    y="10"
+                    width="6"
+                    height="6"
+                    rx="1"
+                    fill="#36bffa"
+                  />
+                </svg>
+                Login with Lark
+              </button>
+            </div>
+          )}
           <button
             type="button"
             className="text-zinc-200 light:text-zinc-600 hover:text-sky-300 light:hover:text-sky-600 hover:underline text-sm flex gap-x-1"
