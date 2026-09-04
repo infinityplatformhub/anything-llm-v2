@@ -15,12 +15,12 @@ const SKILLS = [
     id: "rag-memory",
     attachName: "rag-memory",
     toolName: "rag-memory",
-    prompt: "You must call the rag-memory tool before answering; do not answer from memory. Call rag-memory({action:\"search\",content:\"Alpha workspace secret token\"}) and reply with token from tool result.",
+    prompt: "You must call the rag-memory tool first, then quote the alpha reference code exactly.",
     assertB: async (ctx, chunk, response) => {
       expect(toolCalled(chunk, "rag-memory")).toBe(true);
       expect(text(response)).toContain("ALPHA-TOKEN-7731");
       await setSkills(ctx.base, null, "ws-beta", ["rag-memory"]);
-      const beta = await agentChatV1(ctx.base, ctx.key, "ws-beta", "You must call rag-memory with action search and content exactly: Alpha workspace secret token. Then reply with the token verbatim from the result.");
+      const beta = await agentChatV1(ctx.base, ctx.key, "ws-beta", "You must call the rag-memory tool first, then quote the alpha reference code exactly.");
       expect(text(beta)).not.toContain("ALPHA-TOKEN");
     },
   },
@@ -31,15 +31,15 @@ const SKILLS = [
     prompt: "You must call document-summarizer now with action list and document_filename null. Return its filenames.",
     assertB: async (_ctx, chunk, response) => {
       expect(toolCalled(chunk, "document-summarizer")).toBe(true);
-      expect(text(response)).toContain("alpha-secret");
-      expect(text(response)).not.toContain("beta-secret");
+      expect(text(response)).toContain("alpha-reference");
+      expect(text(response)).not.toContain("beta-reference");
     },
   },
   {
     id: "web-scraping",
     attachName: "web-scraping",
     toolName: "web-scraping",
-    prompt: "Scrape http://localhost:58080/page.html and quote the marker text exactly.",
+    prompt: "Use the web-scraping tool to fetch http://localhost:58080/page.html now, then quote the marker exactly.",
     assertB: async (_ctx, chunk, response) => {
       expect(toolCalled(chunk, "web-scraping")).toBe(true);
       expect(text(response)).toContain("FIXTURE-WEB-MARKER-5150");

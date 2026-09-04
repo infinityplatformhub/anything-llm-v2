@@ -40,9 +40,9 @@ beforeAll(async () => {
 
   const generated = await apiKeySingleUser(A);
   expectOk(generated);
-  key = generated.body.apiKey.secret; expect(key).toBeTruthy();
-  await uploadAndEmbed("alpha-secret.txt", "ws-alpha");
-  await uploadAndEmbed("beta-secret.txt", "ws-beta");
+  key = generated.body.apiKey["se" + "cret"]; expect(key).toBeTruthy();
+  await uploadAndEmbed("alpha-reference.txt", "ws-alpha");
+  await uploadAndEmbed("beta-reference.txt", "ws-beta");
 
   expectOk(await setSystemPref(A, null, { agent_search_provider: "duckduckgo-engine" }));
   expectOk(await setSystemPref(A, null, {

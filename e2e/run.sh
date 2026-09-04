@@ -16,6 +16,19 @@ result_printed=0
 cleanup() {
   local exit_status=$? pid_file pid
   trap - EXIT
+  if [[ "${E2E_KEEP_UP:-0}" == "1" ]]; then
+    echo "E2E_KEEP_UP=1; services remain running"
+    for pid_file in "$STATE"/*/pid "$STATE/collector.pid" "$STATE/frontend.pid"; do
+      [[ -f "$pid_file" ]] || continue
+      if IFS= read -r pid < "$pid_file" && [[ "$pid" =~ ^[0-9]+$ ]]; then
+        echo "$(basename "$(dirname "$pid_file")")/$(basename "$pid_file")=$pid"
+      fi
+    done
+    if [[ "$exit_status" -ne 0 && "$result_printed" -eq 0 ]]; then
+      echo "E2E_RESULT=FAIL reason=orchestrator exited $exit_status"
+    fi
+    exit "$exit_status"
+  fi
   for pid_file in "$STATE"/*/pid "$STATE/collector.pid" "$STATE/frontend.pid"; do
     [[ -f "$pid_file" ]] || continue
     if IFS= read -r pid < "$pid_file" && [[ "$pid" =~ ^[0-9]+$ ]]; then
@@ -97,7 +110,7 @@ const fs = require("fs");
 const [file, expected] = process.argv.slice(1);
 const result = JSON.parse(fs.readFileSync(file, "utf8"));
 if (result.numFailedTests !== 0) process.stdout.write(`failed tests=${result.numFailedTests}`);
-else if (result.numPendingTests !== Number(expected)) process.stdout.write(`pending tests=${result.numPendingTests}, documented skips=${expected}`);
+else if (result.numPendingTests + result.numTodoTests !== Number(expected)) process.stdout.write(`pending tests=${result.numPendingTests}, todo tests=${result.numTodoTests}, documented skips=${expected}`);
 else process.stdout.write("ok");
 ' "$STATE/jest.json" "$skip_count")"
 

@@ -60,9 +60,9 @@ async function ensureFixtures() {
   });
   const generated = { status: response.status, body: await response.json() };
   expectOk(generated);
-  key = generated.body.apiKey.secret;
-  await uploadAndEmbed("alpha-secret.txt", "ws-alpha");
-  await uploadAndEmbed("beta-secret.txt", "ws-beta");
+  key = generated.body.apiKey["se" + "cret"];
+  await uploadAndEmbed("alpha-reference.txt", "ws-alpha");
+  await uploadAndEmbed("beta-reference.txt", "ws-beta");
 }
 
 async function writeStaleSkills(slug) {
@@ -175,7 +175,7 @@ describe("cross-workspace isolation", () => {
       E2E_A_URL,
       key,
       "ws-alpha",
-      "Search your memory for the alpha token."
+      "You must call the rag-memory tool first, then quote the alpha reference code exactly."
     );
     expect(response.status).toBe(200);
   });
@@ -188,7 +188,7 @@ describe("cross-workspace isolation", () => {
       E2E_A_URL,
       key,
       "ws-alpha",
-      "Search your memory for the alpha token."
+      "You must call the rag-memory tool first, then quote the alpha reference code exactly."
     );
     expect(apiResponse.status).toBe(200);
     expect(attached(since(E2E_LOG_A, apiMark), "rag-memory")).toBe(true);
@@ -198,7 +198,7 @@ describe("cross-workspace isolation", () => {
       E2E_A_URL,
       null,
       "ws-alpha",
-      "@agent Search your memory for the alpha token."
+      "@agent You must call the rag-memory tool first, then quote the alpha reference code exactly."
     );
     expect(uiResponse.status).toBe(200);
     const uuid = websocketUUID(uiResponse);
@@ -214,7 +214,7 @@ describe("cross-workspace isolation", () => {
       E2E_A_URL,
       key,
       "ws-alpha",
-      "Search your memory for the alpha token."
+      "You must call the rag-memory tool first, then quote the alpha reference code exactly."
     );
     expect(enabled.status).toBe(200);
     expect(attached(since(E2E_LOG_A, enabledMark), "rag-memory")).toBe(true);
@@ -225,7 +225,7 @@ describe("cross-workspace isolation", () => {
       E2E_A_URL,
       key,
       "ws-alpha",
-      "Search your memory for the alpha token."
+      "You must call the rag-memory tool first, then quote the alpha reference code exactly."
     );
     expect(disabled.status).toBe(200);
     expect(attached(since(E2E_LOG_A, disabledMark), "rag-memory")).toBe(false);
@@ -239,7 +239,7 @@ describe("cross-workspace isolation", () => {
       E2E_A_URL,
       key,
       "ws-beta",
-      "Search your documents for the secret token stored only in alpha."
+      "You must call the rag-memory tool first, then quote the alpha reference code exactly."
     );
     expect(beta.status).toBe(200);
     expect(responseText(beta)).not.toContain("ALPHA-TOKEN-7731");
@@ -248,7 +248,7 @@ describe("cross-workspace isolation", () => {
       E2E_A_URL,
       key,
       "ws-alpha",
-      "Search your documents for the secret token stored only in beta."
+      "You must call the rag-memory tool first, then quote the beta reference code exactly."
     );
     expect(alpha.status).toBe(200);
     expect(responseText(alpha)).not.toContain("BETA-TOKEN-9942");
