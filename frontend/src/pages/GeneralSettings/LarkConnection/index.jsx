@@ -47,7 +47,10 @@ export default function LarkConnection() {
     if (params.get("lark") === "connected")
       showToast("Lark account connected.", "success", { clear: true });
 
-    const errorMessage = LARK_ERRORS[params.get("lark_error")];
+    const errorCode = params.get("lark_error");
+    const errorMessage = Object.hasOwn(LARK_ERRORS, errorCode)
+      ? LARK_ERRORS[errorCode]
+      : null;
     if (errorMessage) showToast(errorMessage, "error", { clear: true });
 
     if (params.has("lark") || params.has("lark_error"))

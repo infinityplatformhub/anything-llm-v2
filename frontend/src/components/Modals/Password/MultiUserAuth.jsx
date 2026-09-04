@@ -209,10 +209,12 @@ export default function MultiUserAuth() {
   const [showResetPasswordForm, setShowResetPasswordForm] = useState(false);
   const [customAppName, setCustomAppName] = useState(null);
   const [larkLoginEnabled, setLarkLoginEnabled] = useState(false);
-  const larkError =
-    LARK_LOGIN_ERRORS[
-      new URLSearchParams(window.location.search).get("lark_error")
-    ] || null;
+  const larkErrorCode = new URLSearchParams(window.location.search).get(
+    "lark_error"
+  );
+  const larkError = Object.hasOwn(LARK_LOGIN_ERRORS, larkErrorCode)
+    ? LARK_LOGIN_ERRORS[larkErrorCode]
+    : null;
 
   const {
     isOpen: isRecoveryCodeModalOpen,
