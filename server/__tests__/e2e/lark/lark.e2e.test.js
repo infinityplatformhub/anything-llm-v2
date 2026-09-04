@@ -782,4 +782,68 @@ describe("Lark end-to-end", () => {
     expect(haystack).not.toContain(uat);
     expect(haystack).not.toContain(APP_SECRET);
   });
+
+  it("15. single-user mode refuses the user routes and the server survives", async () => {
+    const userInfo = nextIdentity("singleuser");
+    const callback = await loginWithLark(userInfo);
+    const tempToken = new URL(
+      callback.location,
+      server.origin
+    ).searchParams.get("token");
+    const exchange = await server.api(
+      `/api/request-token/sso/lark?token=${encodeURIComponent(tempToken)}`
+    );
+    const token = exchange.json.token;
+    expect(token).toEqual(expect.any(String));
+
+    // Both routes read response.locals.user, which validatedRequest leaves
+    // undefined outside multi-user mode. Without the enabled-guard in front,
+    // the handler rejects and Express 4 turns that into a process-killing
+    // unhandled rejection, so this asserts the guard, the status, and that the
+    // server is still answering afterwards.
+    await withDb(environment, (prisma) =>
+      prisma.system_settings.update({
+        where: { label: "multi_user_mode" },
+        data: { value: "false" },
+      })
+    );
+
+    try {
+      for (const [routePath, method] of [
+        ["/api/lark/status", "GET"],
+        ["/api/lark/identity", "DELETE"],
+      ]) {
+        for (const authorization of [token, undefined]) {
+          const response = await server.api(routePath, {
+            method,
+            token: authorization,
+          });
+          expect({ routePath, method, status: response.status }).toEqual({
+            routePath,
+            method,
+            status: 403,
+          });
+        }
+      }
+
+      const alive = await server.api("/api/ping");
+      expect(alive.status).toBe(200);
+    } finally {
+      await withDb(environment, (prisma) =>
+        prisma.system_settings.update({
+          where: { label: "multi_user_mode" },
+          data: { value: "true" },
+        })
+      );
+    }
+
+    // The identity survived: the refusal was a guard, not a delete.
+    const identity = await withDb(environment, (prisma) =>
+      prisma.lark_identities.findFirst({ where: { open_id: userInfo.open_id } })
+    );
+    expect(identity).not.toBeNull();
+    const restored = await server.api("/api/lark/status", { token });
+    expect(restored.status).toBe(200);
+    expect(restored.json.connected).toBe(true);
+  });
 });

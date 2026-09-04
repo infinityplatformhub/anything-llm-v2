@@ -28,6 +28,9 @@ jest.mock("../../../models/temporaryAuthToken", () => ({
 jest.mock("../../../utils/middleware/larkLoginEnabled", () => ({
   larkLoginEnabled: jest.fn((_request, _response, next) => next()),
 }));
+jest.mock("../../../models/systemSettings", () => ({
+  SystemSettings: { isMultiUserMode: jest.fn() },
+}));
 jest.mock("../../../utils/middleware/validatedRequest", () => ({
   validatedRequest: jest.fn((request, response, next) => {
     if (!request.authUser)
@@ -49,9 +52,13 @@ const { connectIdentity } = require("../../../utils/lark/identity");
 const settings = require("../../../utils/lark/settings");
 const { LarkOauthState } = require("../../../models/larkOauthState");
 const { LarkIdentity } = require("../../../models/larkIdentity");
+const { SystemSettings } = require("../../../models/systemSettings");
 const {
   validatedRequest,
 } = require("../../../utils/middleware/validatedRequest");
+const {
+  larkLoginEnabled,
+} = require("../../../utils/middleware/larkLoginEnabled");
 
 function fakeApp() {
   const routes = {};
@@ -106,11 +113,14 @@ function config() {
     appSecret: "secret",
     tenantKey: "tenant_a",
     scopes: "contact:user.base:readonly",
+    redirectUri: "https://anything.test/api/lark/auth/callback",
   };
 }
 
 beforeEach(() => {
   jest.clearAllMocks();
+  larkLoginEnabled.mockImplementation((_request, _response, next) => next());
+  SystemSettings.isMultiUserMode.mockResolvedValue(true);
   settings.isLarkLoginEnabled.mockResolvedValue(true);
   settings.loadLarkConfig.mockResolvedValue(config());
   oauth.generateState.mockReturnValue("state-value");
@@ -171,6 +181,47 @@ test("returns safe disconnected and connected status shapes", async () => {
   expect(JSON.stringify(res.json.mock.calls.at(-1)[0])).not.toMatch(
     /access_token|refresh_token|open_id|user_id|must-not-leak/
   );
+});
+
+test("guards status and disconnect ahead of authentication", async () => {
+  // validatedRequest leaves response.locals.user undefined in single-user mode,
+  // so an unguarded handler reads .id of undefined and rejects: in Express 4
+  // that is an unhandled rejection, not a 500.
+  const { larkEndpoints } = require("../../../endpoints/lark");
+  const app = fakeApp();
+  larkEndpoints(app);
+
+  const guarded = ["GET /lark/status", "DELETE /lark/identity"];
+  for (const route of guarded) {
+    const handlers = app.routes[route];
+    expect(handlers[0]).toBe(larkLoginEnabled);
+  }
+
+  const realMiddleware = jest.requireActual(
+    "../../../utils/middleware/larkLoginEnabled"
+  ).larkLoginEnabled;
+
+  const blocked = [
+    { name: "single-user mode", multiUser: false, larkEnabled: true },
+    { name: "Lark disabled", multiUser: true, larkEnabled: false },
+  ];
+
+  for (const scenario of blocked) {
+    for (const route of guarded) {
+      jest.clearAllMocks();
+      SystemSettings.isMultiUserMode.mockResolvedValue(scenario.multiUser);
+      settings.isLarkLoginEnabled.mockResolvedValue(scenario.larkEnabled);
+      larkLoginEnabled.mockImplementation(realMiddleware);
+
+      const res = await invoke(app.routes[route], request({ authUser: null }));
+      expect({ scenario: scenario.name, route, status: res.status.mock.calls })
+        .toEqual({ scenario: scenario.name, route, status: [[403]] });
+      // The handler is never reached, so neither model is touched.
+      expect(LarkIdentity.get).not.toHaveBeenCalled();
+      expect(LarkIdentity.delete).not.toHaveBeenCalled();
+      expect(validatedRequest).not.toHaveBeenCalled();
+    }
+  }
 });
 
 test("requires authentication for connect status and disconnect", async () => {

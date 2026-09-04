@@ -227,6 +227,7 @@ test("rejects denylisted and empty allowlist entries after normalization", () =>
 });
 
 test("validates and normalizes a complete Lark update before writing", async () => {
+  process.env.SERVER_URL = "https://anything.example";
   const updateSpy = jest
     .spyOn(SystemSettings, "updateSettings")
     .mockResolvedValue({ success: true, error: null });
@@ -251,6 +252,7 @@ test("validates and normalizes a complete Lark update before writing", async () 
 });
 
 test("returns only enabled boolean from public setup settings", async () => {
+  process.env.SERVER_URL = "https://anything.example";
   await saveValidSettings();
   jest.spyOn(SystemSettings, "isMultiUserMode").mockResolvedValue(true);
   jest.spyOn(SystemSettings, "hasEmbeddings").mockResolvedValue(false);
@@ -366,4 +368,50 @@ test("configuration loading fails closed when decryption throws", async () => {
   await expect(SystemSettings.currentSettings()).resolves.toEqual(
     expect.objectContaining({ LarkLoginEnabled: false })
   );
+});
+
+test("requires SERVER_URL before Lark login can be enabled", () => {
+  delete process.env.SERVER_URL;
+  const rejected = validateLarkSettings({
+    lark_login_enabled: true,
+    lark_app_id: "app-id",
+    lark_app_secret: "secret",
+    lark_tenant_key: "tenant-key",
+  });
+  expect(rejected.ok).toBe(false);
+  expect(rejected.errors.lark_login_enabled).toMatch(/SERVER_URL/);
+
+  process.env.SERVER_URL = "https://anything.example";
+  const accepted = validateLarkSettings({
+    lark_login_enabled: true,
+    lark_app_id: "app-id",
+    lark_app_secret: "secret",
+    lark_tenant_key: "tenant-key",
+  });
+  expect(accepted.ok).toBe(true);
+
+  // Disabling never needs the variable.
+  delete process.env.SERVER_URL;
+  expect(validateLarkSettings({ lark_login_enabled: false }).ok).toBe(true);
+});
+
+test("fails closed when SERVER_URL is missing", async () => {
+  const ciphertext = encryption.encrypt("secret");
+  mockRecords.set("lark_login_enabled", "true");
+  mockRecords.set("lark_app_id", "app-id");
+  mockRecords.set("lark_app_secret", ciphertext);
+  mockRecords.set("lark_tenant_key", "tenant-key");
+  delete process.env.SERVER_URL;
+
+  const config = await loadLarkConfig({ encryption });
+  expect(config).not.toBeNull();
+  expect(config.redirectUri).toBeUndefined();
+
+  jest
+    .spyOn(SystemSettings, "isMultiUserMode")
+    .mockResolvedValue(true);
+  await expect(isLarkLoginEnabled({ encryption })).resolves.toBe(false);
+
+  process.env.SERVER_URL = "https://anything.example/";
+  await expect(isLarkLoginEnabled({ encryption })).resolves.toBe(true);
 });

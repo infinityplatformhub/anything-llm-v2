@@ -26,14 +26,6 @@ const LOGIN_ERRORS = new Set([
   "unknown",
 ]);
 
-function larkRedirectUri(request) {
-  const forwarded = request.get("x-forwarded-proto");
-  const protocol = forwarded?.split(",")[0].trim() || request.protocol;
-  const origin =
-    process.env.SERVER_URL || `${protocol}://${request.get("host")}`;
-  return `${origin.replace(/\/$/, "")}/api/lark/auth/callback`;
-}
-
 function loginError(response, error = "unknown") {
   const code = LOGIN_ERRORS.has(error) ? error : "unknown";
   return response.redirect(`/login?lark_error=${code}`);
@@ -60,38 +52,42 @@ function oauthError(response, mode, error = "unknown") {
 function larkEndpoints(app) {
   if (!app) return;
 
-  app.get("/lark/status", [validatedRequest], async (_request, response) => {
-    const identity = await LarkIdentity.get({
-      user_id: response.locals.user.id,
-    });
-    const enabled = await isLarkLoginEnabled();
-    if (!identity)
+  app.get(
+    "/lark/status",
+    [larkLoginEnabled, validatedRequest],
+    async (_request, response) => {
+      const identity = await LarkIdentity.get({
+        user_id: response.locals.user.id,
+      });
+      const enabled = await isLarkLoginEnabled();
+      if (!identity)
+        return response.json({
+          connected: false,
+          needsReauth: false,
+          profile: null,
+          enabled,
+        });
+
+      const scopes = Array.isArray(identity.scopes)
+        ? identity.scopes
+        : String(identity.scopes || "")
+            .split(/\s+/)
+            .filter(Boolean);
       return response.json({
-        connected: false,
-        needsReauth: false,
-        profile: null,
+        connected: true,
+        needsReauth: Boolean(identity.needs_reauth),
+        profile: {
+          displayName: identity.display_name,
+          avatarUrl: identity.avatar_url,
+          email: identity.email,
+          tenantKey: identity.tenant_key,
+          scopes,
+          connectedAt: identity.createdAt,
+        },
         enabled,
       });
-
-    const scopes = Array.isArray(identity.scopes)
-      ? identity.scopes
-      : String(identity.scopes || "")
-          .split(/\s+/)
-          .filter(Boolean);
-    return response.json({
-      connected: true,
-      needsReauth: Boolean(identity.needs_reauth),
-      profile: {
-        displayName: identity.display_name,
-        avatarUrl: identity.avatar_url,
-        email: identity.email,
-        tenantKey: identity.tenant_key,
-        scopes,
-        connectedAt: identity.createdAt,
-      },
-      enabled,
-    });
-  });
+    }
+  );
 
   app.get(
     "/lark/auth/start",
@@ -106,7 +102,11 @@ function larkEndpoints(app) {
         const config = await loadLarkConfig({ encryption });
         if (!config?.enabled)
           return response.status(403).send("Lark login is not enabled.");
-        config.redirectUri = larkRedirectUri(request);
+        // SERVER_URL is required whenever Lark login is on, so a missing
+        // redirect URI here means the deployment is misconfigured. Fail closed
+        // rather than deriving an origin from caller-controlled headers.
+        if (!config.redirectUri)
+          throw new Error("SERVER_URL is required for Lark login");
 
         const state = generateState();
         const { verifier, challenge } = generatePkce();
@@ -163,8 +163,8 @@ function larkEndpoints(app) {
       if (!verifier) return oauthError(response, mode);
 
       const config = await loadLarkConfig({ encryption });
-      if (!config?.enabled) return oauthError(response, mode);
-      config.redirectUri = larkRedirectUri(request);
+      if (!config?.enabled || !config.redirectUri)
+        return oauthError(response, mode);
 
       const tokens = await exchangeCode({ config, code, verifier });
       const userInfo = await fetchUserInfo({ accessToken: tokens.accessToken });
@@ -213,7 +213,7 @@ function larkEndpoints(app) {
 
   app.delete(
     "/lark/identity",
-    [validatedRequest],
+    [larkLoginEnabled, validatedRequest],
     async (_request, response) => {
       const deleted = await LarkIdentity.delete({
         user_id: response.locals.user.id,
@@ -233,4 +233,4 @@ function larkEndpoints(app) {
   );
 }
 
-module.exports = { larkEndpoints, larkRedirectUri };
+module.exports = { larkEndpoints };

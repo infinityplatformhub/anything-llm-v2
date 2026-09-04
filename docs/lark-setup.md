@@ -10,7 +10,7 @@ Register this redirect URL exactly, replacing `<SERVER_URL>` with the public Any
 <SERVER_URL>/api/lark/auth/callback
 ```
 
-The server derives this URL from `SERVER_URL`; users cannot supply a redirect URL. Lark login uses these fixed international OAuth endpoints:
+The server derives this URL from `SERVER_URL` alone; users cannot supply a redirect URL and no request header can influence it. `SERVER_URL` is therefore **required** whenever Lark login is enabled: saving the settings with it unset returns HTTP 400 naming `SERVER_URL`, and if it is removed afterwards the feature fails closed, reporting Lark login as disabled. Lark login uses these fixed international OAuth endpoints:
 
 - Authorization: `https://accounts.larksuite.com/open-apis/authen/v1/authorize`
 - Code exchange and refresh: `https://open.larksuite.com/open-apis/authen/v2/oauth/token`
@@ -46,7 +46,7 @@ Open **Settings > Authentication > Lark** and configure:
 - **Scopes** (`lark_scopes`): space-separated list. The default is the exact scope list in section 1.
 - **CLI allowlist** (`lark_cli_allowlist`): allowed first command tokens. Default entries are `im`, `docs`, `docx`, `wiki`, `calendar`, and `contact`.
 
-`auth`, `config`, `profile`, `logout`, and `api` are permanently denied, regardless of the configured allowlist. Empty or malformed identifiers, scopes, or allowlist entries fail validation. Invalid updates return HTTP 400. Enabling Lark requires an App ID, an existing or new App Secret, and an allowed tenant key.
+`auth`, `config`, `profile`, `logout`, and `api` are permanently denied, regardless of the configured allowlist. Empty or malformed identifiers, scopes, or allowlist entries fail validation. Invalid updates return HTTP 400. Enabling Lark requires an App ID, an existing or new App Secret, an allowed tenant key, and the `SERVER_URL` environment variable set to the public server origin.
 
 Use **Test connection** after saving. It requests an app access token server-side and returns only sanitized success or failure data and the tenant key. Credentials are never returned to the browser.
 
@@ -54,7 +54,7 @@ Use **Test connection** after saving. It requests an app access token server-sid
 
 Eligible users choose **Login with Lark** on the multi-user login page. The callback rejects users from any tenant other than the configured tenant and rejects suspended AnythingLLM users before session creation.
 
-First login resolves an existing Lark identity before considering automatic linking. Automatic linking occurs only when the lowercased Lark email local-part is already a valid AnythingLLM username and exactly equals an existing username. This is a deliberate trust boundary and is safe only because tenant matching happens first. Otherwise, AnythingLLM provisions a default-role user with a random 32-byte hexadecimal password that is never displayed or logged. Username collisions receive numeric suffixes.
+First login resolves an existing Lark identity before considering automatic linking. Automatic linking occurs only when the raw Lark email local-part, lowercased and with no characters stripped, is exactly equal to an existing AnythingLLM username **and** that account's role is `default`. An address whose local part would have to be rewritten to match, such as the plus-addressed alias `ad+min@corp.com`, never links, and an `admin` or `manager` account is never claimed by an email match at all: those owners must link Lark deliberately through **Settings > Connect**. This is a deliberate trust boundary and is safe only because tenant matching happens first. When no link applies, AnythingLLM provisions a default-role user with a random 32-byte hexadecimal password that is never displayed or logged. Username collisions receive numeric suffixes.
 
 Users manage their identity under **Settings > Lark**:
 
@@ -76,14 +76,11 @@ docs +fetch --doc "<url or token>"
 
 Policy checks the first command token against the admin allowlist and checks grouped command tokens against the permanent denylist. Arguments are passed as an array with no shell parsing. The runner always adds `--as user --json`.
 
-The fail-closed classifier treats only these forms as reads:
+Every argument token is validated, not only the command tokens. An accepted invocation is exactly two positional command tokens followed by flags and their values. A third positional token is rejected, so a second subcommand cannot ride along behind a read-shaped one. Flag values may not name a local file: a leading `@`, an absolute path, a drive letter, `..`, a control character, or a value beyond 4096 characters is refused. Flags the runner owns (`--as`, `--config`, `--profile`, `--brand`, `--app-id`, `--user-access-token`, `--tenant-access-token`) and flags that name a filesystem location (`--output`, `-o`, `--output-dir`, `--out`, `--local-dir`, `--file`, `--body-file`, `--patch-file`, `--data`, `--csv`, `--image`, `--attachment`, `--path`, and any flag ending in `-file`, `-dir`, or `-path`) are rejected outright.
 
-- `+search-user`
-- `+fetch`
-- `status`
-- Any command token ending in `-list`, `-get`, or `-search`
+The fail-closed classifier reads an explicit allowlist of `group +subcommand` pairs pinned to `@larksuite/cli@1.0.93`, exported as `READ_COMMANDS`. Only non-mutating verbs are listed, for example `contact +search-user`, `docs +fetch`, `im +chat-list`, `im +messages-search`, `wiki +node-list`, and `calendar +agenda`.
 
-Everything else, including `+messages-send`, is a write. Every write requires explicit in-chat approval before process spawn. Denied approval causes no invocation. Reads do not request approval.
+Everything absent from that allowlist, including `+messages-send`, is a write. A name that merely looks like a read, such as `+messages-delete-list`, is a write. Every write requires explicit in-chat approval before process spawn. Denied approval causes no invocation. Reads do not request approval. A CLI upgrade that adds verbs cannot silently widen the read set, because the allowlist is pinned rather than derived from a suffix rule.
 
 The agent receives only an opaque runner and result; it never sees the app secret, access token, refresh token, OAuth verifier, or raw process environment. Each invocation receives a fresh temporary `HOME` and these isolated variables:
 
@@ -97,7 +94,7 @@ HOME=<same temporary directory>
 CI=1
 ```
 
-Only `PATH`, `LANG`, `TZ`, and `TMPDIR` may be inherited. The temporary directory is removed after every outcome. Execution has a 60-second timeout and a combined stdout/stderr cap of 65,536 bytes (64 KB); either limit kills the child process. Errors and audit arguments are credential-redacted. Every attempted invocation records a `lark_cli_invocation` event with user ID, redacted arguments, outcome, exit code, timeout state, and truncation state.
+Only `PATH`, `LANG`, `TZ`, and `TMPDIR` may be inherited. The temporary directory is removed after every outcome. Execution has a 60-second timeout and a combined stdout/stderr cap of 65,536 bytes (64 KB); either limit kills the child process. Errors and audit arguments are credential-redacted. Every attempted invocation records a `lark_cli_invocation` event with user ID, redacted arguments, outcome, exit code, timeout state, and truncation state. Invocations rejected before the app secret and access token resolve record `argCount` in place of the arguments, because no secret list exists yet to redact them against.
 
 ## 5. Deployment
 
@@ -113,6 +110,12 @@ Run the Lark server test suite:
 
 ```bash
 cd server && npx jest __tests__/utils/lark
+```
+
+Run the end-to-end suite, which boots the real server against a throwaway database with a mock Lark and a fake CLI on `PATH`:
+
+```bash
+cd server && npx jest __tests__/e2e/lark --runInBand
 ```
 
 Build each target from the repository root in an environment that permits package postinstall:

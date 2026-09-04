@@ -3,6 +3,13 @@ const { EncryptionManager } = require("../EncryptionManager");
 const { APP_ACCESS_TOKEN_URL, DEFAULT_SCOPES } = require("./constants");
 
 const LARK_AUTH_CALLBACK_PATH = "/api/lark/auth/callback";
+
+function serverOrigin() {
+  const origin = process.env.SERVER_URL;
+  return typeof origin === "string" && origin.trim()
+    ? origin.trim().replace(/\/$/, "")
+    : null;
+}
 const DEFAULT_LARK_CLI_ALLOWLIST = [
   "im",
   "docs",
@@ -100,6 +107,11 @@ function validateLarkSettings(payload = {}, { existing = {} } = {}) {
     if (!hasAppId || !hasTenantKey || (!hasNewSecret && !hasExistingSecret))
       errors.lark_login_enabled =
         "App ID, app secret, and tenant key are required when enabled.";
+    // The OAuth redirect URI is derived from SERVER_URL alone. Without it
+    // there is no correct value to register with Lark, so enabling is refused.
+    else if (!serverOrigin())
+      errors.lark_login_enabled =
+        "SERVER_URL must be set to the public server origin when enabled.";
   }
 
   return Object.keys(errors).length
@@ -152,8 +164,8 @@ async function loadLarkConfig({ encryption } = {}) {
       scopes: values.lark_scopes || DEFAULT_SCOPES,
       allowlist,
     };
-    if (process.env.SERVER_URL)
-      config.redirectUri = `${process.env.SERVER_URL.replace(/\/$/, "")}${LARK_AUTH_CALLBACK_PATH}`;
+    const origin = serverOrigin();
+    if (origin) config.redirectUri = `${origin}${LARK_AUTH_CALLBACK_PATH}`;
     return config;
   } catch {
     return null;
@@ -168,6 +180,8 @@ async function isLarkLoginEnabled({ encryption } = {}) {
         config.appId &&
         config.appSecret &&
         config.tenantKey &&
+        // No SERVER_URL means no derivable redirect URI: fail closed.
+        config.redirectUri &&
         (await SystemSettings.isMultiUserMode())
     );
   } catch {

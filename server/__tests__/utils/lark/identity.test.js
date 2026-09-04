@@ -88,7 +88,7 @@ test("resolves an existing identity before email linking", async () => {
 });
 
 test("auto-links exact valid email local-part inside configured tenant", async () => {
-  const user = { id: 8, username: "alice", suspended: 0 };
+  const user = { id: 8, username: "alice", role: "default", suspended: 0 };
   const identity = savedIdentity(8);
   LarkIdentity.get.mockResolvedValueOnce(null);
   User.get.mockResolvedValueOnce(user);
@@ -199,14 +199,24 @@ test("provisions default user with unseen random compliant password", async () =
 
 test("rejects suspended linked and auto-linked users", async () => {
   LarkIdentity.get.mockResolvedValueOnce(savedIdentity(20));
-  User.get.mockResolvedValueOnce({ id: 20, username: "linked", suspended: 1 });
+  User.get.mockResolvedValueOnce({
+    id: 20,
+    username: "linked",
+    role: "default",
+    suspended: 1,
+  });
 
   await expect(
     resolveLoginUser({ userInfo, tokens, config, encryption })
   ).resolves.toEqual({ user: null, identity: null, error: "suspended" });
 
   LarkIdentity.get.mockResolvedValueOnce(null);
-  User.get.mockResolvedValueOnce({ id: 21, username: "alice", suspended: 1 });
+  User.get.mockResolvedValueOnce({
+    id: 21,
+    username: "alice",
+    role: "default",
+    suspended: 1,
+  });
   await expect(
     resolveLoginUser({ userInfo, tokens, config, encryption })
   ).resolves.toEqual({ user: null, identity: null, error: "suspended" });
@@ -274,7 +284,7 @@ test("recovers concurrent unique conflict owned by same user", async () => {
 });
 
 test("auto-link user with existing different identity returns conflict", async () => {
-  const user = { id: 50, username: "alice", suspended: 0 };
+  const user = { id: 50, username: "alice", role: "default", suspended: 0 };
   LarkIdentity.get.mockResolvedValueOnce(null);
   User.get.mockResolvedValueOnce(user);
   LarkIdentity.createForUser.mockResolvedValue({
@@ -314,5 +324,88 @@ test("rejects unvalidated tenant before reading or writing identity", async () =
   ).resolves.toEqual({ user: null, identity: null, error: "unknown" });
   expect(LarkIdentity.get).not.toHaveBeenCalled();
   expect(LarkIdentity.createForUser).not.toHaveBeenCalled();
+  expect(LarkIdentity.provisionUserWithIdentity).not.toHaveBeenCalled();
+});
+
+test("auto-links only an exact local part onto a default-role user", async () => {
+  const identity = savedIdentity(50);
+  LarkIdentity.get.mockResolvedValue(null);
+  LarkIdentity.createForUser.mockResolvedValue({ identity, error: null });
+  const admin = { id: 1, username: "admin", role: "admin", suspended: 0 };
+
+  // Sanitization would have to change the local part to reach "admin", so the
+  // plus-addressed alias must not select that account.
+  User.get.mockResolvedValue(admin);
+  LarkIdentity.provisionUserWithIdentity.mockResolvedValue({
+    user: { id: 99, username: "admin2", role: "default" },
+    identity,
+    error: null,
+  });
+  let result = await resolveLoginUser({
+    userInfo: { ...userInfo, email: "ad+min@corp.com" },
+    tokens,
+    config,
+    encryption,
+  });
+  expect(result.created).toBe(true);
+  expect(result.user.id).toBe(99);
+  expect(LarkIdentity.createForUser).not.toHaveBeenCalled();
+
+  // Case-only difference is an exact match, but the matched account is an
+  // admin, so it is still never auto-linked.
+  jest.clearAllMocks();
+  LarkIdentity.get.mockResolvedValue(null);
+  User.get.mockResolvedValue(admin);
+  LarkIdentity.provisionUserWithIdentity.mockResolvedValue({
+    user: { id: 98, username: "admin3", role: "default" },
+    identity,
+    error: null,
+  });
+  result = await resolveLoginUser({
+    userInfo: { ...userInfo, email: "Admin@corp.com" },
+    tokens,
+    config,
+    encryption,
+  });
+  expect(result.created).toBe(true);
+  expect(LarkIdentity.createForUser).not.toHaveBeenCalled();
+
+  // A manager is equally off limits.
+  jest.clearAllMocks();
+  LarkIdentity.get.mockResolvedValue(null);
+  User.get.mockResolvedValue({
+    id: 2,
+    username: "lead",
+    role: "manager",
+    suspended: 0,
+  });
+  LarkIdentity.provisionUserWithIdentity.mockResolvedValue({
+    user: { id: 97, username: "lead2", role: "default" },
+    identity,
+    error: null,
+  });
+  result = await resolveLoginUser({
+    userInfo: { ...userInfo, email: "lead@corp.com" },
+    tokens,
+    config,
+    encryption,
+  });
+  expect(result.created).toBe(true);
+  expect(LarkIdentity.createForUser).not.toHaveBeenCalled();
+});
+
+test("auto-links an exact local part onto a default-role user", async () => {
+  const identity = savedIdentity(50);
+  const user = { id: 50, username: "alice", role: "default", suspended: 0 };
+  LarkIdentity.get.mockResolvedValue(null);
+  User.get.mockResolvedValue(user);
+  LarkIdentity.createForUser.mockResolvedValue({ identity, error: null });
+
+  // "Alice@example.com" differs only by case, which sanitization does not
+  // change beyond lowercasing, so this is an exact match.
+  await expect(
+    resolveLoginUser({ userInfo, tokens, config, encryption })
+  ).resolves.toEqual({ user, identity, created: false, error: null });
+  expect(LarkIdentity.createForUser).toHaveBeenCalledTimes(1);
   expect(LarkIdentity.provisionUserWithIdentity).not.toHaveBeenCalled();
 });

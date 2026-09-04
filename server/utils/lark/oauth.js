@@ -48,7 +48,7 @@ async function postToken(body) {
       body: JSON.stringify(body),
     });
     payload = await response.json();
-  } catch (_) {
+  } catch {
     throw new Error("Lark OAuth request failed");
   }
 
@@ -92,7 +92,7 @@ async function fetchUserInfo({ accessToken }) {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     payload = await response.json();
-  } catch (_) {
+  } catch {
     throw new Error("Lark user info request failed");
   }
 
@@ -109,7 +109,7 @@ function assertTenant({ config, userInfo }) {
 async function markNeedsReauth(identityId) {
   try {
     await LarkIdentity.updateTokens(identityId, { needs_reauth: true });
-  } catch (_) {}
+  } catch {}
 }
 
 async function refreshIdentity({ identityId, config, encryption }) {
@@ -157,7 +157,7 @@ async function refreshIdentity({ identityId, config, encryption }) {
     if (error) throw new Error(RECONNECT_ERROR);
 
     return tokens.accessToken;
-  } catch (_) {
+  } catch {
     await markNeedsReauth(identityId);
     throw new Error(RECONNECT_ERROR);
   }

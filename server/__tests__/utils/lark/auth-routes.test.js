@@ -103,8 +103,9 @@ beforeEach(() => {
   oauth.assertTenant.mockReset();
   SystemSettings.isMultiUserMode.mockResolvedValue(true);
   settings.isLarkLoginEnabled.mockResolvedValue(true);
+  process.env.SERVER_URL = "https://anything.test";
   settings.loadLarkConfig.mockResolvedValue(
-    baseConfig({ redirectUri: "https://stale.test/api/lark/callback" })
+    baseConfig({ redirectUri: "https://anything.test/api/lark/auth/callback" })
   );
   oauth.generateState.mockReturnValue("state-value");
   oauth.generatePkce.mockReturnValue({
@@ -125,27 +126,41 @@ afterAll(() => {
   else process.env.SERVER_URL = originalServerUrl;
 });
 
-test("derives one fixed callback URI from server URL or request origin", () => {
-  const { larkRedirectUri } = require("../../../endpoints/lark");
-  const request = {
+test("takes the callback URI from configuration and never from the request", () => {
+  const { larkEndpoints } = require("../../../endpoints/lark");
+  // The header fallback is gone: nothing the caller sends can shape the
+  // redirect URI, and the endpoint no longer exports a request-derived helper.
+  expect(require("../../../endpoints/lark")).not.toHaveProperty(
+    "larkRedirectUri"
+  );
+  expect(
+    require("fs").readFileSync(
+      require.resolve("../../../endpoints/lark"),
+      "utf8"
+    )
+  ).not.toMatch(/x-forwarded-proto|request\.get\("host"\)/);
+  expect(typeof larkEndpoints).toBe("function");
+});
+
+test("refuses to start login when SERVER_URL is unset", async () => {
+  jest.spyOn(console, "error").mockImplementation(() => {});
+  const { larkEndpoints } = require("../../../endpoints/lark");
+  const app = fakeApp();
+  larkEndpoints(app);
+
+  delete process.env.SERVER_URL;
+  settings.loadLarkConfig.mockResolvedValue(baseConfig());
+
+  const res = await invoke(app.routes["GET /lark/auth/start"], {
+    query: {},
     protocol: "http",
-    get: jest.fn((name) =>
-      name === "host"
-        ? "anything.test"
-        : name === "x-forwarded-proto"
-          ? "https"
-          : undefined
-    ),
-  };
+    get: () => "evil.tld",
+  });
 
-  expect(larkRedirectUri(request)).toBe(
-    "https://anything.test/api/lark/auth/callback"
-  );
-
-  process.env.SERVER_URL = "https://configured.test/";
-  expect(larkRedirectUri(request)).toBe(
-    "https://configured.test/api/lark/auth/callback"
-  );
+  expect(res.status).toHaveBeenCalledWith(500);
+  expect(res.send).toHaveBeenCalledWith("Could not start Lark login.");
+  expect(LarkOauthState.create).not.toHaveBeenCalled();
+  expect(oauth.buildAuthorizeUrl).not.toHaveBeenCalled();
 });
 
 test("rejects start outside multi-user mode or when disabled", async () => {
@@ -189,6 +204,13 @@ test("stores encrypted verifier and redirects with fixed callback URI", async ()
           : undefined
     ),
   };
+
+  process.env.SERVER_URL = "https://anything.test";
+  settings.loadLarkConfig.mockResolvedValue(
+    baseConfig({
+      redirectUri: "https://anything.test/api/lark/auth/callback",
+    })
+  );
 
   const res = await invoke(app.routes["GET /lark/auth/start"], req);
 

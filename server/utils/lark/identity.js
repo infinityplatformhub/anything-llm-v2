@@ -13,6 +13,15 @@ function sanitizeLocalPart(email) {
     .replace(/[^a-z0-9_.-]/g, "");
 }
 
+// Auto-link is only safe when the Lark address genuinely names the account.
+// sanitizeLocalPart strips characters, so many distinct addresses collapse onto
+// one username; a plus-addressed alias must not be able to select an account.
+function exactLocalPart(email) {
+  if (typeof email !== "string" || !email.includes("@")) return "";
+  const raw = email.split("@", 1)[0].toLowerCase();
+  return raw && sanitizeLocalPart(email) === raw ? raw : "";
+}
+
 function isValidUsername(username) {
   return (
     username.length >= 2 &&
@@ -132,7 +141,7 @@ async function connectIdentity({
     if (userIdentity) return { identity: null, error: "link_conflict" };
 
     return createIdentity({ userId, userInfo, tokens, encryption });
-  } catch (_) {
+  } catch {
     return { identity: null, error: "unknown" };
   }
 }
@@ -160,10 +169,13 @@ async function resolveLoginUser({ userInfo, tokens, config, encryption }) {
       return { user, identity: saved.identity, created: false, error: null };
     }
 
-    const localPart = sanitizeLocalPart(userInfo.email);
+    const localPart = exactLocalPart(userInfo.email);
     if (isValidUsername(localPart)) {
       const user = await User.get({ username: localPart });
-      if (user) {
+      // Privileged accounts are never claimed by an email match. Their owners
+      // link Lark deliberately through Settings, so a same-tenant user cannot
+      // inherit admin or manager rights by choosing a profile email.
+      if (user && user.role === "default") {
         if (user.suspended)
           return { user: null, identity: null, error: "suspended" };
         const saved = await createIdentity({
@@ -197,7 +209,7 @@ async function resolveLoginUser({ userInfo, tokens, config, encryption }) {
       created: true,
       error: null,
     };
-  } catch (_) {
+  } catch {
     return { user: null, identity: null, error: "unknown" };
   }
 }
