@@ -12,6 +12,11 @@ const {
   streamChatJwt,
 } = require("../lib/api");
 const { mark, since, attached, attachedAny } = require("../lib/evidence");
+const {
+  websocketUUID,
+  driveAgentWebsocket,
+  AGENT_ATTACHED,
+} = require("../lib/agent-socket");
 
 const ALL_SKILLS = [
   "rag-memory",
@@ -92,46 +97,6 @@ function responseText(response) {
     : response.body?.textResponse ?? "";
 }
 
-function websocketUUID(response) {
-  for (const line of response.body.split("\n")) {
-    if (!line.startsWith("data: ")) continue;
-    const chunk = JSON.parse(line.slice(6));
-    if (chunk.type === "agentInitWebsocketConnection") return chunk.websocketUUID;
-  }
-  return null;
-}
-
-async function driveAgentWebsocket(uuid, logMark, skillName) {
-  const url = new URL(E2E_A_URL);
-  const socket = new WebSocket(
-    `${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host}/api/agent-invocation/${uuid}`
-  );
-  await new Promise((resolve, reject) => {
-    const poll = setInterval(() => {
-      if (!attached(since(E2E_LOG_A, logMark), skillName)) return;
-      clearTimeout(timeout);
-      clearInterval(poll);
-      socket.close();
-      resolve();
-    }, 100);
-    const timeout = setTimeout(() => {
-      clearInterval(poll);
-      socket.close();
-      reject(new Error("agent websocket timed out"));
-    }, 60_000);
-    socket.addEventListener("close", () => {
-      clearTimeout(timeout);
-      clearInterval(poll);
-      resolve();
-    });
-    socket.addEventListener("error", () => {
-      clearTimeout(timeout);
-      clearInterval(poll);
-      reject(new Error("agent websocket failed"));
-    });
-  });
-}
-
 describe("cross-workspace isolation", () => {
   beforeAll(ensureFixtures);
 
@@ -203,7 +168,13 @@ describe("cross-workspace isolation", () => {
     expect(uiResponse.status).toBe(200);
     const uuid = websocketUUID(uiResponse);
     expect(uuid).toBeTruthy();
-    await driveAgentWebsocket(uuid, uiMark, "rag-memory");
+    await driveAgentWebsocket(
+      E2E_A_URL,
+      E2E_LOG_A,
+      uuid,
+      uiMark,
+      AGENT_ATTACHED("rag-memory")
+    );
     expect(attached(since(E2E_LOG_A, uiMark), "rag-memory")).toBe(true);
   });
 

@@ -16,6 +16,11 @@ const { SKILLS } = require("../lib/skills");
 
 const A = E2E_A_URL;
 const LOG_A = E2E_LOG_A;
+// Positive control for absence assertions: the /v1 path always attaches
+// httpSocket (server/utils/agents/ephemeral.js:556), so seeing it proves an
+// agent cluster really started. Without it, an invocation that never ran reads
+// as a pass.
+const AGENT_RAN = "Attached httpSocket plugin to Agent cluster";
 const FIXTURES = path.resolve(__dirname, "../fixtures/docs");
 let key;
 const modelNoCall = [];
@@ -67,6 +72,7 @@ describe.each(SKILLS.map((skill) => [skill.id, skill]))("skill %s", (_id, skill)
     const logMark = mark(LOG_A);
     expectOk(await agentChatV1(A, key, "ws-alpha", skill.prompt));
     const chunk = since(LOG_A, logMark);
+    expect(chunk).toContain(AGENT_RAN);
     expect(attached(chunk, skill.attachName)).toBe(false);
     if (skill.sideEffectAbsent) await skill.sideEffectAbsent(ctx);
   });
@@ -94,6 +100,7 @@ describe.each(SKILLS.map((skill) => [skill.id, skill]))("skill %s", (_id, skill)
     const logMark = mark(LOG_A);
     expectOk(await agentChatV1(A, key, "ws-beta", skill.prompt));
     const chunk = since(LOG_A, logMark);
+    expect(chunk).toContain(AGENT_RAN);
     expect(attached(chunk, skill.attachName)).toBe(false);
   });
 });
