@@ -21,10 +21,12 @@ const LOGIN_ERRORS = new Set([
   "unknown",
 ]);
 
-function requestRedirectUri(request) {
+function larkRedirectUri(request) {
   const forwarded = request.get("x-forwarded-proto");
   const protocol = forwarded?.split(",")[0].trim() || request.protocol;
-  return `${protocol}://${request.get("host")}/api/lark/auth/callback`;
+  const origin =
+    process.env.SERVER_URL || `${protocol}://${request.get("host")}`;
+  return `${origin.replace(/\/$/, "")}/api/lark/auth/callback`;
 }
 
 function loginError(response, error = "unknown") {
@@ -41,7 +43,7 @@ function larkEndpoints(app) {
       const config = await loadLarkConfig({ encryption });
       if (!config?.enabled)
         return response.status(403).send("Lark login is not enabled.");
-      config.redirectUri ||= requestRedirectUri(request);
+      config.redirectUri = larkRedirectUri(request);
 
       // Login is the only supported mode here. Connect mode is handled separately.
       const state = generateState();
@@ -87,7 +89,7 @@ function larkEndpoints(app) {
 
       const config = await loadLarkConfig({ encryption });
       if (!config?.enabled) return loginError(response);
-      config.redirectUri ||= requestRedirectUri(request);
+      config.redirectUri = larkRedirectUri(request);
 
       const tokens = await exchangeCode({ config, code, verifier });
       const userInfo = await fetchUserInfo({ accessToken: tokens.accessToken });
@@ -118,4 +120,4 @@ function larkEndpoints(app) {
   });
 }
 
-module.exports = { larkEndpoints };
+module.exports = { larkEndpoints, larkRedirectUri };

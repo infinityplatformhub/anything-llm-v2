@@ -45,6 +45,8 @@ const { TemporaryAuthToken } = require("../../../models/temporaryAuthToken");
 const { SystemSettings } = require("../../../models/systemSettings");
 const { EncryptionManager } = require("../../../utils/EncryptionManager");
 
+const originalServerUrl = process.env.SERVER_URL;
+
 function fakeApp() {
   const routes = {};
   const register =
@@ -96,11 +98,14 @@ function baseConfig(overrides = {}) {
 }
 
 beforeEach(() => {
+  delete process.env.SERVER_URL;
   jest.clearAllMocks();
   oauth.assertTenant.mockReset();
   SystemSettings.isMultiUserMode.mockResolvedValue(true);
   settings.isLarkLoginEnabled.mockResolvedValue(true);
-  settings.loadLarkConfig.mockResolvedValue(baseConfig());
+  settings.loadLarkConfig.mockResolvedValue(
+    baseConfig({ redirectUri: "https://stale.test/api/lark/callback" })
+  );
   oauth.generateState.mockReturnValue("state-value");
   oauth.generatePkce.mockReturnValue({
     verifier: "verifier",
@@ -113,6 +118,34 @@ beforeEach(() => {
     oauthState: { id: 1 },
     error: null,
   });
+});
+
+afterAll(() => {
+  if (originalServerUrl === undefined) delete process.env.SERVER_URL;
+  else process.env.SERVER_URL = originalServerUrl;
+});
+
+test("derives one fixed callback URI from server URL or request origin", () => {
+  const { larkRedirectUri } = require("../../../endpoints/lark");
+  const request = {
+    protocol: "http",
+    get: jest.fn((name) =>
+      name === "host"
+        ? "anything.test"
+        : name === "x-forwarded-proto"
+          ? "https"
+          : undefined
+    ),
+  };
+
+  expect(larkRedirectUri(request)).toBe(
+    "https://anything.test/api/lark/auth/callback"
+  );
+
+  process.env.SERVER_URL = "https://configured.test/";
+  expect(larkRedirectUri(request)).toBe(
+    "https://configured.test/api/lark/auth/callback"
+  );
 });
 
 test("rejects start outside multi-user mode or when disabled", async () => {
@@ -199,12 +232,19 @@ test("consumes state before exchanging callback code", async () => {
   await invoke(app.routes["GET /lark/auth/callback"], {
     query: { state: "state-value", code: "code" },
     protocol: "https",
-    get: () => "anything.test",
+    get: (name) => (name === "host" ? "anything.test" : undefined),
   });
 
   expect(order).toEqual(["consume", "exchange"]);
   expect(LarkOauthState.consume).toHaveBeenCalledWith("state-value", {
     withSecrets: true,
+  });
+  expect(oauth.exchangeCode).toHaveBeenCalledWith({
+    config: expect.objectContaining({
+      redirectUri: "https://anything.test/api/lark/auth/callback",
+    }),
+    code: "code",
+    verifier: "verifier",
   });
 });
 
@@ -228,7 +268,7 @@ test("rejects tenant before identity persistence or temporary token issue", asyn
   const res = await invoke(app.routes["GET /lark/auth/callback"], {
     query: { state: "state-value", code: "code" },
     protocol: "https",
-    get: () => "anything.test",
+    get: (name) => (name === "host" ? "anything.test" : undefined),
   });
 
   expect(res.redirect).toHaveBeenCalledWith("/login?lark_error=tenant");
@@ -263,7 +303,7 @@ test("issues temporary token and redirects to dedicated landing", async () => {
   const res = await invoke(app.routes["GET /lark/auth/callback"], {
     query: { state: "state-value", code: "code" },
     protocol: "https",
-    get: () => "anything.test",
+    get: (name) => (name === "host" ? "anything.test" : undefined),
   });
 
   expect(TemporaryAuthToken.issue).toHaveBeenCalledWith(7);
@@ -292,7 +332,7 @@ test("rejects suspended user before session creation", async () => {
   const res = await invoke(app.routes["GET /lark/auth/callback"], {
     query: { state: "state-value", code: "code" },
     protocol: "https",
-    get: () => "anything.test",
+    get: (name) => (name === "host" ? "anything.test" : undefined),
   });
 
   expect(res.redirect).toHaveBeenCalledWith("/login?lark_error=suspended");
@@ -316,7 +356,7 @@ test("maps denied and unknown callbacks without leaking details", async () => {
       error_description: "private detail",
     },
     protocol: "https",
-    get: () => "anything.test",
+    get: (name) => (name === "host" ? "anything.test" : undefined),
   });
   expect(res.redirect).toHaveBeenCalledWith("/login?lark_error=denied");
   expect(res.redirect.mock.calls[0][0]).not.toContain("private");
@@ -325,7 +365,7 @@ test("maps denied and unknown callbacks without leaking details", async () => {
   res = await invoke(handler, {
     query: { state: "replayed", code: "secret-code" },
     protocol: "https",
-    get: () => "anything.test",
+    get: (name) => (name === "host" ? "anything.test" : undefined),
   });
   expect(res.redirect).toHaveBeenCalledWith("/login?lark_error=unknown");
   expect(res.redirect.mock.calls[0][0]).not.toContain("secret-code");
