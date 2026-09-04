@@ -13,16 +13,47 @@ esac
 
 state="$ROOT/e2e/.state/$server_id"
 storage="$state/storage"
+model_cache="$ROOT/e2e/.cache/models"
+tmp_schema="$state/schema.prisma"
 log="$ROOT/e2e/logs/server-$server_id.log"
 mkdir -p "$state" "$ROOT/e2e/logs"
 
-# Prisma hardcodes file:../storage/anythingllm.db, so migrate source before copying.
+rm -rf "$storage" "$state/migrations"
+mkdir -p "$storage" "$model_cache"
+for static_dir in plugins assets comkey; do
+  if [[ -d "$ROOT/server/storage/$static_dir" ]]; then
+    cp -R "$ROOT/server/storage/$static_dir" "$storage/$static_dir"
+  else
+    mkdir -p "$storage/$static_dir"
+  fi
+done
+ln -s "$model_cache" "$storage/models"
+mkdir -p \
+  "$storage/lancedb" \
+  "$storage/vector-cache" \
+  "$storage/documents" \
+  "$storage/generated-files" \
+  "$storage/anythingllm-fs"
+
+sed 's#url *= *"file:[^"]*"#url = "file:'"$storage"'/anythingllm.db"#' \
+  "$ROOT/server/prisma/schema.prisma" > "$tmp_schema"
+cp -R "$ROOT/server/prisma/migrations" "$state/migrations"
 (
   cd "$ROOT/server"
-  env -u DATABASE_URL npx prisma migrate deploy
+  npx prisma migrate deploy --schema "$tmp_schema"
 )
-rm -rf "$storage"
-cp -R "$ROOT/server/storage" "$storage"
+
+tables="$(sqlite3 "$storage/anythingllm.db" '.tables')"
+for required_table in workspace_agent_settings system_settings; do
+  if [[ " $tables " != *" $required_table "* ]]; then
+    echo "fresh E2E database missing table: $required_table" >&2
+    exit 1
+  fi
+done
+if [[ "$(sqlite3 "$storage/anythingllm.db" 'select count(*) from system_settings')" -ne 0 ]]; then
+  echo "fresh E2E database unexpectedly contains system settings" >&2
+  exit 1
+fi
 
 while IFS= read -r line || [[ -n "$line" ]]; do
   line="${line%$'\r'}"
@@ -48,6 +79,8 @@ export EMBEDDING_ENGINE="native"
 export VECTOR_DB="lancedb"
 export SERVER_PORT="$port"
 export STORAGE_DIR="$storage"
+export DATABASE_URL="file:$storage/anythingllm.db"
+export AGENT_AUTO_APPROVED_SKILLS="filesystem-write-text-file,filesystem-read-text-file,create-text-file,create-scheduled-job"
 export NODE_ENV="development"
 
 (

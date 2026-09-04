@@ -6,8 +6,10 @@ const { PrismaClient } = require("@prisma/client");
 // npx prisma migrate reset -> resets the db
 
 const logLevels = ["error", "info", "warn"]; // add "query" to debug query logs
+const databaseUrl = process.env.DATABASE_URL;
 const prisma = new PrismaClient({
   log: logLevels,
+  ...(databaseUrl ? { datasources: { db: { url: databaseUrl } } } : {}),
 });
 
 module.exports = prisma;
