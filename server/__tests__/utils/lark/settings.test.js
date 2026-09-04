@@ -199,6 +199,33 @@ test.each([
   expect(updateSpy).not.toHaveBeenCalled();
 });
 
+test("normalizes and deduplicates allowlist entries", () => {
+  expect(
+    validateLarkSettings(
+      { lark_cli_allowlist: [" Docs ", "docs", "IM"] },
+      { existing: {} }
+    )
+  ).toEqual({
+    ok: true,
+    values: { lark_cli_allowlist: ["docs", "im"] },
+  });
+});
+
+test("rejects denylisted and empty allowlist entries after normalization", () => {
+  expect(
+    validateLarkSettings({ lark_cli_allowlist: ["Auth"] }, { existing: {} })
+  ).toEqual({
+    ok: false,
+    errors: { lark_cli_allowlist: expect.any(String) },
+  });
+  expect(
+    validateLarkSettings({ lark_cli_allowlist: ["   "] }, { existing: {} })
+  ).toEqual({
+    ok: false,
+    errors: { lark_cli_allowlist: expect.any(String) },
+  });
+});
+
 test("validates and normalizes a complete Lark update before writing", async () => {
   const updateSpy = jest
     .spyOn(SystemSettings, "updateSettings")

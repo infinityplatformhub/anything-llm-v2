@@ -66,19 +66,19 @@ function validateLarkSettings(payload = {}, { existing = {} } = {}) {
     }
     const denied = new Set(["auth", "config", "profile", "logout", "api"]);
     const normalized = Array.isArray(entries)
-      ? entries.map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      ? entries.map((entry) =>
+          typeof entry === "string" ? entry.trim().toLowerCase() : ""
+        )
       : [];
     if (
       !Array.isArray(entries) ||
+      !normalized.length ||
       normalized.some(
-        (entry) =>
-          !entry ||
-          !/^[a-z0-9-]+$/.test(entry) ||
-          denied.has(entry.toLowerCase())
+        (entry) => !entry || !/^[a-z0-9-]+$/.test(entry) || denied.has(entry)
       )
     )
       errors.lark_cli_allowlist = "Contains an invalid or forbidden command.";
-    else values.lark_cli_allowlist = normalized;
+    else values.lark_cli_allowlist = [...new Set(normalized)];
   }
 
   const enabled = has("lark_login_enabled")
