@@ -12,3 +12,5 @@ yarn.lock
 .idea
 .superpowers/
 .claude/worktrees/
+e2e/.state/
+e2e/logs/
