@@ -3,6 +3,9 @@ require("./_polyfill");
 jest.mock("../../../models/larkIdentity", () => ({
   LarkIdentity: {
     get: jest.fn(),
+    createForUser: jest.fn(),
+    provisionUserWithIdentity: jest.fn(),
+    updateTokens: jest.fn(),
     upsertForUser: jest.fn(),
   },
 }));
@@ -52,6 +55,9 @@ function savedIdentity(userId, overrides = {}) {
 
 beforeEach(() => {
   LarkIdentity.get.mockReset();
+  LarkIdentity.createForUser.mockReset();
+  LarkIdentity.provisionUserWithIdentity.mockReset();
+  LarkIdentity.updateTokens.mockReset();
   LarkIdentity.upsertForUser.mockReset();
   User.get.mockReset();
   User.create.mockReset();
@@ -63,7 +69,7 @@ test("resolves an existing identity before email linking", async () => {
   const user = { id: 7, username: "different", suspended: 0 };
   LarkIdentity.get.mockResolvedValueOnce(identity);
   User.get.mockResolvedValueOnce(user);
-  LarkIdentity.upsertForUser.mockResolvedValue({ identity, error: null });
+  LarkIdentity.updateTokens.mockResolvedValue({ identity, error: null });
 
   await expect(
     resolveLoginUser({ userInfo, tokens, config, encryption })
@@ -71,14 +77,14 @@ test("resolves an existing identity before email linking", async () => {
   expect(User.get).toHaveBeenCalledTimes(1);
   expect(User.get).toHaveBeenCalledWith({ id: 7 });
   expect(User.create).not.toHaveBeenCalled();
-  expect(LarkIdentity.upsertForUser).toHaveBeenCalledWith(
+  expect(LarkIdentity.updateTokens).toHaveBeenCalledWith(
+    identity.id,
     expect.objectContaining({
-      user_id: 7,
-      open_id: userInfo.open_id,
       access_token: "encrypted:access-token",
       refresh_token: "encrypted:refresh-token",
     })
   );
+  expect(LarkIdentity.createForUser).not.toHaveBeenCalled();
 });
 
 test("auto-links exact valid email local-part inside configured tenant", async () => {
@@ -86,7 +92,7 @@ test("auto-links exact valid email local-part inside configured tenant", async (
   const identity = savedIdentity(8);
   LarkIdentity.get.mockResolvedValueOnce(null);
   User.get.mockResolvedValueOnce(user);
-  LarkIdentity.upsertForUser.mockResolvedValue({ identity, error: null });
+  LarkIdentity.createForUser.mockResolvedValue({ identity, error: null });
 
   await expect(
     resolveLoginUser({ userInfo, tokens, config, encryption })
@@ -103,8 +109,11 @@ test("does not auto-link a sanitized but non-exact username", async () => {
   User.get.mockImplementation(async ({ username }) =>
     username === "mary.jane" ? { id: 99, username, suspended: 0 } : null
   );
-  User.create.mockResolvedValue({ user: createdUser, error: null });
-  LarkIdentity.upsertForUser.mockResolvedValue({ identity, error: null });
+  LarkIdentity.provisionUserWithIdentity.mockResolvedValue({
+    user: createdUser,
+    identity,
+    error: null,
+  });
 
   await expect(
     resolveLoginUser({ userInfo: info, tokens, config, encryption })
@@ -114,12 +123,14 @@ test("does not auto-link a sanitized but non-exact username", async () => {
     created: true,
     error: null,
   });
-  expect(User.create).toHaveBeenCalledWith(
-    expect.objectContaining({ username: "mary.janetag", role: "default" })
-  );
-  expect(LarkIdentity.upsertForUser).toHaveBeenCalledWith(
-    expect.objectContaining({ user_id: 9 })
-  );
+  expect(LarkIdentity.provisionUserWithIdentity).toHaveBeenCalledWith({
+    user: expect.objectContaining({
+      username: "mary.janetag",
+      role: "default",
+    }),
+    identity: expect.objectContaining({ open_id: info.open_id }),
+  });
+  expect(User.create).not.toHaveBeenCalled();
 });
 
 test("derives valid lowercase username and appends collision suffix", async () => {
@@ -133,16 +144,28 @@ test("derives valid lowercase username and appends collision suffix", async () =
 
   const base = `a${"b".repeat(63)}`;
   await expect(
-    deriveUsername({ email: `${base}@example.com`, openId: "ou_x", exists: async (name) => name === base })
+    deriveUsername({
+      email: `${base}@example.com`,
+      openId: "ou_x",
+      exists: async (name) => name === base,
+    })
   ).resolves.toBe(`${base.slice(0, 63)}2`);
 });
 
 test("falls back when local-part starts with non-letter or is too short", async () => {
   await expect(
-    deriveUsername({ email: "1alice@example.com", openId: "ou_1234567890abcdef", exists: async () => false })
+    deriveUsername({
+      email: "1alice@example.com",
+      openId: "ou_1234567890abcdef",
+      exists: async () => false,
+    })
   ).resolves.toBe("lark_ou_123456789");
   await expect(
-    deriveUsername({ email: "a@example.com", openId: "ou_abcdef", exists: async () => false })
+    deriveUsername({
+      email: "a@example.com",
+      openId: "ou_abcdef",
+      exists: async () => false,
+    })
   ).resolves.toBe("lark_ou_abcdef");
 });
 
@@ -151,8 +174,11 @@ test("provisions default user with unseen random compliant password", async () =
   const identity = savedIdentity(10);
   LarkIdentity.get.mockResolvedValueOnce(null);
   User.get.mockResolvedValue(null);
-  User.create.mockResolvedValue({ user, error: null });
-  LarkIdentity.upsertForUser.mockResolvedValue({ identity, error: null });
+  LarkIdentity.provisionUserWithIdentity.mockResolvedValue({
+    user,
+    identity,
+    error: null,
+  });
 
   const result = await resolveLoginUser({
     userInfo: { ...userInfo, email: "newuser@example.com" },
@@ -162,7 +188,7 @@ test("provisions default user with unseen random compliant password", async () =
   });
 
   expect(result).toEqual({ user, identity, created: true, error: null });
-  const request = User.create.mock.calls[0][0];
+  const request = LarkIdentity.provisionUserWithIdentity.mock.calls[0][0].user;
   expect(request).toEqual({
     username: "newuser",
     password: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -184,7 +210,8 @@ test("rejects suspended linked and auto-linked users", async () => {
   await expect(
     resolveLoginUser({ userInfo, tokens, config, encryption })
   ).resolves.toEqual({ user: null, identity: null, error: "suspended" });
-  expect(LarkIdentity.upsertForUser).not.toHaveBeenCalled();
+  expect(LarkIdentity.createForUser).not.toHaveBeenCalled();
+  expect(LarkIdentity.provisionUserWithIdentity).not.toHaveBeenCalled();
   expect(encryption.encrypt).not.toHaveBeenCalled();
 });
 
@@ -200,7 +227,8 @@ test("rejects connect conflict without changing either user", async () => {
   await expect(
     connectIdentity({ userId: 31, userInfo, tokens, config, encryption })
   ).resolves.toEqual({ identity: null, error: "link_conflict" });
-  expect(LarkIdentity.upsertForUser).not.toHaveBeenCalled();
+  expect(LarkIdentity.createForUser).not.toHaveBeenCalled();
+  expect(LarkIdentity.updateTokens).not.toHaveBeenCalled();
   expect(encryption.encrypt).not.toHaveBeenCalled();
 });
 
@@ -209,7 +237,7 @@ test("handles concurrent unique conflict without account takeover", async () => 
     .mockResolvedValueOnce(null)
     .mockResolvedValueOnce(null)
     .mockResolvedValueOnce(savedIdentity(41));
-  LarkIdentity.upsertForUser.mockResolvedValue({
+  LarkIdentity.createForUser.mockResolvedValue({
     identity: null,
     error: "P2002 Unique constraint failed on open_id",
   });
@@ -217,7 +245,9 @@ test("handles concurrent unique conflict without account takeover", async () => 
   await expect(
     connectIdentity({ userId: 40, userInfo, tokens, config, encryption })
   ).resolves.toEqual({ identity: null, error: "link_conflict" });
-  expect(LarkIdentity.upsertForUser).toHaveBeenCalledTimes(1);
+  expect(LarkIdentity.createForUser).toHaveBeenCalledTimes(1);
+  expect(LarkIdentity.upsertForUser).not.toHaveBeenCalled();
+  expect(LarkIdentity.updateTokens).not.toHaveBeenCalled();
 });
 
 test("recovers concurrent unique conflict owned by same user", async () => {
@@ -226,15 +256,51 @@ test("recovers concurrent unique conflict owned by same user", async () => {
     .mockResolvedValueOnce(null)
     .mockResolvedValueOnce(null)
     .mockResolvedValueOnce(identity);
-  LarkIdentity.upsertForUser.mockResolvedValue({
+  LarkIdentity.createForUser.mockResolvedValue({
     identity: null,
     error: "Unique constraint failed on open_id",
   });
+  LarkIdentity.updateTokens.mockResolvedValue({ identity, error: null });
 
   await expect(
     connectIdentity({ userId: 40, userInfo, tokens, config, encryption })
   ).resolves.toEqual({ identity, error: null });
-  expect(LarkIdentity.upsertForUser).toHaveBeenCalledTimes(1);
+  expect(LarkIdentity.createForUser).toHaveBeenCalledTimes(1);
+  expect(LarkIdentity.upsertForUser).not.toHaveBeenCalled();
+  expect(LarkIdentity.updateTokens).toHaveBeenCalledWith(
+    identity.id,
+    expect.objectContaining({ access_token: "encrypted:access-token" })
+  );
+});
+
+test("auto-link user with existing different identity returns conflict", async () => {
+  const user = { id: 50, username: "alice", suspended: 0 };
+  LarkIdentity.get.mockResolvedValueOnce(null);
+  User.get.mockResolvedValueOnce(user);
+  LarkIdentity.createForUser.mockResolvedValue({
+    identity: null,
+    error: "P2002 Unique constraint failed on user_id",
+  });
+  LarkIdentity.get.mockResolvedValueOnce(null);
+
+  await expect(
+    resolveLoginUser({ userInfo, tokens, config, encryption })
+  ).resolves.toEqual({ user: null, identity: null, error: "link_conflict" });
+  expect(LarkIdentity.createForUser).toHaveBeenCalledTimes(1);
+  expect(LarkIdentity.updateTokens).not.toHaveBeenCalled();
+  expect(LarkIdentity.provisionUserWithIdentity).not.toHaveBeenCalled();
+});
+
+test("deriveUsername uses bounded fallback after exhaustion", async () => {
+  const exists = jest.fn().mockResolvedValue(true);
+  const username = await deriveUsername({
+    email: "alice@example.com",
+    openId: "ou_1234567890abcdef",
+    exists,
+  });
+
+  expect(exists).toHaveBeenCalledTimes(1001);
+  expect(username).toMatch(/^lark_ou_123456789[a-f0-9]{6}$/);
 });
 
 test("rejects unvalidated tenant before reading or writing identity", async () => {
@@ -247,5 +313,6 @@ test("rejects unvalidated tenant before reading or writing identity", async () =
     })
   ).resolves.toEqual({ user: null, identity: null, error: "unknown" });
   expect(LarkIdentity.get).not.toHaveBeenCalled();
-  expect(LarkIdentity.upsertForUser).not.toHaveBeenCalled();
+  expect(LarkIdentity.createForUser).not.toHaveBeenCalled();
+  expect(LarkIdentity.provisionUserWithIdentity).not.toHaveBeenCalled();
 });

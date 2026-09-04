@@ -6,9 +6,13 @@ jest.mock("../../../utils/prisma", () => ({
   },
   lark_identities: {
     findFirst: jest.fn(),
+    create: jest.fn(),
     upsert: jest.fn(),
     update: jest.fn(),
     deleteMany: jest.fn(),
+  },
+  users: {
+    create: jest.fn(),
   },
   $transaction: jest.fn(),
 }));
@@ -211,7 +215,7 @@ describe("LarkIdentity", () => {
     expect(prisma.lark_identities.update).not.toHaveBeenCalled();
   });
 
-  it("upserts one identity per user and open_id", async () => {
+  it("upserts token data without mutating existing identity ownership", async () => {
     prisma.lark_identities.upsert.mockResolvedValue({ id: 1, ...identityData });
 
     const { identity, error } = await LarkIdentity.upsertForUser(identityData);
@@ -223,12 +227,6 @@ describe("LarkIdentity", () => {
       where: { user_id: 7 },
       create: { ...identityData, user_id: 7 },
       update: {
-        open_id: identityData.open_id,
-        union_id: identityData.union_id,
-        tenant_key: identityData.tenant_key,
-        email: identityData.email,
-        display_name: identityData.display_name,
-        avatar_url: identityData.avatar_url,
         access_token: identityData.access_token,
         refresh_token: identityData.refresh_token,
         access_expires_at: identityData.access_expires_at,
@@ -279,5 +277,49 @@ describe("LarkIdentity", () => {
       where: { id: 4 },
       data: { needs_reauth: true, lastUpdatedAt: expect.any(Date) },
     });
+  });
+
+  it("creates identity through insert-only path", async () => {
+    prisma.lark_identities.create.mockResolvedValue({ id: 2, ...identityData });
+
+    const { identity, error } = await LarkIdentity.createForUser(identityData);
+
+    expect(error).toBeNull();
+    expect(identity).not.toHaveProperty("access_token");
+    expect(prisma.lark_identities.create).toHaveBeenCalledWith({
+      data: { ...identityData, user_id: 7 },
+    });
+    expect(prisma.lark_identities.upsert).not.toHaveBeenCalled();
+  });
+
+  it("rolls back provisioned user when identity insert conflicts", async () => {
+    const tx = {
+      users: {
+        create: jest.fn().mockResolvedValue({ id: 9, username: "alice" }),
+      },
+      lark_identities: {
+        create: jest.fn().mockRejectedValue(
+          Object.assign(new Error("Unique constraint failed on open_id"), {
+            code: "P2002",
+          })
+        ),
+      },
+    };
+    prisma.$transaction.mockImplementation(async (callback) => callback(tx));
+
+    await expect(
+      LarkIdentity.provisionUserWithIdentity({
+        user: { username: "alice", password: "A".repeat(64), role: "default" },
+        identity: { ...identityData, user_id: undefined },
+      })
+    ).resolves.toEqual({
+      user: null,
+      identity: null,
+      error: "Unique constraint failed on open_id",
+    });
+    expect(tx.users.create).toHaveBeenCalledTimes(1);
+    expect(tx.lark_identities.create).toHaveBeenCalledTimes(1);
+    expect(prisma.users.create).not.toHaveBeenCalled();
+    expect(prisma.lark_identities.create).not.toHaveBeenCalled();
   });
 });

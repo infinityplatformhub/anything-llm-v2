@@ -74,12 +74,51 @@ const LarkIdentity = {
     }
   },
 
+  createForUser: async function (data) {
+    try {
+      const identity = await prisma.lark_identities.create({
+        data: { ...pick(data, IDENTITY_FIELDS), user_id: Number(data.user_id) },
+      });
+      return { identity: withoutSecrets(identity), error: null };
+    } catch (error) {
+      console.error("LarkIdentity.createForUser", error.message);
+      return { identity: null, error: error.message };
+    }
+  },
+
+  provisionUserWithIdentity: async function ({ user, identity: data }) {
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const bcrypt = require("bcryptjs");
+        const createdUser = await tx.users.create({
+          data: {
+            username: user.username,
+            password: bcrypt.hashSync(user.password, 10),
+            role: user.role,
+          },
+        });
+        const identity = await tx.lark_identities.create({
+          data: {
+            ...pick(data, IDENTITY_FIELDS),
+            user_id: createdUser.id,
+          },
+        });
+        const { password: _password, ...safeUser } = createdUser;
+        return { user: safeUser, identity: withoutSecrets(identity) };
+      });
+      return { ...result, error: null };
+    } catch (error) {
+      console.error("LarkIdentity.provisionUserWithIdentity", error.message);
+      return { user: null, identity: null, error: error.message };
+    }
+  },
+
   upsertForUser: async function (data) {
     try {
       const user_id = Number(data.user_id);
       const create = { ...pick(data, IDENTITY_FIELDS), user_id };
       const update = {
-        ...pick(data, IDENTITY_FIELDS),
+        ...pick(data, TOKEN_FIELDS),
         lastUpdatedAt: new Date(),
       };
       const identity = await prisma.lark_identities.upsert({

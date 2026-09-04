@@ -3,10 +3,14 @@ const { LarkIdentity } = require("../../models/larkIdentity");
 const { User } = require("../../models/user");
 
 const MAX_USERNAME_LENGTH = 64;
+const MAX_USERNAME_ATTEMPTS = 1000;
 
 function sanitizeLocalPart(email) {
   if (typeof email !== "string" || !email.includes("@")) return "";
-  return email.split("@", 1)[0].toLowerCase().replace(/[^a-z0-9_.-]/g, "");
+  return email
+    .split("@", 1)[0]
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]/g, "");
 }
 
 function isValidUsername(username) {
@@ -23,16 +27,19 @@ async function deriveUsername({ email, openId, exists }) {
   const base = isValidUsername(localPart) ? localPart : fallback;
 
   if (!(await exists(base))) return base;
-  for (let suffix = 2; ; suffix += 1) {
+  for (let suffix = 2; suffix <= MAX_USERNAME_ATTEMPTS; suffix += 1) {
     const suffixText = String(suffix);
     const candidate = `${base.slice(0, MAX_USERNAME_LENGTH - suffixText.length)}${suffixText}`;
     if (!(await exists(candidate))) return candidate;
   }
+
+  if (!(await exists(fallback))) return fallback;
+  return `${fallback.slice(0, MAX_USERNAME_LENGTH - 6)}${crypto.randomBytes(3).toString("hex")}`;
 }
 
 function identityData({ userId, userInfo, tokens, encryption }) {
   return {
-    user_id: Number(userId),
+    ...(userId == null ? {} : { user_id: Number(userId) }),
     open_id: userInfo.open_id,
     union_id: userInfo.union_id,
     tenant_key: userInfo.tenant_key,
@@ -48,26 +55,51 @@ function identityData({ userId, userInfo, tokens, encryption }) {
   };
 }
 
-function isUniqueConflict(error) {
-  const message = typeof error === "string" ? error : error?.message;
-  return error?.code === "P2002" || message?.includes("P2002") || message?.includes("Unique constraint");
+function tokenData({ tokens, encryption }) {
+  return {
+    access_token: encryption.encrypt(tokens.accessToken),
+    refresh_token: encryption.encrypt(tokens.refreshToken),
+    access_expires_at: tokens.accessExpiresAt,
+    refresh_expires_at: tokens.refreshExpiresAt,
+    scopes: tokens.scopes,
+    needs_reauth: false,
+  };
 }
 
-async function persistIdentity(args) {
+function isUniqueConflict(error) {
+  const message = typeof error === "string" ? error : error?.message;
+  return (
+    error?.code === "P2002" ||
+    message?.includes("P2002") ||
+    message?.includes("Unique constraint")
+  );
+}
+
+async function updateOwnedIdentity(identity, { tokens, encryption }) {
+  const result = await LarkIdentity.updateTokens(
+    identity.id,
+    tokenData({ tokens, encryption })
+  );
+  return result.error
+    ? { identity: null, error: "unknown" }
+    : { identity: result.identity, error: null };
+}
+
+async function createIdentity(args) {
   let result;
   try {
-    result = await LarkIdentity.upsertForUser(identityData(args));
+    result = await LarkIdentity.createForUser(identityData(args));
   } catch (error) {
     result = { identity: null, error };
   }
   if (!result.error) return { identity: result.identity, error: null };
-  if (!isUniqueConflict(result.error)) return { identity: null, error: "unknown" };
+  if (!isUniqueConflict(result.error))
+    return { identity: null, error: "unknown" };
 
   const owner = await LarkIdentity.get({ open_id: args.userInfo.open_id });
-  if (!owner) return { identity: null, error: "unknown" };
-  return Number(owner.user_id) === Number(args.userId)
-    ? { identity: owner, error: null }
-    : { identity: null, error: "link_conflict" };
+  if (!owner || Number(owner.user_id) !== Number(args.userId))
+    return { identity: null, error: "link_conflict" };
+  return updateOwnedIdentity(owner, args);
 }
 
 function tenantMatches({ config, userInfo }) {
@@ -78,20 +110,28 @@ function tenantMatches({ config, userInfo }) {
   );
 }
 
-async function connectIdentity({ userId, userInfo, tokens, config, encryption }) {
+async function connectIdentity({
+  userId,
+  userInfo,
+  tokens,
+  config,
+  encryption,
+}) {
   try {
     if (!tenantMatches({ config, userInfo }))
       return { identity: null, error: "unknown" };
 
     const openIdentity = await LarkIdentity.get({ open_id: userInfo.open_id });
-    if (openIdentity && Number(openIdentity.user_id) !== Number(userId))
-      return { identity: null, error: "link_conflict" };
+    if (openIdentity) {
+      if (Number(openIdentity.user_id) !== Number(userId))
+        return { identity: null, error: "link_conflict" };
+      return updateOwnedIdentity(openIdentity, { tokens, encryption });
+    }
 
     const userIdentity = await LarkIdentity.get({ user_id: Number(userId) });
-    if (userIdentity && userIdentity.open_id !== userInfo.open_id)
-      return { identity: null, error: "link_conflict" };
+    if (userIdentity) return { identity: null, error: "link_conflict" };
 
-    return persistIdentity({ userId, userInfo, tokens, encryption });
+    return createIdentity({ userId, userInfo, tokens, encryption });
   } catch (_) {
     return { identity: null, error: "unknown" };
   }
@@ -102,16 +142,16 @@ async function resolveLoginUser({ userInfo, tokens, config, encryption }) {
     if (!tenantMatches({ config, userInfo }))
       return { user: null, identity: null, error: "unknown" };
 
-    const linkedIdentity = await LarkIdentity.get({ open_id: userInfo.open_id });
+    const linkedIdentity = await LarkIdentity.get({
+      open_id: userInfo.open_id,
+    });
     if (linkedIdentity) {
       const user = await User.get({ id: Number(linkedIdentity.user_id) });
       if (!user) return { user: null, identity: null, error: "unknown" };
       if (user.suspended)
         return { user: null, identity: null, error: "suspended" };
 
-      const saved = await persistIdentity({
-        userId: user.id,
-        userInfo,
+      const saved = await updateOwnedIdentity(linkedIdentity, {
         tokens,
         encryption,
       });
@@ -126,7 +166,7 @@ async function resolveLoginUser({ userInfo, tokens, config, encryption }) {
       if (user) {
         if (user.suspended)
           return { user: null, identity: null, error: "suspended" };
-        const saved = await persistIdentity({
+        const saved = await createIdentity({
           userId: user.id,
           userInfo,
           tokens,
@@ -141,25 +181,22 @@ async function resolveLoginUser({ userInfo, tokens, config, encryption }) {
     const username = await deriveUsername({
       email: userInfo.email,
       openId: userInfo.open_id,
-      exists: async (candidate) => Boolean(await User.get({ username: candidate })),
+      exists: async (candidate) =>
+        Boolean(await User.get({ username: candidate })),
     });
-    const { user, error } = await User.create({
-      username,
-      password: crypto.randomBytes(32).toString("hex"),
-      role: "default",
+    const password = crypto.randomBytes(32).toString("hex");
+    const result = await LarkIdentity.provisionUserWithIdentity({
+      user: { username, password, role: "default" },
+      identity: identityData({ userInfo, tokens, encryption }),
     });
-    if (error || !user)
+    if (result.error || !result.user || !result.identity)
       return { user: null, identity: null, error: "unknown" };
-
-    const saved = await persistIdentity({
-      userId: user.id,
-      userInfo,
-      tokens,
-      encryption,
-    });
-    if (saved.error)
-      return { user: null, identity: null, error: saved.error };
-    return { user, identity: saved.identity, created: true, error: null };
+    return {
+      user: result.user,
+      identity: result.identity,
+      created: true,
+      error: null,
+    };
   } catch (_) {
     return { user: null, identity: null, error: "unknown" };
   }
