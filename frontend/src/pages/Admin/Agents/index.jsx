@@ -132,8 +132,9 @@ export default function AdminAgents() {
       ]);
 
       const { flows = [] } = flowsRes;
-      setSettings({ ..._settings, preferences: _preferences.settings } ?? {});
-      setImportedSkills(_preferences.settings?.imported_agent_skills ?? []);
+      const preferences = _preferences?.settings ?? {};
+      setSettings({ ..._settings, preferences });
+      setImportedSkills(preferences.imported_agent_skills ?? []);
       setActiveFlowIds(flows.filter((f) => f.active).map((f) => f.uuid));
       setAgentFlows(flows);
       setFileSystemAgentAvailable(fsAgentAvailable);
@@ -228,46 +229,47 @@ export default function AdminAgents() {
       }
     }
 
-    if (!workspaceSlug) {
-      showToast("No workspace selected.", "error", { clear: true });
-      return;
-    }
-
-    if (skillsLoadFailed) {
-      showToast(
-        "Workspace skills are unavailable. Reload before saving.",
-        "error",
-        {
-          clear: true,
-        }
-      );
-      return;
-    }
-
-    const [preferencesRes, skillRes] = await Promise.all([
+    const shouldSaveSkills = Boolean(workspaceSlug) && !skillsLoadFailed;
+    const [preferencesRes, envRes, skillRes] = await Promise.all([
       Admin.updateSystemPreferences(data.system),
-      Admin.updateWorkspaceAgentSkills(workspaceSlug, agentSkills),
       System.updateSystem(data.env),
+      shouldSaveSkills
+        ? Admin.updateWorkspaceAgentSkills(workspaceSlug, agentSkills)
+        : null,
     ]);
 
-    if (!preferencesRes.success || !skillRes.success) {
-      if (!skillRes.success) await loadWorkspaceSkills(workspaceSlug);
-      const error = !skillRes.success
-        ? `Workspace skills failed to save: ${skillRes.error || "Unknown error"}`
-        : `System preferences failed to save: ${preferencesRes.error || "Unknown error"}`;
-      showToast(error, "error", { clear: true });
-      return;
+    if (skillRes?.success && workspaceSlugRef.current === workspaceSlug) {
+      setAgentSkills(skillRes.enabledSkills ?? []);
+      setSkillsLoadFailed(false);
+    } else if (skillRes && !skillRes.success) {
+      await loadWorkspaceSkills(workspaceSlug);
     }
+
+    const failures = [];
+    if (!preferencesRes.success)
+      failures.push(
+        `System preferences: ${preferencesRes.error || "Unknown error"}`
+      );
+    if (envRes?.error)
+      failures.push(`Environment: ${envRes.error || "Unknown error"}`);
+    if (skillRes && !skillRes.success)
+      failures.push(`Workspace skills: ${skillRes.error || "Unknown error"}`);
 
     const [_settings, _preferences] = await Promise.all([
       System.keys(),
       Admin.systemPreferencesByFields(["imported_agent_skills"]),
     ]);
-    setSettings({ ..._settings, preferences: _preferences.settings } ?? {});
-    setImportedSkills(_preferences.settings?.imported_agent_skills ?? []);
-    if (workspaceSlugRef.current !== workspaceSlug) return;
-    setAgentSkills(skillRes.enabledSkills ?? []);
-    setSkillsLoadFailed(false);
+    const preferences = _preferences?.settings ?? {};
+    setSettings({ ..._settings, preferences });
+    setImportedSkills(preferences.imported_agent_skills ?? []);
+
+    if (failures.length > 0) {
+      showToast(`Failed to save ${failures.join("; ")}`, "error", {
+        clear: true,
+      });
+      return;
+    }
+
     setHasChanges(false);
     showToast(`Agent preferences saved successfully.`, "success", {
       clear: true,
@@ -391,7 +393,6 @@ export default function AdminAgents() {
         hasChanges={hasChanges}
         handleCancel={handleCancel}
         handleSubmit={handleSubmit}
-        saveDisabled={skillsLoadFailed}
       >
         <div className="flex-1 flex flex-col w-full p-4 mt-10">
           <WorkspaceSelector
@@ -611,7 +612,6 @@ export default function AdminAgents() {
       hasChanges={hasChanges}
       handleCancel={handleCancel}
       handleSubmit={handleSubmit}
-      saveDisabled={skillsLoadFailed}
     >
       <div className="flex-1 flex flex-col p-4 mt-10">
         <WorkspaceSelector
@@ -830,13 +830,7 @@ export default function AdminAgents() {
   );
 }
 
-function SkillLayout({
-  children,
-  hasChanges,
-  handleSubmit,
-  handleCancel,
-  saveDisabled,
-}) {
+function SkillLayout({ children, hasChanges, handleSubmit, handleCancel }) {
   return (
     <div
       id="workspace-agent-settings-container"
@@ -848,19 +842,11 @@ function SkillLayout({
         className="relative md:ml-[2px] md:mr-[16px] md:my-[16px] md:rounded-[16px] w-full h-full flex"
       >
         {children}
-        <div
-          className={
-            saveDisabled
-              ? "[&_button:last-child]:pointer-events-none [&_button:last-child]:opacity-50"
-              : ""
-          }
-        >
-          <ContextualSaveBar
-            showing={hasChanges}
-            onSave={saveDisabled ? undefined : handleSubmit}
-            onCancel={handleCancel}
-          />
-        </div>
+        <ContextualSaveBar
+          showing={hasChanges}
+          onSave={handleSubmit}
+          onCancel={handleCancel}
+        />
       </div>
     </div>
   );
