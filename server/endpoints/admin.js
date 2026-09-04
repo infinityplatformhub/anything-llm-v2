@@ -7,6 +7,7 @@ const { SystemSettings } = require("../models/systemSettings");
 const { User } = require("../models/user");
 const { DocumentVectors } = require("../models/vectors");
 const { Workspace } = require("../models/workspace");
+const { WorkspaceAgentSettings } = require("../models/workspaceAgentSettings");
 const { WorkspaceChats } = require("../models/workspaceChats");
 const {
   getVectorDbClass,
@@ -34,6 +35,50 @@ const {
 
 function adminEndpoints(app) {
   if (!app) return;
+
+  app.get(
+    "/admin/workspace/:slug/agent-skills",
+    [validatedRequest, flexUserRoleValid([ROLES.admin])],
+    async (request, response) => {
+      try {
+        const workspace = await Workspace.get({
+          slug: String(request.params.slug),
+        });
+        if (!workspace) return response.sendStatus(404).end();
+        const enabledSkills = await WorkspaceAgentSettings.enabledSkills(
+          workspace.id
+        );
+        response.status(200).json({ enabledSkills });
+      } catch (e) {
+        console.error(e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  app.post(
+    "/admin/workspace/:slug/agent-skills",
+    [validatedRequest, flexUserRoleValid([ROLES.admin])],
+    async (request, response) => {
+      try {
+        const workspace = await Workspace.get({
+          slug: String(request.params.slug),
+        });
+        if (!workspace) return response.sendStatus(404).end();
+        const { enabledSkills } = reqBody(request);
+        if (!Array.isArray(enabledSkills))
+          return response.sendStatus(400).end();
+        const result = await WorkspaceAgentSettings.setEnabledSkills(
+          workspace.id,
+          enabledSkills
+        );
+        response.status(200).json({ success: !result.error, ...result });
+      } catch (e) {
+        console.error(e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
 
   app.get(
     "/admin/users",
