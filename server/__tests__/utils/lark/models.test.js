@@ -41,12 +41,52 @@ describe("LarkOauthState", () => {
     };
     prisma.$transaction.mockImplementation((callback) => callback(tx));
 
-    await expect(LarkOauthState.consume("state-1")).resolves.toEqual(oauthState);
+    await expect(
+      LarkOauthState.consume("state-1", { withSecrets: true })
+    ).resolves.toEqual(oauthState);
     await expect(LarkOauthState.consume("state-1")).resolves.toBeNull();
     expect(tx.lark_oauth_states.deleteMany).toHaveBeenCalledTimes(1);
     expect(tx.lark_oauth_states.deleteMany).toHaveBeenCalledWith({
       where: { state: "state-1", expiresAt: { gt: expect.any(Date) } },
     });
+  });
+
+  it("hides verifier unless secrets are explicitly requested", async () => {
+    const tx = {
+      lark_oauth_states: {
+        findUnique: jest.fn().mockResolvedValue({
+          state: "state-safe",
+          code_verifier: "encrypted-verifier",
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        delete: jest.fn(),
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    prisma.$transaction.mockImplementation((callback) => callback(tx));
+
+    const result = await LarkOauthState.consume("state-safe");
+
+    expect(result).not.toHaveProperty("code_verifier");
+  });
+
+  it("returns null when another consumer wins the delete race", async () => {
+    const tx = {
+      lark_oauth_states: {
+        findUnique: jest.fn().mockResolvedValue({
+          state: "raced",
+          code_verifier: "encrypted-verifier",
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        delete: jest.fn(),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
+    prisma.$transaction.mockImplementation((callback) => callback(tx));
+
+    await expect(
+      LarkOauthState.consume("raced", { withSecrets: true })
+    ).resolves.toBeNull();
   });
 
   it("rejects expired OAuth state and deletes it", async () => {
@@ -104,7 +144,10 @@ describe("LarkIdentity", () => {
   };
 
   it("hides tokens unless secrets are explicitly requested", async () => {
-    prisma.lark_identities.findFirst.mockResolvedValue({ id: 1, ...identityData });
+    prisma.lark_identities.findFirst.mockResolvedValue({
+      id: 1,
+      ...identityData,
+    });
 
     const safeIdentity = await LarkIdentity.get({ user_id: "7" });
     const secretIdentity = await LarkIdentity.get(
@@ -119,6 +162,35 @@ describe("LarkIdentity", () => {
     expect(prisma.lark_identities.findFirst).toHaveBeenCalledWith({
       where: { user_id: 7 },
     });
+  });
+
+  it("rejects empty or undefined identity selectors", async () => {
+    await expect(
+      LarkIdentity.get({}, { withSecrets: true })
+    ).resolves.toBeNull();
+    await expect(
+      LarkIdentity.get({ user_id: undefined }, { withSecrets: true })
+    ).resolves.toBeNull();
+
+    expect(prisma.lark_identities.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("rejects empty deletes and accepts numeric identity selectors", async () => {
+    await expect(LarkIdentity.delete()).resolves.toBe(false);
+    expect(prisma.lark_identities.deleteMany).not.toHaveBeenCalled();
+
+    prisma.lark_identities.deleteMany.mockResolvedValue({ count: 1 });
+    await expect(LarkIdentity.delete({ user_id: "7" })).resolves.toBe(true);
+    expect(prisma.lark_identities.deleteMany).toHaveBeenCalledWith({
+      where: { user_id: 7 },
+    });
+  });
+
+  it("rejects invalid token-update IDs", async () => {
+    await expect(
+      LarkIdentity.updateTokens(undefined, { needs_reauth: true })
+    ).resolves.toEqual({ identity: null, error: "Invalid identity ID" });
+    expect(prisma.lark_identities.update).not.toHaveBeenCalled();
   });
 
   it("upserts one identity per user and open_id", async () => {

@@ -39,10 +39,22 @@ function pick(data, fields) {
   );
 }
 
-function withNumericIds(where = {}) {
-  const parsed = { ...where };
-  for (const field of ["id", "user_id"])
-    if (parsed[field] !== undefined) parsed[field] = Number(parsed[field]);
+function normalizeWhere(where) {
+  if (!where || typeof where !== "object" || Array.isArray(where)) return null;
+
+  for (const field of ["id", "user_id", "open_id"])
+    if (Object.hasOwn(where, field) && where[field] == null) return null;
+
+  const parsed = Object.fromEntries(
+    Object.entries(where).filter(([, value]) => value !== undefined)
+  );
+  if (Object.keys(parsed).length === 0) return null;
+
+  for (const field of ["id", "user_id"]) {
+    if (!Object.hasOwn(parsed, field)) continue;
+    if (!Number.isFinite(Number(parsed[field]))) return null;
+    parsed[field] = Number(parsed[field]);
+  }
   return parsed;
 }
 
@@ -52,8 +64,10 @@ const LarkIdentity = {
 
   get: async function (where = {}, { withSecrets = false } = {}) {
     try {
+      const normalizedWhere = normalizeWhere(where);
+      if (!normalizedWhere) return null;
       const identity = await prisma.lark_identities.findFirst({
-        where: withNumericIds(where),
+        where: normalizedWhere,
       });
       return withSecrets ? identity : withoutSecrets(identity);
     } catch (error) {
@@ -83,9 +97,13 @@ const LarkIdentity = {
   },
 
   updateTokens: async function (id, tokens) {
+    const numericId = id === null ? NaN : Number(id);
+    if (!Number.isFinite(numericId))
+      return { identity: null, error: "Invalid identity ID" };
+
     try {
       const identity = await prisma.lark_identities.update({
-        where: { id: Number(id) },
+        where: { id: numericId },
         data: { ...pick(tokens, TOKEN_FIELDS), lastUpdatedAt: new Date() },
       });
       return { identity: withoutSecrets(identity), error: null };
@@ -97,8 +115,10 @@ const LarkIdentity = {
 
   delete: async function (where = {}) {
     try {
+      const normalizedWhere = normalizeWhere(where);
+      if (!normalizedWhere) return false;
       await prisma.lark_identities.deleteMany({
-        where: withNumericIds(where),
+        where: normalizedWhere,
       });
       return true;
     } catch (error) {

@@ -42,7 +42,7 @@ const LarkOauthState = {
     }
   },
 
-  consume: async function (state) {
+  consume: async function (state, { withSecrets = false } = {}) {
     try {
       return await prisma.$transaction(async (tx) => {
         const oauthState = await tx.lark_oauth_states.findUnique({
@@ -59,7 +59,8 @@ const LarkOauthState = {
         const { count } = await tx.lark_oauth_states.deleteMany({
           where: { state, expiresAt: { gt: now } },
         });
-        return count === 1 ? oauthState : null;
+        if (count !== 1) return null;
+        return withSecrets ? oauthState : withoutVerifier(oauthState);
       });
     } catch (error) {
       console.error("LarkOauthState.consume", error.message);
