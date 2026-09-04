@@ -146,3 +146,18 @@ cd server && npx vitest run utils/agents/__tests__/workspaceScoping.test.js
 ## คำถามที่ต้องตอบก่อนเปิด issue
 
 ไม่มี ทุกข้อตัดสินแล้ว รอแค่ยืนยัน mockup (ขั้น 1.5)
+
+## Phase 7 — E2E ทุก function (เพิ่ม 2026-09-05 ตามคำสั่งผู้ใช้)
+
+หลัง phase 1-6 merge ครบ เปิด issue แยกสำหรับ E2E test ที่รันกับ server + frontend จริง (ไม่ mock) ครอบทุก capability:
+
+- built-in skills: เปิด/ปิดราย workspace, deny by default, ห้อง A ไม่เห็นของห้อง B, alias/unknown id ถูกตัด
+- custom skills / flows / MCP: สร้างในห้อง A → ห้อง B ไม่เห็น, legacy import ย้ายเข้าห้องเดียว, MCP process แยกต่อห้อง
+- credential ราย workspace: SQL / web search / image-gen ใช้ค่าห้องตัวเอง, ไม่มี fallback global, เข้ารหัสใน DB
+- scheduled jobs: ผูก workspaceId, รันด้วย capability ของห้องนั้นเท่านั้น
+- Gmail / Calendar / Outlook: ทำงานใน multi-user mode ด้วย config ของห้อง
+- API chat (`/v1/workspace/:slug/chat`) และ chat ปกติเห็น tool ชุดเดียวกับที่ UI เปิด
+- สิทธิ์: manager/default แตะ endpoint admin ไม่ได้ทุกตัว
+- UI: Admin › Agents สลับ workspace, save, cancel, load-failure state, legacy banner (ต้องมี Playwright ใน repo — เพิ่มใน phase นี้)
+
+Evidence contract ของ phase 7 = ชุด E2E นี้เขียวทั้งชุดบน CI
