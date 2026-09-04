@@ -14,24 +14,10 @@ const {
 const NOT_CONNECTED =
   "Lark is not connected for this user. Connect Lark in Settings.";
 
-function approvalCommand(args) {
-  let expectsValue = false;
-  return args
-    .map((arg, index) => {
-      if (index < 2) return arg;
-      if (expectsValue) {
-        expectsValue = false;
-        return "[redacted]";
-      }
-      if (arg.startsWith("-")) {
-        const equals = arg.indexOf("=");
-        if (equals > 0) return `${arg.slice(0, equals)}=[redacted]`;
-        expectsValue = true;
-        return arg;
-      }
-      return "[redacted]";
-    })
-    .join(" ");
+function redactForDisplay(args) {
+  return args.map((arg) =>
+    arg.replace(/[ut]-[A-Za-z0-9._-]{16,}/g, "[redacted]")
+  );
 }
 
 const larkCli = {
@@ -119,14 +105,15 @@ const larkCli = {
             if (!policy.allowed) return policy.reason;
 
             const effect = classify(args);
-            if (effect === "write") {
+            if (effect !== "read") {
               if (typeof aibitat.requestToolApproval !== "function")
                 return "Lark command was not approved.";
 
+              const displayCommand = redactForDisplay(args).join(" ");
               const approval = await aibitat.requestToolApproval({
                 skillName: "lark-cli",
-                payload: { command: args.join(" ") },
-                description: `Run Lark command as you: ${approvalCommand(args)} (${effect})`,
+                payload: { command: displayCommand },
+                description: `Run Lark command as you: ${displayCommand} (${effect})`,
               });
               if (!approval?.approved) return "Lark command was not approved.";
             }
@@ -140,4 +127,4 @@ const larkCli = {
   },
 };
 
-module.exports = { larkCli };
+module.exports = { larkCli, redactForDisplay };

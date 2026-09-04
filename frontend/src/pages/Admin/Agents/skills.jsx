@@ -15,6 +15,7 @@ import {
   FolderOpen,
   FilePlus,
   CalendarCheck,
+  ChatCircleDots,
   ImageSquare,
 } from "@phosphor-icons/react";
 import RAGImage from "@/media/agents/rag-memory.png";
@@ -133,6 +134,14 @@ export const getConfigurableSkills = (
     icon: CalendarCheck,
     image: ScheduledJobsImage,
     mode: ["singleUserOnly"],
+  },
+  "lark-cli": {
+    title: "Lark",
+    description:
+      "Act as the connected Lark user to find contacts, fetch documents, and send messages. Writes require user approval.",
+    component: GenericSkillPanel,
+    skill: "lark-cli",
+    icon: ChatCircleDots,
   },
 });
 

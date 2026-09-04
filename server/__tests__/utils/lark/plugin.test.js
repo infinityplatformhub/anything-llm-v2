@@ -143,36 +143,43 @@ test("requests approval before classified write with redacted description", asyn
     message: "ok",
   });
   const handler = registeredHandler(aibitat);
+  const token = `u-${"a".repeat(16)}`;
   const args = [
     "im",
     "+messages-send",
     "--user-id",
-    "ou_secret",
+    "ou_recipient",
     "--text",
-    "private message",
+    `private message ${token}`,
   ];
 
   await handler({ args });
 
   expect(aibitat.requestToolApproval).toHaveBeenCalledWith({
     skillName: "lark-cli",
-    payload: { command: args.join(" ") },
+    payload: {
+      command:
+        "im +messages-send --user-id ou_recipient --text private message [redacted]",
+    },
     description:
-      "Run Lark command as you: im +messages-send --user-id [redacted] --text [redacted] (write)",
+      "Run Lark command as you: im +messages-send --user-id ou_recipient --text private message [redacted] (write)",
   });
   expect(aibitat.requestToolApproval.mock.invocationCallOrder[0]).toBeLessThan(
     cli.runAsUser.mock.invocationCallOrder[0]
   );
+});
 
-  await handler({
-    args: ["im", "+messages-send", "--text=private", "stray-value"],
-  });
-  expect(aibitat.requestToolApproval).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      description:
-        "Run Lark command as you: im +messages-send --text=[redacted] [redacted] (write)",
-    })
+test("requests approval for unknown classifications", async () => {
+  cli.classify.mockReturnValue("unknown");
+  const aibitat = fakeAibitat();
+  aibitat.requestToolApproval.mockResolvedValue({ approved: true });
+
+  await registeredHandler(aibitat)({ args: ["im", "+future-command"] });
+
+  expect(aibitat.requestToolApproval).toHaveBeenCalledWith(
+    expect.objectContaining({ skillName: "lark-cli" })
   );
+  expect(cli.runAsUser).toHaveBeenCalled();
 });
 
 test("does not run write after denied or missing approval", async () => {
