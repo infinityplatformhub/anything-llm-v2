@@ -15,7 +15,7 @@ const SKILLS = [
     id: "rag-memory",
     attachName: "rag-memory",
     toolName: "rag-memory",
-    prompt: "You must call rag-memory with action search and content exactly: Alpha workspace secret token. Then reply with the token verbatim from the result.",
+    prompt: "Call rag-memory({action:\"search\",content:\"Alpha workspace secret token\"}) immediately. Do not answer from prior knowledge. Reply with token from tool result.",
     assertB: async (ctx, chunk, response) => {
       expect(toolCalled(chunk, "rag-memory")).toBe(true);
       expect(text(response)).toContain("ALPHA-TOKEN-7731");
@@ -28,7 +28,7 @@ const SKILLS = [
     id: "document-summarizer",
     attachName: "document-summarizer",
     toolName: "document-summarizer",
-    prompt: "List the documents available in this workspace by filename.",
+    prompt: "You must call document-summarizer now with action list and document_filename null. Return its filenames.",
     assertB: async (_ctx, chunk, response) => {
       expect(toolCalled(chunk, "document-summarizer")).toBe(true);
       expect(text(response)).toContain("alpha-secret");
@@ -49,7 +49,7 @@ const SKILLS = [
     id: "web-browsing",
     attachName: "web-browsing",
     toolName: "web-browsing",
-    prompt: "Use web search to find the official Node.js website URL.",
+    prompt: "You must call web-browsing now to search for the official Node.js website URL. Return a result URL.",
     assertB: async (_ctx, chunk, response) => {
       expect(toolCalled(chunk, "web-browsing")).toBe(true);
       expect(text(response)).toContain("http");
@@ -59,7 +59,7 @@ const SKILLS = [
     id: "sql-agent",
     attachName: "sql-agent",
     toolName: "sql-query",
-    prompt: "You must call sql-query now with database_id alpha_db and sql_query SELECT COUNT(*) AS count FROM customers. Reply with only the count from the tool result.",
+    prompt: "Call sql-query({database_id:\"alpha_db\",sql_query:\"SELECT COUNT(*) AS count FROM customers\"}) immediately. Do not list databases or explain. Reply only with returned count.",
     assertB: async (_ctx, chunk, response) => {
       expect(toolCalled(chunk, "sql-query")).toBe(true);
       expect(text(response)).toContain("3");
@@ -98,7 +98,7 @@ const SKILLS = [
     id: "create-files-agent",
     attachName: "create-files-agent",
     toolName: "create-text-file",
-    prompt: "Create a text document named note with content hello world using the create-files tool.",
+    prompt: "You must call create-text-file now with filename note, extension txt, and content hello world.",
     before: async (ctx) => files(path.join(ctx.storage, "generated-files"), /^text-.*\.txt$/).length,
     sideEffectAbsent: async (ctx) => expect(files(path.join(ctx.storage, "generated-files"), /^text-.*\.txt$/)).toHaveLength(ctx.before),
     assertB: async (ctx, chunk) => {
@@ -110,7 +110,7 @@ const SKILLS = [
     id: "create-scheduled-job",
     attachName: "create-scheduled-job",
     toolName: "create-scheduled-job",
-    prompt: "Schedule a daily job at 09:00 that says hello.",
+    prompt: "You must call create-scheduled-job now with name Daily hello, prompt say hello, schedule 0 9 * * *, and tools an empty array.",
     before: async (ctx) => (await scheduledJobs(ctx.base)).length,
     sideEffectAbsent: async (ctx) => expect(await scheduledJobs(ctx.base)).toHaveLength(ctx.before),
     assertB: async (ctx, chunk) => {
