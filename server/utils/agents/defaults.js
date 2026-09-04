@@ -232,7 +232,6 @@ function resolveAgentSkill(skill = "", { serverName = null } = {}) {
 module.exports = {
   USER_AGENT,
   WORKSPACE_AGENT,
-  agentSkillsFromSystemSettings: agentSkillsForWorkspace,
   agentSkillsForWorkspace,
   resolveAgentSkill,
 };

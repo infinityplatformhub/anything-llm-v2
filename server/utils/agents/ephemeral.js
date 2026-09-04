@@ -13,7 +13,7 @@ const { safeJsonParse } = require("../http");
 const {
   USER_AGENT,
   WORKSPACE_AGENT,
-  agentSkillsFromSystemSettings,
+  agentSkillsForWorkspace,
 } = require("./defaults");
 const { AgentHandler } = require(".");
 const {
@@ -420,7 +420,7 @@ class EphemeralAgentHandler extends AgentHandler {
     );
 
     this.#funcsToLoad = [
-      ...(await agentSkillsFromSystemSettings()),
+      ...(await agentSkillsForWorkspace(this.#workspace)),
       ...ImportedPlugin.activeImportedPlugins(),
       ...AgentFlows.activeFlowPlugins(),
       ...(await new MCPCompatibilityLayer().activeMCPServers()),
