@@ -52,7 +52,12 @@ async function postToken(body) {
     throw new Error("Lark OAuth request failed");
   }
 
-  if (!response.ok || payload?.code !== 0 || !payload.access_token)
+  if (
+    !response.ok ||
+    payload?.code == null ||
+    Number(payload.code) !== 0 ||
+    !payload.access_token
+  )
     throw new Error("Lark OAuth request failed");
 
   const now = Date.now();

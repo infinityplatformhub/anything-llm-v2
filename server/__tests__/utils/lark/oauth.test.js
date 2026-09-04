@@ -100,7 +100,7 @@ test("exchanges code with fixed redirect URI and verifier", async () => {
   jest.useFakeTimers().setSystemTime(new Date("2026-09-05T12:00:00.000Z"));
   global.fetch.mockResolvedValue(
     response({
-      code: 0,
+      code: "0",
       access_token: "new-access-token",
       expires_in: 3600,
       refresh_token: "new-refresh-token",
@@ -131,6 +131,19 @@ test("exchanges code with fixed redirect URI and verifier", async () => {
     }),
   });
 });
+
+test.each([["20024"], ["1"], [undefined]])(
+  "rejects exchange token response code %s",
+  async (code) => {
+    global.fetch.mockResolvedValue(
+      response({ code, access_token: "must-not-succeed" })
+    );
+
+    await expect(
+      exchangeCode({ config, code: "auth-code", verifier: "pkce-verifier" })
+    ).rejects.toThrow("Lark OAuth request failed");
+  }
+);
 
 test("fetches user info with Bearer user access token", async () => {
   const userInfo = {
@@ -184,7 +197,7 @@ test("refreshes with less than five minutes remaining and persists rotating pair
   );
   global.fetch.mockResolvedValue(
     response({
-      code: 0,
+      code: "0",
       access_token: "rotated-access-token",
       expires_in: 3600,
       refresh_token: "rotated-refresh-token",
@@ -307,4 +320,38 @@ test("marks needs_reauth and redacts token response on refresh failure", async (
   expect(LarkIdentity.updateTokens).toHaveBeenCalledWith(7, {
     needs_reauth: true,
   });
+});
+
+test("retries refresh after a failed coalesced promise settles", async () => {
+  LarkIdentity.get.mockResolvedValue(
+    storedIdentity({ access_expires_at: new Date(Date.now() + 60 * 1000) })
+  );
+  global.fetch
+    .mockRejectedValueOnce(new Error("network failure"))
+    .mockResolvedValueOnce(
+      response({
+        code: "0",
+        access_token: "retry-access-token",
+        expires_in: 3600,
+        refresh_token: "retry-refresh-token",
+        refresh_token_expires_in: 2592000,
+        scope: DEFAULT_SCOPES,
+      })
+    );
+  LarkIdentity.updateTokens.mockResolvedValue({
+    identity: { id: 7 },
+    error: null,
+  });
+
+  await expect(
+    getFreshAccessToken({ identityId: 7, config, encryption })
+  ).rejects.toThrow("Reconnect Lark in Settings");
+  expect(LarkIdentity.updateTokens).toHaveBeenCalledWith(7, {
+    needs_reauth: true,
+  });
+
+  await expect(
+    getFreshAccessToken({ identityId: 7, config, encryption })
+  ).resolves.toBe("retry-access-token");
+  expect(global.fetch).toHaveBeenCalledTimes(2);
 });
