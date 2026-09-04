@@ -1,6 +1,6 @@
 const path = require("path");
 const { agentChatV1, setSkills } = require("./api");
-const { files, toolCalled } = require("./evidence");
+const { files, toolCalled, toolCalledAny } = require("./evidence");
 
 const text = (response) => String(response.body?.textResponse ?? "");
 const scheduledJobs = async (base) => {
@@ -58,10 +58,10 @@ const SKILLS = [
   {
     id: "sql-agent",
     attachName: "sql-agent",
-    toolName: "sql-query",
-    prompt: "You must call the sql-query tool before answering. Call sql-query({database_id:\"alpha_db\",sql_query:\"SELECT COUNT(*) AS count FROM customers\"}); do not list databases or explain. Reply only with returned count.",
+    toolNames: ["sql-list-databases", "sql-list-tables", "sql-get-table-schema", "sql-query"],
+    prompt: "Using your SQL tools, find how many rows are in the customers table of database alpha_db. Reply with just the number.",
     assertB: async (_ctx, chunk, response) => {
-      expect(toolCalled(chunk, "sql-query")).toBe(true);
+      expect(toolCalledAny(chunk, ["sql-list-databases", "sql-list-tables", "sql-get-table-schema", "sql-query"])).toBe(true);
       expect(text(response)).toContain("3");
     },
   },

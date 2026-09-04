@@ -10,7 +10,7 @@ const {
   setSystemPref,
   uploadDoc,
 } = require("../lib/api");
-const { attached, mark, since, toolCalled } = require("../lib/evidence");
+const { attached, mark, since, toolCalledAny } = require("../lib/evidence");
 const { SKILLS } = require("../lib/skills");
 
 const A = E2E_A_URL;
@@ -83,7 +83,7 @@ describe.each(SKILLS.map((skill) => [skill.id, skill]))("skill %s", (_id, skill)
       expectOk(response);
       chunk = since(LOG_A, logMark);
       expect(attached(chunk, skill.attachName)).toBe(true);
-      if (toolCalled(chunk, skill.toolName) || attempt === 3) break;
+      if (toolCalledAny(chunk, skill.toolNames ?? [skill.toolName]) || attempt === 3) break;
       console.info(`[e2e] ${skill.id} B attempt ${attempt + 1}`);
     }
     await skill.assertB(ctx, chunk, response);

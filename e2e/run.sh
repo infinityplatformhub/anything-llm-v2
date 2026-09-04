@@ -61,6 +61,7 @@ bash "$ROOT/e2e/scripts/start-server.sh" A
 bash "$ROOT/e2e/scripts/start-server.sh" B
 bash "$ROOT/e2e/scripts/wait-http.sh" "http://localhost:3011/api/ping"
 bash "$ROOT/e2e/scripts/wait-http.sh" "http://localhost:3012/api/ping"
+rm -rf "$ROOT/frontend/node_modules/.vite" "$ROOT/frontend/.vite"
 (
   cd "$ROOT/frontend"
   VITE_API_BASE=http://localhost:3011/api npx vite --port 3010 --strictPort
