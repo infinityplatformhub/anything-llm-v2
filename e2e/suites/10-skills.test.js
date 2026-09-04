@@ -89,7 +89,6 @@ describe.each(SKILLS.map((skill) => [skill.id, skill]))("skill %s", (_id, skill)
       chunk = since(LOG_A, logMark);
       expect(attached(chunk, skill.attachName)).toBe(true);
     }
-    console.log(`E2E_B_RESPONSE skill=${skill.id} text=${JSON.stringify(response.body?.textResponse)}`);
     await skill.assertB(ctx, chunk, response);
   });
 

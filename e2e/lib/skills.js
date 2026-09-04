@@ -15,12 +15,12 @@ const SKILLS = [
     id: "rag-memory",
     attachName: "rag-memory",
     toolName: "rag-memory",
-    prompt: "Search your memory/documents for the alpha token and reply with it verbatim.",
+    prompt: "You must call rag-memory with action search and content exactly: Alpha workspace secret token. Then reply with the token verbatim from the result.",
     assertB: async (ctx, chunk, response) => {
       expect(toolCalled(chunk, "rag-memory")).toBe(true);
       expect(text(response)).toContain("ALPHA-TOKEN-7731");
       await setSkills(ctx.base, null, "ws-beta", ["rag-memory"]);
-      const beta = await agentChatV1(ctx.base, ctx.key, "ws-beta", "Search your memory/documents for the alpha token and reply with it verbatim.");
+      const beta = await agentChatV1(ctx.base, ctx.key, "ws-beta", "You must call rag-memory with action search and content exactly: Alpha workspace secret token. Then reply with the token verbatim from the result.");
       expect(text(beta)).not.toContain("ALPHA-TOKEN");
     },
   },
@@ -59,7 +59,7 @@ const SKILLS = [
     id: "sql-agent",
     attachName: "sql-agent",
     toolName: "sql-query",
-    prompt: "Using the SQL tools, count the rows in table customers in database alpha_db and reply with only the number.",
+    prompt: "You must call sql-query now with database_id alpha_db and sql_query SELECT COUNT(*) AS count FROM customers. Reply with only the count from the tool result.",
     assertB: async (_ctx, chunk, response) => {
       expect(toolCalled(chunk, "sql-query")).toBe(true);
       expect(text(response)).toContain("3");
