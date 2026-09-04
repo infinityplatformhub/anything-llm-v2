@@ -773,6 +773,9 @@ const TRANSLATIONS = {
     },
     workspaceSelector: {
       scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

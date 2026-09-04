@@ -282,8 +282,12 @@ const TRANSLATIONS = {
   },
   agent: {
     workspaceSelector: {
+      label: "Workspace",
+      noWorkspaces: "No workspaces found.",
       scopeNote:
-        "Everything on this page belongs to the selected workspace only.",
+        "Built-in agent skills on this page belong to the selected workspace only. Custom skills, agent flows and MCP servers are still global until a later phase.",
+      emptyNote:
+        "This workspace has no skills enabled yet. New workspaces start from zero.",
     },
     "performance-warning":
       "Performance of LLMs that do not explicitly support tool-calling is highly dependent on the model's capabilities and accuracy. Some abilities may be limited or non-functional.",
