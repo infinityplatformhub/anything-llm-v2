@@ -293,32 +293,68 @@ describe("LarkIdentity", () => {
   });
 
   it("rolls back provisioned user when identity insert conflicts", async () => {
-    const tx = {
-      users: {
-        create: jest.fn().mockResolvedValue({ id: 9, username: "alice" }),
-      },
-      lark_identities: {
-        create: jest.fn().mockRejectedValue(
-          Object.assign(new Error("Unique constraint failed on open_id"), {
-            code: "P2002",
-          })
-        ),
-      },
+    const state = { users: [], identities: [] };
+    let rejectIdentity = true;
+    prisma.$transaction.mockImplementation(async (callback) => {
+      const staged = {
+        users: [...state.users],
+        identities: [...state.identities],
+      };
+      const tx = {
+        users: {
+          create: jest.fn(async ({ data }) => {
+            const user = { id: 9, ...data };
+            staged.users.push(user);
+            return user;
+          }),
+        },
+        lark_identities: {
+          create: jest.fn(async ({ data }) => {
+            if (rejectIdentity)
+              throw Object.assign(
+                new Error("Unique constraint failed on open_id"),
+                { code: "P2002" }
+              );
+            const identity = { id: 10, ...data };
+            staged.identities.push(identity);
+            return identity;
+          }),
+        },
+      };
+
+      const result = await callback(tx);
+      state.users = staged.users;
+      state.identities = staged.identities;
+      return result;
+    });
+    const input = {
+      user: { username: "alice", password: "A".repeat(64), role: "default" },
+      identity: { ...identityData, user_id: undefined },
     };
-    prisma.$transaction.mockImplementation(async (callback) => callback(tx));
 
     await expect(
-      LarkIdentity.provisionUserWithIdentity({
-        user: { username: "alice", password: "A".repeat(64), role: "default" },
-        identity: { ...identityData, user_id: undefined },
-      })
+      LarkIdentity.provisionUserWithIdentity(input)
     ).resolves.toEqual({
       user: null,
       identity: null,
       error: "Unique constraint failed on open_id",
     });
-    expect(tx.users.create).toHaveBeenCalledTimes(1);
-    expect(tx.lark_identities.create).toHaveBeenCalledTimes(1);
+    expect(state.users).toEqual([]);
+    expect(state.identities).toEqual([]);
+
+    rejectIdentity = false;
+    const result = await LarkIdentity.provisionUserWithIdentity(input);
+
+    expect(result.error).toBeNull();
+    expect(result.user).toEqual(
+      expect.objectContaining({ id: 9, username: "alice", role: "default" })
+    );
+    expect(result.user).not.toHaveProperty("password");
+    expect(result.identity).toEqual(
+      expect.objectContaining({ id: 10, user_id: 9, open_id: "ou_123" })
+    );
+    expect(state.users).toHaveLength(1);
+    expect(state.identities).toHaveLength(1);
     expect(prisma.users.create).not.toHaveBeenCalled();
     expect(prisma.lark_identities.create).not.toHaveBeenCalled();
   });
