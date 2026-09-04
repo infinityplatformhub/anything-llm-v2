@@ -226,8 +226,8 @@ module.exports = { mark, since, attached, toolCalled, attachedAny, files, pgCoun
 | `sql-agent` | `sql-agent:sql-query` (multi) | "Using the SQL tools, count the rows in table customers in database alpha_db and reply with only the number." | `toolCalled(chunk,"sql-query")`; response includes `3` |
 | `create-chart` | `create-chart` | "Create a bar chart of these values: a=1,b=2,c=3." | tool called; response body JSON has `type` containing `rechart` OR log has `rechartVisualize` (check `aibitat/plugins/rechart.js` for the emitted event and assert on that) |
 | `generate-image` | `generate-image` | "Generate an image of a red circle." | **skip B** (SKIPS.md: gateway has no image endpoint); A/C run |
-| `filesystem` | `filesystem-agent:filesystem-write-text-file` | "Create a text file named alpha-note.txt containing the word hello using your filesystem tool." | `files(<STORAGE_A>/anythingllm-fs, /alpha-note\.txt/)` length 1 |
-| `create-files` | `create-files-agent:create-text-file` | "Create a text document named note with content hello world using the create-files tool." | `files(<STORAGE_A>/generated-files, /^text-.*\.txt$/)` grew by 1 |
+| `filesystem-agent` | `filesystem-agent:filesystem-write-text-file` | "Create a text file named alpha-note.txt containing the word hello using your filesystem tool." | `files(<STORAGE_A>/anythingllm-fs, /alpha-note\.txt/)` length 1 |
+| `create-files-agent` | `create-files-agent:create-text-file` | "Create a text document named note with content hello world using the create-files tool." | `files(<STORAGE_A>/generated-files, /^text-.*\.txt$/)` grew by 1 |
 | `create-scheduled-job` | `create-scheduled-job` | "Schedule a daily job at 09:00 that says hello." | sqlite `scheduled_jobs` count grew by 1 (read via `server/node_modules/@prisma/client`? simpler: `GET /api/admin/scheduled-jobs` if exists, else query the copied sqlite with `better-sqlite3` from server deps; pick what exists) |
 | `gmail` | `gmail-agent:gmail-get-inbox` | "Check my Gmail inbox." | **skip B** (needs Apps Script); A/C run |
 | `google-calendar` | `google-calendar-agent:gcal-list-calendars` | "List my Google calendars." | skip B |
