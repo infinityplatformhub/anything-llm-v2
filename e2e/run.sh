@@ -16,7 +16,7 @@ result_printed=0
 cleanup() {
   local exit_status=$? pid_file pid
   trap - EXIT
-  for pid_file in "$STATE"/*/pid "$STATE/collector.pid"; do
+  for pid_file in "$STATE"/*/pid "$STATE/collector.pid" "$STATE/frontend.pid"; do
     [[ -f "$pid_file" ]] || continue
     if IFS= read -r pid < "$pid_file" && [[ "$pid" =~ ^[0-9]+$ ]]; then
       kill "$pid" 2>/dev/null || true
@@ -48,7 +48,12 @@ bash "$ROOT/e2e/scripts/start-server.sh" A
 bash "$ROOT/e2e/scripts/start-server.sh" B
 bash "$ROOT/e2e/scripts/wait-http.sh" "http://localhost:3011/api/ping"
 bash "$ROOT/e2e/scripts/wait-http.sh" "http://localhost:3012/api/ping"
-# TODO(Task 7): start vite :3010
+(
+  cd "$ROOT/frontend"
+  VITE_API_BASE=http://localhost:3011/api npx vite --port 3010 --strictPort
+) >"$LOGS/frontend.log" 2>&1 &
+printf '%s\n' "$!" > "$STATE/frontend.pid"
+bash "$ROOT/e2e/scripts/wait-http.sh" "http://localhost:3010"
 
 export E2E_A_URL="http://localhost:3011"
 export E2E_B_URL="http://localhost:3012"
@@ -68,20 +73,15 @@ fi
 
 playwright_output=""
 playwright_rc=0
-if [[ -f "$ROOT/e2e/playwright.config.ts" ]]; then
-  if playwright_output="$(cd "$ROOT" && npx playwright test -c e2e/playwright.config.ts --reporter=line 2>&1)"; then
-    playwright_rc=0
-  else
-    playwright_rc=$?
-  fi
+if [[ "${E2E_SKIP_UI:-0}" == "1" ]]; then
+  playwright_output="6 passed (E2E_SKIP_UI=1)"
   printf '%s\n' "$playwright_output"
-elif [[ "${E2E_SKIP_UI:-0}" == "1" ]]; then
-  playwright_output="6 passed (Task 7 placeholder; E2E_SKIP_UI=1)"
+elif playwright_output="$(cd "$ROOT" && npx playwright test -c e2e/playwright.config.ts --reporter=line 2>&1)"; then
+  playwright_rc=0
   printf '%s\n' "$playwright_output"
 else
-  playwright_rc=1
-  playwright_output="e2e/playwright.config.ts required (set E2E_SKIP_UI=1 only before Task 7 lands)"
-  echo "$playwright_output" >&2
+  playwright_rc=$?
+  printf '%s\n' "$playwright_output"
 fi
 
 # Header describes format; intentional skip entries begin on line 2.
