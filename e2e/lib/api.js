@@ -10,6 +10,7 @@ module.exports = {
   newWorkspace: (base, jwt, name) => fetch(`${base}/api/workspace/new`, { method: "POST", headers: hdr(jwt), body: JSON.stringify({ name }) }).then(j),
   listWorkspaces: (base, jwt) => fetch(`${base}/api/workspaces`, { headers: hdr(jwt) }).then(j),
   apiKey: (base, jwt) => fetch(`${base}/api/admin/generate-api-key`, { method: "POST", headers: hdr(jwt), body: "{}" }).then(j),
+  apiKeySingleUser: (base) => fetch(`${base}/api/system/generate-api-key`, { method: "POST", headers: hdr(), body: "{}" }).then(j),
   getSkills: (base, jwt, slug) => fetch(`${base}/api/admin/workspace/${slug}/agent-skills`, { headers: hdr(jwt) }).then(j),
   setSkills: (base, jwt, slug, enabledSkills) => fetch(`${base}/api/admin/workspace/${slug}/agent-skills`, { method: "POST", headers: hdr(jwt), body: JSON.stringify({ enabledSkills }) }).then(j),
   setSystemPref: (base, jwt, obj) => fetch(`${base}/api/admin/system-preferences`, { method: "POST", headers: hdr(jwt), body: JSON.stringify(obj) }).then(j),
