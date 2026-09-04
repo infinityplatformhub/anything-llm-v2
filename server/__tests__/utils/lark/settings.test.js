@@ -407,9 +407,7 @@ test("fails closed when SERVER_URL is missing", async () => {
   expect(config).not.toBeNull();
   expect(config.redirectUri).toBeUndefined();
 
-  jest
-    .spyOn(SystemSettings, "isMultiUserMode")
-    .mockResolvedValue(true);
+  jest.spyOn(SystemSettings, "isMultiUserMode").mockResolvedValue(true);
   await expect(isLarkLoginEnabled({ encryption })).resolves.toBe(false);
 
   process.env.SERVER_URL = "https://anything.example/";

@@ -113,26 +113,6 @@ const LarkIdentity = {
     }
   },
 
-  upsertForUser: async function (data) {
-    try {
-      const user_id = Number(data.user_id);
-      const create = { ...pick(data, IDENTITY_FIELDS), user_id };
-      const update = {
-        ...pick(data, TOKEN_FIELDS),
-        lastUpdatedAt: new Date(),
-      };
-      const identity = await prisma.lark_identities.upsert({
-        where: { user_id },
-        create,
-        update,
-      });
-      return { identity: withoutSecrets(identity), error: null };
-    } catch (error) {
-      console.error("LarkIdentity.upsertForUser", error.message);
-      return { identity: null, error: error.message };
-    }
-  },
-
   updateTokens: async function (id, tokens) {
     const numericId = id === null ? NaN : Number(id);
     if (!Number.isFinite(numericId))

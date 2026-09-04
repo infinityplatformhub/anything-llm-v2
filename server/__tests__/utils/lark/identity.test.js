@@ -6,7 +6,6 @@ jest.mock("../../../models/larkIdentity", () => ({
     createForUser: jest.fn(),
     provisionUserWithIdentity: jest.fn(),
     updateTokens: jest.fn(),
-    upsertForUser: jest.fn(),
   },
 }));
 
@@ -58,7 +57,6 @@ beforeEach(() => {
   LarkIdentity.createForUser.mockReset();
   LarkIdentity.provisionUserWithIdentity.mockReset();
   LarkIdentity.updateTokens.mockReset();
-  LarkIdentity.upsertForUser.mockReset();
   User.get.mockReset();
   User.create.mockReset();
   encryption.encrypt.mockClear();
@@ -256,7 +254,6 @@ test("handles concurrent unique conflict without account takeover", async () => 
     connectIdentity({ userId: 40, userInfo, tokens, config, encryption })
   ).resolves.toEqual({ identity: null, error: "link_conflict" });
   expect(LarkIdentity.createForUser).toHaveBeenCalledTimes(1);
-  expect(LarkIdentity.upsertForUser).not.toHaveBeenCalled();
   expect(LarkIdentity.updateTokens).not.toHaveBeenCalled();
 });
 
@@ -276,7 +273,6 @@ test("recovers concurrent unique conflict owned by same user", async () => {
     connectIdentity({ userId: 40, userInfo, tokens, config, encryption })
   ).resolves.toEqual({ identity, error: null });
   expect(LarkIdentity.createForUser).toHaveBeenCalledTimes(1);
-  expect(LarkIdentity.upsertForUser).not.toHaveBeenCalled();
   expect(LarkIdentity.updateTokens).toHaveBeenCalledWith(
     identity.id,
     expect.objectContaining({ access_token: "encrypted:access-token" })

@@ -214,8 +214,11 @@ test("guards status and disconnect ahead of authentication", async () => {
       larkLoginEnabled.mockImplementation(realMiddleware);
 
       const res = await invoke(app.routes[route], request({ authUser: null }));
-      expect({ scenario: scenario.name, route, status: res.status.mock.calls })
-        .toEqual({ scenario: scenario.name, route, status: [[403]] });
+      expect({
+        scenario: scenario.name,
+        route,
+        status: res.status.mock.calls,
+      }).toEqual({ scenario: scenario.name, route, status: [[403]] });
       // The handler is never reached, so neither model is touched.
       expect(LarkIdentity.get).not.toHaveBeenCalled();
       expect(LarkIdentity.delete).not.toHaveBeenCalled();

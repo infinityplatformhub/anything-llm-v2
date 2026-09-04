@@ -25,6 +25,17 @@ const LarkOauthState = {
         error: `Unsupported Lark OAuth mode: ${mode}`,
       };
 
+    // Abandoned flows leave a row holding an encrypted verifier that consume()
+    // never reaches. Sweeping here bounds the table without a scheduled job;
+    // a failed sweep must never block a login, so it is swallowed.
+    try {
+      await prisma.lark_oauth_states.deleteMany({
+        where: { expiresAt: { lt: new Date() } },
+      });
+    } catch (error) {
+      console.error("LarkOauthState.sweep", error.message);
+    }
+
     try {
       const oauthState = await prisma.lark_oauth_states.create({
         data: {

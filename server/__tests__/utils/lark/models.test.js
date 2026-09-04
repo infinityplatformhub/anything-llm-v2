@@ -3,11 +3,11 @@ require("./_polyfill");
 jest.mock("../../../utils/prisma", () => ({
   lark_oauth_states: {
     create: jest.fn(),
+    deleteMany: jest.fn(),
   },
   lark_identities: {
     findFirst: jest.fn(),
     create: jest.fn(),
-    upsert: jest.fn(),
     update: jest.fn(),
     deleteMany: jest.fn(),
   },
@@ -114,6 +114,66 @@ describe("LarkOauthState", () => {
     expect(tx.lark_oauth_states.deleteMany).not.toHaveBeenCalled();
   });
 
+  it("sweeps expired states before storing a new one", async () => {
+    // Abandoned flows leave rows holding an encrypted verifier that nothing
+    // else deletes, so each create clears whatever has already expired.
+    prisma.lark_oauth_states.deleteMany.mockResolvedValue({ count: 3 });
+    prisma.lark_oauth_states.create.mockResolvedValue({
+      state: "state-9",
+      code_verifier: "encrypted-verifier",
+      mode: "login",
+      user_id: null,
+    });
+
+    const result = await LarkOauthState.create({
+      state: "state-9",
+      code_verifier: "encrypted-verifier",
+      mode: "login",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    expect(result.error).toBeNull();
+    expect(prisma.lark_oauth_states.deleteMany).toHaveBeenCalledWith({
+      where: { expiresAt: { lt: expect.any(Date) } },
+    });
+    expect(
+      prisma.lark_oauth_states.deleteMany.mock.invocationCallOrder[0]
+    ).toBeLessThan(prisma.lark_oauth_states.create.mock.invocationCallOrder[0]);
+    // The verifier never leaves the model on the create path.
+    expect(result.oauthState).not.toHaveProperty("code_verifier");
+  });
+
+  it("stores the new state even when the sweep fails", async () => {
+    // A failed housekeeping delete must not block a user from logging in.
+    jest.spyOn(console, "error").mockImplementation(() => {});
+    prisma.lark_oauth_states.deleteMany.mockRejectedValue(new Error("locked"));
+    prisma.lark_oauth_states.create.mockResolvedValue({
+      state: "state-10",
+      mode: "login",
+      user_id: null,
+    });
+
+    const result = await LarkOauthState.create({
+      state: "state-10",
+      code_verifier: "encrypted-verifier",
+      mode: "login",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    expect(result.error).toBeNull();
+    expect(prisma.lark_oauth_states.create).toHaveBeenCalled();
+  });
+
+  it("does not sweep when the mode is rejected", async () => {
+    await LarkOauthState.create({
+      state: "state-11",
+      code_verifier: "encrypted-verifier",
+      mode: "invalid",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    expect(prisma.lark_oauth_states.deleteMany).not.toHaveBeenCalled();
+  });
+
   it("rejects unsupported OAuth state mode", async () => {
     const result = await LarkOauthState.create({
       state: "state-1",
@@ -215,27 +275,11 @@ describe("LarkIdentity", () => {
     expect(prisma.lark_identities.update).not.toHaveBeenCalled();
   });
 
-  it("upserts token data without mutating existing identity ownership", async () => {
-    prisma.lark_identities.upsert.mockResolvedValue({ id: 1, ...identityData });
-
-    const { identity, error } = await LarkIdentity.upsertForUser(identityData);
-
-    expect(error).toBeNull();
-    expect(identity).not.toHaveProperty("access_token");
-    expect(identity).not.toHaveProperty("refresh_token");
-    expect(prisma.lark_identities.upsert).toHaveBeenCalledWith({
-      where: { user_id: 7 },
-      create: { ...identityData, user_id: 7 },
-      update: {
-        access_token: identityData.access_token,
-        refresh_token: identityData.refresh_token,
-        access_expires_at: identityData.access_expires_at,
-        refresh_expires_at: identityData.refresh_expires_at,
-        scopes: identityData.scopes,
-        needs_reauth: false,
-        lastUpdatedAt: expect.any(Date),
-      },
-    });
+  it("exposes no upsert path keyed on user ID", () => {
+    // An upsert keyed on user_id cannot be race-safe: a concurrent first login
+    // would rebind an open ID that already belongs to someone else. The
+    // production paths are createForUser and provisionUserWithIdentity.
+    expect(LarkIdentity.upsertForUser).toBeUndefined();
   });
 
   it("updates rotating token pair atomically", async () => {
@@ -289,7 +333,6 @@ describe("LarkIdentity", () => {
     expect(prisma.lark_identities.create).toHaveBeenCalledWith({
       data: { ...identityData, user_id: 7 },
     });
-    expect(prisma.lark_identities.upsert).not.toHaveBeenCalled();
   });
 
   it("rolls back provisioned user when identity insert conflicts", async () => {
