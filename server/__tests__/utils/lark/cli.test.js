@@ -376,17 +376,43 @@ test("rejects credentials in arguments before spawn with redacted audit", async 
   );
 });
 
-test("redacts token patterns from malformed argument audits", async () => {
-  const token = "u-abcdefghijklmnop";
+test("rejects credentials before allowlist policy with redacted audit", async () => {
+  const result = await runAsUser({
+    userId: 4,
+    args: ["calendar", "list", "--token", "user-access-token"],
+    encryption,
+  });
+
+  expect(result).toEqual({
+    ok: false,
+    error: "Arguments may not contain credentials",
+  });
+  expect(spawn).not.toHaveBeenCalled();
+  expect(JSON.stringify(EventLogs.logEvent.mock.calls)).not.toContain(
+    "user-access-token"
+  );
+  expect(EventLogs.logEvent).toHaveBeenCalledWith(
+    "lark_cli_invocation",
+    expect.objectContaining({
+      args: ["calendar", "list", "--token", "[redacted]"],
+      outcome: "rejected",
+    }),
+    4
+  );
+});
+
+test("redacts embedded token patterns from malformed argument audits", async () => {
   await runAsUser({
     userId: 4,
-    args: ["bad command", token],
+    args: ["bad command", "prefixu-abcdefghijklmnop", "u-abcdefghijklmnop-"],
     encryption,
   });
 
   expect(EventLogs.logEvent).toHaveBeenCalledWith(
     "lark_cli_invocation",
-    expect.objectContaining({ args: ["bad command", "[redacted]"] }),
+    expect.objectContaining({
+      args: ["bad command", "prefix[redacted]", "[redacted]"],
+    }),
     4
   );
 });

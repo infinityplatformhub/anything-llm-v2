@@ -88,7 +88,7 @@ function redact(value, secrets) {
     if (typeof secret === "string" && secret.length > 0)
       output = output.split(secret).join("[redacted]");
   }
-  return output.replace(/\b[ut]-[A-Za-z0-9._-]{16,}\b/g, "[redacted]");
+  return output.replace(/[ut]-[A-Za-z0-9._-]{16,}/g, "[redacted]");
 }
 
 function redactData(value, secrets) {
@@ -105,13 +105,11 @@ function redactData(value, secrets) {
   return value;
 }
 
-function audit(userId, args, details, secrets = []) {
-  const redactedArgs = Array.isArray(args)
-    ? args.map((arg) => redact(arg, secrets))
-    : [];
+function audit(userId, metadata) {
+  const { secrets = [], ...details } = metadata;
   return EventLogs.logEvent(
     "lark_cli_invocation",
-    { args: redactedArgs, ...details },
+    redactData(details, secrets),
     userId
   );
 }
@@ -219,7 +217,8 @@ function execute(args, env, secrets) {
 async function runAsUser({ userId, args, encryption } = {}) {
   const validation = validateArgs(args);
   if (!validation.ok) {
-    await audit(userId, args, {
+    await audit(userId, {
+      args: Array.isArray(args) ? args : [],
       outcome: "rejected",
       exitCode: undefined,
       timedOut: false,
@@ -230,89 +229,111 @@ async function runAsUser({ userId, args, encryption } = {}) {
 
   const manager = encryption || new EncryptionManager();
   let config;
-  let configError;
   try {
     config = await loadLarkConfig({ encryption: manager });
   } catch (error) {
-    configError = error;
-  }
-  const secrets = [config?.appSecret];
-  if (configError) {
-    const error = redact(configError.message, secrets);
-    await audit(
-      userId,
+    const message = redact(error.message, []);
+    await audit(userId, {
       args,
-      {
-        outcome: "error",
-        exitCode: undefined,
-        timedOut: false,
-        truncated: false,
-      },
-      secrets
-    );
+      outcome: "error",
+      reason: message,
+      exitCode: undefined,
+      timedOut: false,
+      truncated: false,
+    });
+    return { ok: false, error: message };
+  }
+
+  const secrets = [config?.appSecret];
+  if (!config?.appId || !config?.appSecret) {
+    const error = "Lark is not configured";
+    await audit(userId, {
+      args,
+      outcome: "error",
+      reason: error,
+      exitCode: undefined,
+      timedOut: false,
+      truncated: false,
+      secrets,
+    });
     return { ok: false, error };
   }
 
-  const policy = checkPolicy(args, config?.allowlist);
-  if (!policy.allowed) {
-    await audit(
-      userId,
-      args,
-      {
-        outcome: "rejected",
-        exitCode: undefined,
-        timedOut: false,
-        truncated: false,
-      },
-      secrets
-    );
-    return { ok: false, error: policy.reason };
-  }
-
-  let tmp;
-  let result;
-  let rejected = false;
+  let identity;
+  let accessToken;
   try {
-    const identity = await LarkIdentity.get({ user_id: Number(userId) });
+    identity = await LarkIdentity.get({ user_id: Number(userId) });
     if (!identity || identity.needs_reauth) throw new Error(RECONNECT_ERROR);
-    if (!config?.appId || !config?.appSecret)
-      throw new Error("Lark is not configured");
-
-    const accessToken = await getFreshAccessToken({
+    accessToken = await getFreshAccessToken({
       identityId: identity.id,
       config,
       encryption: manager,
     });
     secrets.push(accessToken);
-    if (
-      args.some((arg) =>
-        secrets.some(
-          (secret) =>
-            typeof secret === "string" && secret && arg.includes(secret)
-        )
+  } catch (error) {
+    const message = redact(error.message, secrets);
+    await audit(userId, {
+      outcome: "error",
+      reason: message,
+      exitCode: undefined,
+      timedOut: false,
+      truncated: false,
+      secrets,
+    });
+    return { ok: false, error: message };
+  }
+
+  if (
+    args.some((arg) =>
+      secrets.some(
+        (secret) => typeof secret === "string" && secret && arg.includes(secret)
       )
-    ) {
-      result = {
-        ok: false,
-        error: "Arguments may not contain credentials",
-      };
-      rejected = true;
-    } else {
-      tmp = await fs.promises.mkdtemp(
-        path.join(os.tmpdir(), "anythingllm-lark-")
-      );
-      const env = {
-        ...safeInheritedEnv(),
-        LARKSUITE_CLI_BRAND: "lark",
-        LARKSUITE_CLI_APP_ID: config.appId,
-        LARKSUITE_CLI_USER_ACCESS_TOKEN: accessToken,
-        LARKSUITE_CLI_CONFIG_DIR: tmp,
-        LARKSUITE_CLI_DATA_DIR: tmp,
-        HOME: tmp,
-        CI: "1",
-      };
-      result = await execute(args, env, secrets);
-    }
+    )
+  ) {
+    const error = "Arguments may not contain credentials";
+    await audit(userId, {
+      args,
+      outcome: "rejected",
+      reason: error,
+      exitCode: undefined,
+      timedOut: false,
+      truncated: false,
+      secrets,
+    });
+    return { ok: false, error };
+  }
+
+  const policy = checkPolicy(args, config.allowlist);
+  if (!policy.allowed) {
+    await audit(userId, {
+      args,
+      outcome: "rejected",
+      reason: policy.reason,
+      exitCode: undefined,
+      timedOut: false,
+      truncated: false,
+      secrets,
+    });
+    return { ok: false, error: policy.reason };
+  }
+
+  let tmp;
+  let result;
+  try {
+    tmp = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "anythingllm-lark-")
+    );
+    const env = {
+      ...safeInheritedEnv(),
+      LARKSUITE_CLI_BRAND: "lark",
+      LARKSUITE_CLI_APP_ID: config.appId,
+      LARKSUITE_CLI_USER_ACCESS_TOKEN: accessToken,
+      LARKSUITE_CLI_CONFIG_DIR: tmp,
+      LARKSUITE_CLI_DATA_DIR: tmp,
+      HOME: tmp,
+      CI: "1",
+    };
+    result = await execute(args, env, secrets);
   } catch (error) {
     result = { ok: false, error: redact(error.message, secrets) };
   } finally {
@@ -323,17 +344,14 @@ async function runAsUser({ userId, args, encryption } = {}) {
     }
   }
 
-  await audit(
-    userId,
+  await audit(userId, {
     args,
-    {
-      outcome: result.ok ? "success" : rejected ? "rejected" : "error",
-      exitCode: result.ok ? 0 : result.exitCode,
-      timedOut: Boolean(result.timedOut),
-      truncated: Boolean(result.truncated),
-    },
-    secrets
-  );
+    outcome: result.ok ? "success" : "error",
+    exitCode: result.ok ? 0 : result.exitCode,
+    timedOut: Boolean(result.timedOut),
+    truncated: Boolean(result.truncated),
+    secrets,
+  });
   return result;
 }
 
