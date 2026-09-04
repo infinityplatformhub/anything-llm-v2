@@ -218,11 +218,9 @@ async function runAsUser({ userId, args, encryption } = {}) {
   const validation = validateArgs(args);
   if (!validation.ok) {
     await audit(userId, {
-      args: Array.isArray(args) ? args : [],
+      argCount: Array.isArray(args) ? args.length : 0,
       outcome: "rejected",
-      exitCode: undefined,
-      timedOut: false,
-      truncated: false,
+      reason: validation.reason,
     });
     return { ok: false, error: validation.reason };
   }
@@ -234,12 +232,8 @@ async function runAsUser({ userId, args, encryption } = {}) {
   } catch (error) {
     const message = redact(error.message, []);
     await audit(userId, {
-      args,
       outcome: "error",
       reason: message,
-      exitCode: undefined,
-      timedOut: false,
-      truncated: false,
     });
     return { ok: false, error: message };
   }
@@ -248,13 +242,8 @@ async function runAsUser({ userId, args, encryption } = {}) {
   if (!config?.appId || !config?.appSecret) {
     const error = "Lark is not configured";
     await audit(userId, {
-      args,
       outcome: "error",
       reason: error,
-      exitCode: undefined,
-      timedOut: false,
-      truncated: false,
-      secrets,
     });
     return { ok: false, error };
   }

@@ -401,20 +401,67 @@ test("rejects credentials before allowlist policy with redacted audit", async ()
   );
 });
 
-test("redacts embedded token patterns from malformed argument audits", async () => {
+test("omits arguments from malformed invocation audit", async () => {
   await runAsUser({
     userId: 4,
     args: ["bad command", "prefixu-abcdefghijklmnop", "u-abcdefghijklmnop-"],
     encryption,
   });
 
-  expect(EventLogs.logEvent).toHaveBeenCalledWith(
-    "lark_cli_invocation",
+  const metadata = EventLogs.logEvent.mock.calls[0][1];
+  expect(metadata).toEqual(
     expect.objectContaining({
-      args: ["bad command", "prefix[redacted]", "[redacted]"],
-    }),
-    4
+      argCount: 3,
+      outcome: "rejected",
+      reason: "Malformed command token",
+    })
   );
+  expect(metadata).not.toHaveProperty("args");
+});
+
+test("omits arguments from config failure and missing config audits", async () => {
+  loadLarkConfig
+    .mockRejectedValueOnce(new Error("config failed"))
+    .mockResolvedValueOnce(null);
+
+  await runAsUser({
+    userId: 4,
+    args: ["contact", "search", "--query", "arbitrary-secret"],
+    encryption,
+  });
+  await runAsUser({
+    userId: 4,
+    args: ["contact", "search", "--query", "arbitrary-secret"],
+    encryption,
+  });
+
+  for (const [, metadata] of EventLogs.logEvent.mock.calls) {
+    expect(metadata).not.toHaveProperty("args");
+    expect(metadata).toEqual(
+      expect.objectContaining({ outcome: "error", reason: expect.any(String) })
+    );
+  }
+  expect(JSON.stringify(EventLogs.logEvent.mock.calls)).not.toContain(
+    "arbitrary-secret"
+  );
+});
+
+test("omits arguments from missing identity audit", async () => {
+  LarkIdentity.get.mockResolvedValue(null);
+  await runAsUser({
+    userId: 4,
+    args: ["contact", "search", "--query", "arbitrary-secret"],
+    encryption,
+  });
+
+  const metadata = EventLogs.logEvent.mock.calls[0][1];
+  expect(metadata).toEqual(
+    expect.objectContaining({
+      outcome: "error",
+      reason: "Reconnect Lark in Settings",
+    })
+  );
+  expect(metadata).not.toHaveProperty("args");
 });
 
 test("requires a connected identity without spawning", async () => {
