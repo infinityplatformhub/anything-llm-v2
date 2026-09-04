@@ -79,7 +79,7 @@ export EMBEDDING_ENGINE="native"
 export VECTOR_DB="lancedb"
 export SERVER_PORT="$port"
 export STORAGE_DIR="$storage"
-export DATABASE_URL="file:$storage/anythingllm.db"
+export ANYTHINGLLM_DATABASE_URL="file:$storage/anythingllm.db"
 export AGENT_AUTO_APPROVED_SKILLS="filesystem-write-text-file,filesystem-read-text-file,create-text-file,create-scheduled-job"
 export NODE_ENV="development"
 
