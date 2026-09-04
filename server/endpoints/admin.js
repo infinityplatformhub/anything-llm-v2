@@ -9,6 +9,7 @@ const {
   DEFAULT_LARK_CLI_ALLOWLIST,
   fetchAppAccessToken,
   loadLarkConfig,
+  validateLarkSettings,
 } = require("../utils/lark/settings");
 const { User } = require("../models/user");
 const { DocumentVectors } = require("../models/vectors");
@@ -538,11 +539,22 @@ function adminEndpoints(app) {
           "lark_scopes",
           "lark_cli_allowlist",
         ];
-        const filtered = Object.fromEntries(
-          Object.entries(updates).filter(([key]) => larkKeys.includes(key))
+        const existing = Object.fromEntries(
+          await Promise.all(
+            larkKeys.map(async (label) => [
+              label,
+              (await SystemSettings.get({ label }))?.value,
+            ])
+          )
         );
-        const { success, error } =
-          await SystemSettings.updateSettings(filtered);
+        const validation = validateLarkSettings(updates, { existing });
+        if (!validation.ok)
+          return response
+            .status(400)
+            .json({ success: false, errors: validation.errors });
+        const { success, error } = await SystemSettings.updateSettings(
+          validation.values
+        );
         response.status(success ? 200 : 400).json({ success, error });
       } catch (e) {
         console.error(e);

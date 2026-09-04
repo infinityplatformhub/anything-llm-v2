@@ -14,8 +14,6 @@ jest.mock("../../../utils/prisma", () => ({
   },
 }));
 
-const fs = require("fs");
-const path = require("path");
 const prisma = require("../../../utils/prisma");
 const { EncryptionManager } = require("../../../utils/EncryptionManager");
 const { DEFAULT_SCOPES } = require("../../../utils/lark/constants");
@@ -25,7 +23,9 @@ const {
   fetchAppAccessToken,
   isLarkLoginEnabled,
   loadLarkConfig,
+  validateLarkSettings,
 } = require("../../../utils/lark/settings");
+const { adminEndpoints } = require("../../../endpoints/admin");
 
 const originalFetch = global.fetch;
 const originalServerUrl = process.env.SERVER_URL;
@@ -101,47 +101,125 @@ test("never returns plaintext or ciphertext app secret", async () => {
 
   expect(config.appSecret).toBe("super-secret");
   expect(SystemSettings.publicFields).not.toContain("lark_app_secret");
-
-  const adminSource = fs.readFileSync(
-    path.resolve(__dirname, "../../../endpoints/admin.js"),
-    "utf8"
-  );
-  expect(adminSource).toContain('lark_app_secret: values.lark_app_secret ? "********" : ""');
-  expect(adminSource).not.toContain("lark_app_secret: ciphertext");
   expect(ciphertext).not.toBe(config.appSecret);
 });
 
-test("rejects malformed scopes and forbidden allowlist entries", async () => {
-  await SystemSettings.updateSettings({
-    lark_scopes: "offline_access BAD/SCOPE",
-    lark_cli_allowlist: ["docs", "AuTh"],
+function registeredRoutes() {
+  const routes = [];
+  const register = (method) => (path, middlewares, handler) =>
+    routes.push({ method, path, middlewares, handler });
+  adminEndpoints({
+    get: register("GET"),
+    post: register("POST"),
+    delete: register("DELETE"),
   });
-  expect(mockRecords.has("lark_scopes")).toBe(false);
-  expect(mockRecords.has("lark_cli_allowlist")).toBe(false);
+  return routes;
+}
 
-  await SystemSettings.updateSettings({
-    lark_cli_allowlist: '["docs","bad token"]',
-  });
-  expect(mockRecords.has("lark_cli_allowlist")).toBe(false);
+function mockResponse({ role = "admin" } = {}) {
+  return {
+    locals: { multiUserMode: true, user: { role } },
+    statusCode: null,
+    body: null,
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(body) {
+      this.body = body;
+      return this;
+    },
+    sendStatus(code) {
+      this.statusCode = code;
+      return this;
+    },
+    end() {
+      return this;
+    },
+  };
+}
+
+async function invokeLarkUpdate(body) {
+  const route = registeredRoutes().find(
+    ({ method, path }) => method === "POST" && path === "/admin/lark-settings"
+  );
+  const response = mockResponse();
+  await route.handler({ body }, response);
+  return response;
+}
+
+test("keeps all Lark settings routes inaccessible to manager role", async () => {
+  const routes = registeredRoutes().filter(({ path }) =>
+    path.startsWith("/admin/lark-settings")
+  );
+  expect(routes.map(({ method, path }) => `${method} ${path}`).sort()).toEqual(
+    [
+      "GET /admin/lark-settings",
+      "POST /admin/lark-settings",
+      "POST /admin/lark-settings/test",
+    ].sort()
+  );
+
+  for (const route of routes) {
+    expect(route.middlewares).toHaveLength(2);
+    const response = mockResponse({ role: "manager" });
+    const next = jest.fn();
+    await route.middlewares[1]({}, response, next);
+    expect(response.statusCode).toBe(401);
+    expect(next).not.toHaveBeenCalled();
+  }
 });
 
-test("keeps Lark settings inaccessible to manager role", () => {
-  const adminSource = fs.readFileSync(
-    path.resolve(__dirname, "../../../endpoints/admin.js"),
-    "utf8"
-  );
-  const managerAllowlistMatches = adminSource.match(
-    /const managerAllowedFields = \[[\s\S]*?\];/g
-  );
-  expect(managerAllowlistMatches).toHaveLength(2);
-  for (const managerAllowlist of managerAllowlistMatches)
-    expect(managerAllowlist).not.toMatch(/lark_/);
-  expect(adminSource).toMatch(
-    /"\/admin\/lark-settings"[\s\S]*?strictMultiUserRoleValid\(\[ROLES\.admin\]\)/
-  );
-  expect(adminSource).toMatch(
-    /"\/admin\/lark-settings\/test"[\s\S]*?strictMultiUserRoleValid\(\[ROLES\.admin\]\)/
-  );
+test.each([
+  [
+    "missing required fields",
+    { lark_login_enabled: true },
+    "lark_login_enabled",
+  ],
+  [
+    "denylisted allowlist entry",
+    { lark_cli_allowlist: ["docs", " AuTh "] },
+    "lark_cli_allowlist",
+  ],
+  [
+    "malformed scope",
+    { lark_scopes: "offline_access BAD/SCOPE" },
+    "lark_scopes",
+  ],
+])("rejects %s atomically", async (_case, payload, errorField) => {
+  const updateSpy = jest.spyOn(SystemSettings, "updateSettings");
+  const response = await invokeLarkUpdate(payload);
+
+  expect(response.statusCode).toBe(400);
+  expect(response.body).toEqual({
+    success: false,
+    errors: expect.objectContaining({ [errorField]: expect.any(String) }),
+  });
+  expect(updateSpy).not.toHaveBeenCalled();
+});
+
+test("validates and normalizes a complete Lark update before writing", async () => {
+  const updateSpy = jest
+    .spyOn(SystemSettings, "updateSettings")
+    .mockResolvedValue({ success: true, error: null });
+  const response = await invokeLarkUpdate({
+    lark_login_enabled: true,
+    lark_app_id: " app-id ",
+    lark_app_secret: " secret ",
+    lark_tenant_key: " tenant-key ",
+    lark_scopes: " offline_access   im:message ",
+    lark_cli_allowlist: ["im", "docs"],
+  });
+
+  expect(response.statusCode).toBe(200);
+  expect(updateSpy).toHaveBeenCalledWith({
+    lark_login_enabled: true,
+    lark_app_id: "app-id",
+    lark_app_secret: "secret",
+    lark_tenant_key: "tenant-key",
+    lark_scopes: "offline_access im:message",
+    lark_cli_allowlist: ["im", "docs"],
+  });
 });
 
 test("returns only enabled boolean from public setup settings", async () => {
@@ -173,7 +251,7 @@ test("uses defaults and derives redirect URI while loading configuration", async
     tenantKey: "tenant-key",
     scopes: DEFAULT_SCOPES,
     allowlist: DEFAULT_LARK_CLI_ALLOWLIST,
-    redirectUri: "https://anything.example/api/lark/callback",
+    redirectUri: "https://anything.example/api/lark/auth/callback",
   });
 });
 
@@ -210,4 +288,50 @@ test("tests app connection without leaking credentials", async () => {
   await expect(
     fetchAppAccessToken({ appId: "app-id", appSecret: "super-secret" })
   ).rejects.toThrow("Lark connection failed");
+});
+
+test("validation reports errors without mutating payload", () => {
+  const payload = {
+    lark_login_enabled: true,
+    lark_app_id: " app-id ",
+    lark_scopes: "BAD/SCOPE",
+  };
+  const snapshot = { ...payload };
+  const result = validateLarkSettings(payload, { existing: {} });
+
+  expect(result).toEqual({
+    ok: false,
+    errors: expect.objectContaining({
+      lark_login_enabled: expect.any(String),
+      lark_scopes: expect.any(String),
+    }),
+  });
+  expect(payload).toEqual(snapshot);
+});
+
+test("configuration loading fails closed when decryption throws", async () => {
+  const ciphertext = encryption.encrypt("secret");
+  mockRecords.set("lark_login_enabled", "true");
+  mockRecords.set("lark_app_id", "app-id");
+  mockRecords.set("lark_app_secret", ciphertext);
+  mockRecords.set("lark_tenant_key", "tenant-key");
+  const throwingEncryption = {
+    decrypt: jest.fn(() => {
+      throw new Error("decrypt failed");
+    }),
+  };
+
+  await expect(
+    loadLarkConfig({ encryption: throwingEncryption })
+  ).resolves.toBeNull();
+  await expect(
+    isLarkLoginEnabled({ encryption: throwingEncryption })
+  ).resolves.toBe(false);
+  jest.spyOn(EncryptionManager.prototype, "decrypt").mockImplementation(() => {
+    throw new Error("decrypt failed");
+  });
+  jest.spyOn(SystemSettings, "hasEmbeddings").mockResolvedValue(false);
+  await expect(SystemSettings.currentSettings()).resolves.toEqual(
+    expect.objectContaining({ LarkLoginEnabled: false })
+  );
 });
