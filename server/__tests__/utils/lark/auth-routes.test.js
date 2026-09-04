@@ -222,6 +222,10 @@ test("consumes state before exchanging callback code", async () => {
   });
   oauth.exchangeCode.mockImplementation(async () => {
     order.push("exchange");
+    return { accessToken: "access" };
+  });
+  oauth.fetchUserInfo.mockImplementation(async () => {
+    order.push("fetchUserInfo");
     throw new Error("provider detail");
   });
   jest.spyOn(console, "error").mockImplementation(() => {});
@@ -235,7 +239,7 @@ test("consumes state before exchanging callback code", async () => {
     get: (name) => (name === "host" ? "anything.test" : undefined),
   });
 
-  expect(order).toEqual(["consume", "exchange"]);
+  expect(order).toEqual(["consume", "exchange", "fetchUserInfo"]);
   expect(LarkOauthState.consume).toHaveBeenCalledWith("state-value", {
     withSecrets: true,
   });
@@ -358,6 +362,14 @@ test("maps denied and unknown callbacks without leaking details", async () => {
     protocol: "https",
     get: (name) => (name === "host" ? "anything.test" : undefined),
   });
+  expect(LarkOauthState.consume).toHaveBeenCalledWith("state-value", {
+    withSecrets: true,
+  });
+  expect(LarkOauthState.consume.mock.invocationCallOrder[0]).toBeLessThan(
+    res.redirect.mock.invocationCallOrder[0]
+  );
+  expect(oauth.exchangeCode).not.toHaveBeenCalled();
+  expect(oauth.fetchUserInfo).not.toHaveBeenCalled();
   expect(res.redirect).toHaveBeenCalledWith("/login?lark_error=denied");
   expect(res.redirect.mock.calls[0][0]).not.toContain("private");
 
@@ -369,6 +381,16 @@ test("maps denied and unknown callbacks without leaking details", async () => {
   });
   expect(res.redirect).toHaveBeenCalledWith("/login?lark_error=unknown");
   expect(res.redirect.mock.calls[0][0]).not.toContain("secret-code");
+});
+
+test("shares temporary token exchange handler across SSO providers", () => {
+  const { systemEndpoints } = require("../../../endpoints/system");
+  const app = fakeApp();
+  systemEndpoints(app);
+
+  const simpleHandler = app.routes["GET /request-token/sso/simple"].at(-1);
+  const larkHandler = app.routes["GET /request-token/sso/lark"].at(-1);
+  expect(larkHandler).toBe(simpleHandler);
 });
 
 test("exchanges temporary token without SIMPLE_SSO_ENABLED", async () => {
