@@ -65,7 +65,7 @@ function adminEndpoints(app) {
           slug: String(request.params.slug),
         });
         if (!workspace) return response.sendStatus(404).end();
-        const { enabledSkills } = reqBody(request);
+        const { enabledSkills } = reqBody(request) ?? {};
         if (!Array.isArray(enabledSkills))
           return response.sendStatus(400).end();
         const result = await WorkspaceAgentSettings.setEnabledSkills(

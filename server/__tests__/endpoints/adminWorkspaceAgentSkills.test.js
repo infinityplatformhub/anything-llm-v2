@@ -12,7 +12,6 @@ jest.mock("../../models/workspaceAgentSettings", () => ({
 jest.mock("../../utils/middleware/validatedRequest", () => ({
   validatedRequest: (_req, _res, next) => next(),
 }));
-const mockRoleCheck = jest.fn();
 jest.mock("../../utils/middleware/multiUserProtected", () => {
   const roles = {
     admin: "admin",
@@ -28,10 +27,7 @@ jest.mock("../../utils/middleware/multiUserProtected", () => {
   return {
     ROLES: roles,
     strictMultiUserRoleValid: guard,
-    flexUserRoleValid: (allowedRoles) => {
-      mockRoleCheck(allowedRoles);
-      return guard(allowedRoles);
-    },
+    flexUserRoleValid: guard,
   };
 });
 
@@ -88,7 +84,7 @@ function mockResponse() {
   };
 }
 
-async function invoke(app, method, { slug = "legal", body = {} } = {}) {
+async function invoke(app, method, { slug = "legal", body } = {}) {
   const route = app.routes.get(`${method} ${routePath}`);
   if (!route) return null;
   const response = mockResponse();
@@ -160,6 +156,13 @@ describe("/admin/workspace/:slug/agent-skills", () => {
     const response = await invoke(buildApp(), "POST", {
       body: { enabledSkills: "sql-agent" },
     });
+
+    expect(response.statusCode).toBe(400);
+    expect(WorkspaceAgentSettings.setEnabledSkills).not.toHaveBeenCalled();
+  });
+
+  it("POST 400 when body is missing", async () => {
+    const response = await invoke(buildApp(), "POST", { body: undefined });
 
     expect(response.statusCode).toBe(400);
     expect(WorkspaceAgentSettings.setEnabledSkills).not.toHaveBeenCalled();
