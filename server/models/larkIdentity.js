@@ -42,13 +42,11 @@ function pick(data, fields) {
 function normalizeWhere(where) {
   if (!where || typeof where !== "object" || Array.isArray(where)) return null;
 
-  for (const field of ["id", "user_id", "open_id"])
-    if (Object.hasOwn(where, field) && where[field] == null) return null;
+  const keys = Object.keys(where);
+  if (keys.length === 0 || keys.some((field) => where[field] == null))
+    return null;
 
-  const parsed = Object.fromEntries(
-    Object.entries(where).filter(([, value]) => value !== undefined)
-  );
-  if (Object.keys(parsed).length === 0) return null;
+  const parsed = { ...where };
 
   for (const field of ["id", "user_id"]) {
     if (!Object.hasOwn(parsed, field)) continue;

@@ -175,6 +175,24 @@ describe("LarkIdentity", () => {
     expect(prisma.lark_identities.findFirst).not.toHaveBeenCalled();
   });
 
+  it("rejects selector containing an undefined key alongside valid keys", async () => {
+    const where = { user_id: undefined, open_id: "ou_1" };
+
+    await expect(
+      LarkIdentity.get(where, { withSecrets: true })
+    ).resolves.toBeNull();
+    await expect(LarkIdentity.delete(where)).resolves.toBe(false);
+    await expect(
+      LarkIdentity.get(
+        { open_id: "ou_1", tenant_key: undefined },
+        { withSecrets: true }
+      )
+    ).resolves.toBeNull();
+
+    expect(prisma.lark_identities.findFirst).not.toHaveBeenCalled();
+    expect(prisma.lark_identities.deleteMany).not.toHaveBeenCalled();
+  });
+
   it("rejects empty deletes and accepts numeric identity selectors", async () => {
     await expect(LarkIdentity.delete()).resolves.toBe(false);
     expect(prisma.lark_identities.deleteMany).not.toHaveBeenCalled();
