@@ -182,6 +182,19 @@ test("requests approval for unknown classifications", async () => {
   expect(cli.runAsUser).toHaveBeenCalled();
 });
 
+test("does not run unknown classification after denied approval", async () => {
+  cli.classify.mockReturnValue("unknown");
+  const aibitat = fakeAibitat();
+  aibitat.requestToolApproval.mockResolvedValue({ approved: false });
+
+  await expect(
+    registeredHandler(aibitat)({ args: ["im", "+future-command"] })
+  ).resolves.toBe("Lark command was not approved.");
+
+  expect(aibitat.requestToolApproval).toHaveBeenCalled();
+  expect(cli.runAsUser).not.toHaveBeenCalled();
+});
+
 test("does not run write after denied or missing approval", async () => {
   cli.classify.mockReturnValue("write");
   const denied = fakeAibitat();
