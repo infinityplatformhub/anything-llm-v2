@@ -46,7 +46,11 @@ docker compose -f e2e/docker-compose.e2e.yml down -v
 
 `test.todo` cases are phase markers for behavior not implemented yet. Intentional skips live in `e2e/SKIPS.md`, one ` :: ` record per pending Jest test. `e2e/run.sh` compares that record count with Jest `numPendingTests`; any undocumented or stale skip makes the final verdict fail.
 
-B cases verify an enabled skill is attached and works. When logs show the skill attached but the model did not call its tool, only the B case retries, up to three total attempts. A and C never retry. A tool call with a wrong result or side effect fails immediately. This narrow retry handles model tool-choice nondeterminism without masking product behavior.
+## What gates the verdict vs what is reported
+
+B1 gates the verdict on product behavior. For each runnable skill, it enables the skill in `ws-alpha`, sends the prompt once, and requires the skill to be attached. If the model calls the tool, B1 also requires the expected content or side effect. No model-call retry occurs in B1. A and C remain strict gates, and the four unrunnable B cases remain documented skips.
+
+B2 reports model tool invocation separately. For each runnable skill, it retries up to three attempts until the model calls a tool, then checks the expected content or side effect. A B2 failure is recorded in `e2e/.state/model-nocall.json` instead of failing Jest. `e2e/run.sh` prints `MODEL_NOCALL=<n> skills=<comma list>` before `E2E_RESULT`; this metric does not affect the verdict.
 
 ## Negative controls
 

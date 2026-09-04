@@ -98,6 +98,18 @@ else
   printf '%s\n' "$playwright_output"
 fi
 
+model_nocall_output="MODEL_NOCALL=0 skills="
+if [[ -f "$STATE/model-nocall.json" ]]; then
+  # shellcheck disable=SC2016
+  model_nocall_output="$(node -e '
+const fs = require("fs");
+const entries = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const skills = entries.map((entry) => typeof entry === "string" ? entry : entry.skill);
+process.stdout.write(`MODEL_NOCALL=${entries.length} skills=${skills.join(",")}`);
+' "$STATE/model-nocall.json")"
+fi
+printf '%s\n' "$model_nocall_output"
+
 # Header describes format; intentional skip entries begin on line 2.
 skip_count="$(awk 'NR > 1 && / :: / { count++ } END { print count + 0 }' "$ROOT/e2e/SKIPS.md")"
 if [[ ! -f "$STATE/jest.json" ]]; then
