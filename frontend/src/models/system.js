@@ -970,6 +970,34 @@ const System = {
       .catch((e) => ({ text: null, error: e.message }));
   },
 
+  larkStatus: async function () {
+    return fetch(`${API_BASE}/lark/status`, {
+      method: "GET",
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .catch(() => null);
+  },
+
+  disconnectLark: async function () {
+    return fetch(`${API_BASE}/lark/identity`, {
+      method: "DELETE",
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .catch(() => ({ success: false }));
+  },
+
+  larkConnectUrl: async function () {
+    return fetch(`${API_BASE}/lark/auth/start?mode=connect`, {
+      method: "GET",
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .then((res) => res?.url ?? null)
+      .catch(() => null);
+  },
+
   experimentalFeatures: {
     liveSync: LiveDocumentSync,
     agentPlugins: AgentPlugins,
