@@ -27,17 +27,27 @@ jest.mock("../../../utils/MCP", () => {
   }));
 });
 
+const { WorkspaceAgentSettings } = require("../../../models/workspaceAgentSettings");
 const { WORKSPACE_AGENT } = require("../../../utils/agents/defaults");
 
 describe("WORKSPACE_AGENT.getDefinition", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    WorkspaceAgentSettings.enabledSkills.mockResolvedValue([]);
     SystemPromptVariables.expandSystemPromptVariables.mockReset();
     SystemPromptVariables.expandSystemPromptVariables.mockImplementation(
       async (prompt) => prompt.replace("{datetime}", "January 1, 2024 12:00 PM")
     );
     // Mock SystemSettings to return empty arrays for agent skills
     SystemSettings.getValueOrFallback = jest.fn().mockResolvedValue("[]");
+  });
+
+  it("returns no functions without a workspace", async () => {
+    WorkspaceAgentSettings.enabledSkills.mockResolvedValue(["rag-memory"]);
+
+    const definition = await WORKSPACE_AGENT.getDefinition(null, null, null, "");
+
+    expect(definition.functions).toEqual([]);
   });
 
   it("should use saneDefaultSystemPrompt when workspace has no openAiPrompt", async () => {

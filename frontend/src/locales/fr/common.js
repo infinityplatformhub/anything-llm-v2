@@ -318,8 +318,6 @@ const TRANSLATIONS = {
         description:
           "Permettez à votre agent d'utiliser SQL pour répondre à vos questions en lui fournissant un accès à divers fournisseurs de bases de données SQL.",
       },
-      default_skill:
-        "Par défaut, cette fonctionnalité est activée, mais vous pouvez la désactiver si vous ne souhaitez pas qu'elle soit disponible pour l'agent.",
       filesystem: {
         title: "Accès au système de fichiers",
         description:
@@ -742,6 +740,7 @@ const TRANSLATIONS = {
         description:
           "Permettez à l'agent de générer des images à partir du contenu de la conversation, ou d'éditer les images jointes à la conversation, en utilisant le fournisseur de génération d'images que vous avez configuré.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "Serveurs MCP",

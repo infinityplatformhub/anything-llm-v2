@@ -544,8 +544,6 @@ const TRANSLATIONS = {
           },
         },
       },
-      default_skill:
-        "Per defecte, aquesta habilitat està activada, però pots desactivar-la si no vols que estigui disponible per a l'agent.",
       outlook: {
         title: "Connector per a Outlook",
         description:
@@ -751,6 +749,7 @@ const TRANSLATIONS = {
         description:
           "Permet que l'agent generi imatges a partir del xat, o editi les imatges adjuntes a la conversa, utilitzant el proveïdor de generació d'imatges configurat.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "Servidors MCP",

@@ -14,14 +14,20 @@ function canonicalSkillIds(list) {
   return [
     ...new Set(
       list.filter(
-        (s) => typeof s === "string" && AgentPlugins[s]?.name === s
+        (s) =>
+          typeof s === "string" &&
+          Object.prototype.hasOwnProperty.call(AgentPlugins, s) &&
+          AgentPlugins[s].name === s
       )
     ),
   ];
 }
 
 const WorkspaceAgentSettings = {
-  /** @returns {Promise<string[]>} Canonical skill ids enabled for this workspace. */
+  /**
+   * @param {number|string} workspaceId
+   * @returns {Promise<string[]>} Canonical skill ids enabled for this workspace.
+   */
   enabledSkills: async function (workspaceId) {
     try {
       const workspace_id = Number(workspaceId);
@@ -38,6 +44,8 @@ const WorkspaceAgentSettings = {
 
   /**
    * Replace enabled skills with canonical, known skill ids.
+   * @param {number|string} workspaceId
+   * @param {string[]} skills
    * @returns {Promise<{enabledSkills: string[]|null, error: string|null}>}
    */
   setEnabledSkills: async function (workspaceId, skills) {

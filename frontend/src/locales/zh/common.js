@@ -308,8 +308,6 @@ const TRANSLATIONS = {
         description:
           "让您的代理能够利用 SQL 来回答您的问题，只需连接到各种 SQL 数据库提供商即可。",
       },
-      default_skill:
-        "默认情况下，这项技能已启用。但是，如果您不想让该技能被代理使用，您可以将其禁用。",
       filesystem: {
         title: "文件系统访问",
         description:
@@ -683,6 +681,7 @@ const TRANSLATIONS = {
         description:
           "允许代理使用您配置的图像生成提供商，从聊天内容中生成图片，或编辑与对话相关的图片。",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "MCP 服务器",

@@ -322,8 +322,6 @@ const TRANSLATIONS = {
         description:
           "Ļauj savam pārstāvim izmantot SQL, lai atbildētu uz jūsu jautājumiem, savienojoties ar dažādiem SQL datubāzes sniedzējiem.",
       },
-      default_skill:
-        "Par iestatījumu, šī spēja ir aktivizēta, taču jūs varat to izslēgt, ja nevēlaties, lai tā būtu pieejama aģentam.",
       filesystem: {
         title: "Failu sistēmas piekļuves tiesības",
         description:
@@ -734,6 +732,7 @@ const TRANSLATIONS = {
         description:
           "Ļauj aģentam ģenerēt attēlus no sarunas, vai rediģēt attēlus, kas pievienoti sarunai, izmantojot konfigurētu attēlu ģenerēšanas pakalpojumu.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "MCP serveri",

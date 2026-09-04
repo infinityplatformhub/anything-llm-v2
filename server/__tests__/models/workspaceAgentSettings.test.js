@@ -98,6 +98,20 @@ describe("WorkspaceAgentSettings", () => {
     expect(result).toEqual({ enabledSkills: ["rag-memory"], error: null });
   });
 
+  it("rejects inherited property names when writing", async () => {
+    await WorkspaceAgentSettings.setEnabledSkills(7, [
+      "rag-memory",
+      "toString",
+      "hasOwnProperty",
+    ]);
+
+    expect(prisma.workspace_agent_settings.upsert).toHaveBeenCalledWith({
+      where: { workspace_id: 7 },
+      create: { workspace_id: 7, enabled_skills: '["rag-memory"]' },
+      update: { enabled_skills: '["rag-memory"]' },
+    });
+  });
+
   it("returns null skills and error when writing fails", async () => {
     const error = new Error("write failed");
     const consoleError = jest.spyOn(console, "error").mockImplementation();

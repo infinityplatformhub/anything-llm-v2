@@ -319,8 +319,6 @@ const TRANSLATIONS = {
         description:
           "Giv din agent mulighed for at bruge SQL til at besvare dine spørgsmål ved at oprette forbindelse til forskellige SQL-databaseleverandører.",
       },
-      default_skill:
-        "Som standard er denne funktion aktiveret, men du kan deaktivere den, hvis du ikke ønsker, at den skal være tilgængelig for agenten.",
       filesystem: {
         title: "Adgang til filsystem",
         description:
@@ -718,6 +716,7 @@ const TRANSLATIONS = {
         description:
           "Lad agenten generere billeder fra chat, eller redigere de vedhæftede billeder i samtalen, ved hjælp af den leverandør, du har konfigureret til billedgenerering.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "MCP-servere",

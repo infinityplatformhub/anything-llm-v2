@@ -316,8 +316,6 @@ const TRANSLATIONS = {
         description:
           "Temsilcinizin, çeşitli SQL veri tabanı sağlayıcılarına bağlanarak SQL'i kullanarak sorularınızı yanıtlamasına olanak tanıyın.",
       },
-      default_skill:
-        "Varsayılan olarak bu özellik etkinleştirilmiştir, ancak ajanın kullanmasına izin vermek istemiyorsanız, bu özelliği devre dışı bırakabilirsiniz.",
       filesystem: {
         title: "Dosya Sistemi Erişimi",
         description:
@@ -734,6 +732,7 @@ const TRANSLATIONS = {
         description:
           "Ajantın, yapılandırılmış görüntü oluşturma sağlayıcınız aracılığıyla sohbetten görüntüler oluşturmasına veya konuşmaya eklenen görüntüleri düzenlemesine izin verin.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "MCP Sunucuları",

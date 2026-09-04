@@ -241,8 +241,6 @@ export default function AdminAgents() {
     if (skillRes?.success && workspaceSlugRef.current === workspaceSlug) {
       setAgentSkills(skillRes.enabledSkills ?? []);
       setSkillsLoadFailed(false);
-    } else if (skillRes && !skillRes.success) {
-      await loadWorkspaceSkills(workspaceSlug);
     }
 
     const failures = [];
