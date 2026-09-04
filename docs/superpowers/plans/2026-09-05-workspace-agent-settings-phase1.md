@@ -33,7 +33,7 @@
 | `frontend/src/pages/Admin/Agents/index.jsx` | modify | selector + load/save built-in skills per workspace |
 | `frontend/src/pages/WorkspaceSettings/AgentConfig/index.jsx:86-106` | modify | link carries `?workspace=<slug>`, copy no longer says "all workspaces" |
 
-**Skill id vocabulary (unchanged):** keys of `AgentPlugins` in `server/utils/agents/aibitat/plugins/index.js` (e.g. `rag-memory`, `document-summarizer`, `web-scraping`, `web-browsing`, `sql-agent`, `create-chart`, `save-file-to-browser`, …). `enabled_skills` stores those keys. Sub-skill filtering (`SKILL_FILTER_CONFIG`, `disabled_filesystem_skills` etc.) stays global in this phase.
+**Skill id vocabulary (unchanged, verified):** `AgentPlugins` in `server/utils/agents/aibitat/plugins/index.js` is keyed by each plugin's `.name` string: `rag-memory`, `document-summarizer`, `web-scraping`, `web-browsing`, `sql-agent`, `rechart`, `generate-image`, `filesystem`, `create-files`, `gmail`, `outlook`, `google-calendar`, `request-user-input`, `create-scheduled-job`, … `enabled_skills` stores those exact strings; `AgentPlugins[key].name === key`. The frontend already uses these same ids in `default_agent_skills`. Sub-skill filtering (`SKILL_FILTER_CONFIG`, `disabled_filesystem_skills` etc.) stays global in this phase.
 
 ---
 
@@ -416,8 +416,6 @@ jest.mock("../../utils/middleware/multiUserProtected", () => ({
   },
 }));
 
-const express = require("express");
-const request = require("supertest");
 const { Workspace } = require("../../models/workspace");
 const { WorkspaceAgentSettings } = require("../../models/workspaceAgentSettings");
 const { adminEndpoints } = require("../../endpoints/admin");
@@ -476,7 +474,7 @@ describe("/admin/workspace/:slug/agent-skills", () => {
 });
 ```
 
-If `supertest` is not installed at root or in `server/` (`ls node_modules/supertest server/node_modules/supertest`), check how other endpoint tests invoke handlers and mirror that instead of adding a dependency. Record as a Ruling either way.
+`supertest` is NOT installed and must not be added. Mirror `server/__tests__/endpoints/mobile/utils/*.test.js`: build a fake `app` whose `get`/`post` record `(path, middlewares, handler)` into a map, then invoke the handler directly with `{ params, body }` and a response stub exposing `status().json()` / `sendStatus().end()`. Replace the `request(buildApp())` calls accordingly; assert middlewares array contains the admin-only guard by checking `mockRoleCheck` was called with `["admin"]` for that specific path (record path → roles in the fake app).
 
 Note on the admin-only assertion: it counts *any* admin-only registration in `admin.js`, so it is a weak guard. Strengthen it by also asserting, after `buildApp()`, that `app._router.stack` contains a layer whose `route.path === "/admin/workspace/:slug/agent-skills"` for both `get` and `post`.
 
