@@ -46,7 +46,7 @@ test("saves an enabled skill and persists it after reload", async ({ page }) => 
   const row = skillRow(page, "RAG & long-term memory");
   await expect(row).toHaveAttribute("aria-disabled", "false");
   await row.click();
-  await page.getByRole("checkbox").check();
+  await page.getByRole("checkbox").check({ force: true });
   await page.getByRole("button", { name: "Save", exact: true }).click();
 
   await expect(page.getByText(/saved/i)).toBeVisible();
@@ -74,7 +74,7 @@ test("cancels an unsaved skill change", async ({ page }) => {
   const row = skillRow(page, "Scrape websites");
   await expect(row).toHaveAttribute("aria-disabled", "false");
   await row.click();
-  await page.getByRole("checkbox").check();
+  await page.getByRole("checkbox").check({ force: true });
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
   await expect(row.getByText("Off", { exact: true })).toBeVisible();

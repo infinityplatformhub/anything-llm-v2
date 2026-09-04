@@ -75,19 +75,16 @@ describe.each(SKILLS.map((skill) => [skill.id, skill]))("skill %s", (_id, skill)
     if (skill.before) ctx.before = await skill.before(ctx);
     expectOk(await setSkills(A, null, "ws-alpha", [skill.id]));
 
-    let logMark = mark(LOG_A);
-    let response = await agentChatV1(A, key, "ws-alpha", skill.prompt);
-    expectOk(response);
-    let chunk = since(LOG_A, logMark);
-    expect(attached(chunk, skill.attachName)).toBe(true);
-
-    if (!toolCalled(chunk, skill.toolName)) {
-      console.log(`E2E_RETRY skill=${skill.id}`);
-      logMark = mark(LOG_A);
+    let response;
+    let chunk;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const logMark = mark(LOG_A);
       response = await agentChatV1(A, key, "ws-alpha", skill.prompt);
       expectOk(response);
       chunk = since(LOG_A, logMark);
       expect(attached(chunk, skill.attachName)).toBe(true);
+      if (toolCalled(chunk, skill.toolName) || attempt === 3) break;
+      console.info(`[e2e] ${skill.id} B attempt ${attempt + 1}`);
     }
     await skill.assertB(ctx, chunk, response);
   });

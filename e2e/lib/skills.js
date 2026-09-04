@@ -15,7 +15,7 @@ const SKILLS = [
     id: "rag-memory",
     attachName: "rag-memory",
     toolName: "rag-memory",
-    prompt: "Call rag-memory({action:\"search\",content:\"Alpha workspace secret token\"}) immediately. Do not answer from prior knowledge. Reply with token from tool result.",
+    prompt: "You must call the rag-memory tool before answering; do not answer from memory. Call rag-memory({action:\"search\",content:\"Alpha workspace secret token\"}) and reply with token from tool result.",
     assertB: async (ctx, chunk, response) => {
       expect(toolCalled(chunk, "rag-memory")).toBe(true);
       expect(text(response)).toContain("ALPHA-TOKEN-7731");
@@ -59,7 +59,7 @@ const SKILLS = [
     id: "sql-agent",
     attachName: "sql-agent",
     toolName: "sql-query",
-    prompt: "Call sql-query({database_id:\"alpha_db\",sql_query:\"SELECT COUNT(*) AS count FROM customers\"}) immediately. Do not list databases or explain. Reply only with returned count.",
+    prompt: "You must call the sql-query tool before answering. Call sql-query({database_id:\"alpha_db\",sql_query:\"SELECT COUNT(*) AS count FROM customers\"}); do not list databases or explain. Reply only with returned count.",
     assertB: async (_ctx, chunk, response) => {
       expect(toolCalled(chunk, "sql-query")).toBe(true);
       expect(text(response)).toContain("3");
