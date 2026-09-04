@@ -4,6 +4,12 @@ const { Document } = require("../models/documents");
 const { EventLogs } = require("../models/eventLogs");
 const { Invite } = require("../models/invite");
 const { SystemSettings } = require("../models/systemSettings");
+const { DEFAULT_SCOPES } = require("../utils/lark/constants");
+const {
+  DEFAULT_LARK_CLI_ALLOWLIST,
+  fetchAppAccessToken,
+  loadLarkConfig,
+} = require("../utils/lark/settings");
 const { User } = require("../models/user");
 const { DocumentVectors } = require("../models/vectors");
 const { Workspace } = require("../models/workspace");
@@ -446,6 +452,22 @@ function adminEndpoints(app) {
             case "memory_auto_extraction":
               requestedSettings[label] = setting?.value ?? "true";
               break;
+            case "lark_login_enabled":
+              requestedSettings[label] = setting?.value === "true";
+              break;
+            case "lark_app_id":
+            case "lark_tenant_key":
+              requestedSettings[label] = setting?.value || "";
+              break;
+            case "lark_scopes":
+              requestedSettings[label] = setting?.value || DEFAULT_SCOPES;
+              break;
+            case "lark_cli_allowlist":
+              requestedSettings[label] = safeJsonParse(
+                setting?.value,
+                DEFAULT_LARK_CLI_ALLOWLIST
+              );
+              break;
             default:
               break;
           }
@@ -455,6 +477,97 @@ function adminEndpoints(app) {
       } catch (e) {
         console.error(e);
         response.sendStatus(500).end();
+      }
+    }
+  );
+
+  app.get(
+    "/admin/lark-settings",
+    [validatedRequest, strictMultiUserRoleValid([ROLES.admin])],
+    async (_request, response) => {
+      try {
+        const labels = [
+          "lark_login_enabled",
+          "lark_app_id",
+          "lark_app_secret",
+          "lark_tenant_key",
+          "lark_scopes",
+          "lark_cli_allowlist",
+        ];
+        const values = Object.fromEntries(
+          await Promise.all(
+            labels.map(async (label) => [
+              label,
+              (await SystemSettings.get({ label }))?.value,
+            ])
+          )
+        );
+        response.status(200).json({
+          settings: {
+            lark_login_enabled: values.lark_login_enabled === "true",
+            lark_app_id: values.lark_app_id || "",
+            lark_app_secret: values.lark_app_secret ? "********" : "",
+            lark_tenant_key: values.lark_tenant_key || "",
+            lark_scopes: values.lark_scopes || DEFAULT_SCOPES,
+            lark_cli_allowlist: safeJsonParse(
+              values.lark_cli_allowlist,
+              DEFAULT_LARK_CLI_ALLOWLIST
+            ),
+          },
+        });
+      } catch (e) {
+        console.error(e);
+        response
+          .status(500)
+          .json({ settings: null, error: "Could not load Lark settings." });
+      }
+    }
+  );
+
+  app.post(
+    "/admin/lark-settings",
+    [validatedRequest, strictMultiUserRoleValid([ROLES.admin])],
+    async (request, response) => {
+      try {
+        const updates = reqBody(request);
+        const larkKeys = [
+          "lark_login_enabled",
+          "lark_app_id",
+          "lark_app_secret",
+          "lark_tenant_key",
+          "lark_scopes",
+          "lark_cli_allowlist",
+        ];
+        const filtered = Object.fromEntries(
+          Object.entries(updates).filter(([key]) => larkKeys.includes(key))
+        );
+        const { success, error } =
+          await SystemSettings.updateSettings(filtered);
+        response.status(success ? 200 : 400).json({ success, error });
+      } catch (e) {
+        console.error(e);
+        response
+          .status(500)
+          .json({ success: false, error: "Could not update Lark settings." });
+      }
+    }
+  );
+
+  app.post(
+    "/admin/lark-settings/test",
+    [validatedRequest, strictMultiUserRoleValid([ROLES.admin])],
+    async (_request, response) => {
+      try {
+        const config = await loadLarkConfig();
+        if (!config) throw new Error("missing configuration");
+        const result = await fetchAppAccessToken(config);
+        response
+          .status(200)
+          .json({ ok: true, tenant_key: result.tenantKey || config.tenantKey });
+      } catch {
+        response
+          .status(200)
+          .json({ ok: false, error: "Lark connection failed" });
       }
     }
   );

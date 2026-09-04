@@ -175,6 +175,31 @@ const Admin = {
         return null;
       });
   },
+  larkSettings: async () => {
+    return await fetch(`${API_BASE}/admin/lark-settings`, {
+      method: "GET",
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .catch((e) => ({ settings: null, error: e.message }));
+  },
+  updateLarkSettings: async (data = {}) => {
+    return await fetch(`${API_BASE}/admin/lark-settings`, {
+      method: "POST",
+      headers: baseHeaders(),
+      body: JSON.stringify(data),
+    })
+      .then((res) => res.json())
+      .catch((e) => ({ success: false, error: e.message }));
+  },
+  testLarkConnection: async () => {
+    return await fetch(`${API_BASE}/admin/lark-settings/test`, {
+      method: "POST",
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .catch(() => ({ ok: false, error: "Lark connection failed" }));
+  },
   updateSystemPreferences: async (updates = {}) => {
     return await fetch(`${API_BASE}/admin/system-preferences`, {
       method: "POST",

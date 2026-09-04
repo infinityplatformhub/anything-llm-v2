@@ -65,6 +65,11 @@ const SystemSettings = {
     "meta_page_favicon",
     "memory_enabled",
     "memory_auto_extraction",
+    "lark_login_enabled",
+    "lark_app_id",
+    "lark_tenant_key",
+    "lark_scopes",
+    "lark_cli_allowlist",
   ],
   supportedFields: [
     "logo_filename",
@@ -104,8 +109,68 @@ const SystemSettings = {
     // Memory/Personalization
     "memory_enabled",
     "memory_auto_extraction",
+
+    // Lark authentication and agent tools
+    "lark_login_enabled",
+    "lark_app_id",
+    "lark_app_secret",
+    "lark_tenant_key",
+    "lark_scopes",
+    "lark_cli_allowlist",
   ],
   validations: {
+    lark_login_enabled: (value) => {
+      if (value === true || value === "true") return true;
+      if (value === false || value === "false") return false;
+      return undefined;
+    },
+    lark_app_id: (value) =>
+      typeof value === "string" && value.trim() ? value.trim() : undefined,
+    lark_app_secret: (value) => {
+      if (
+        typeof value !== "string" ||
+        !value.trim() ||
+        /^\*+$/.test(value.trim())
+      )
+        return undefined;
+      const { EncryptionManager } = require("../utils/EncryptionManager");
+      return new EncryptionManager().encrypt(value.trim()) || undefined;
+    },
+    lark_tenant_key: (value) =>
+      typeof value === "string" && value.trim() ? value.trim() : undefined,
+    lark_scopes: (value) => {
+      if (typeof value !== "string") return undefined;
+      const scopes = value.trim().split(/\s+/).filter(Boolean);
+      if (
+        !scopes.length ||
+        scopes.some((scope) => !/^[a-z0-9_.:-]+$/.test(scope))
+      )
+        return undefined;
+      return scopes.join(" ");
+    },
+    lark_cli_allowlist: (value) => {
+      const denied = new Set(["auth", "config", "profile", "logout", "api"]);
+      let entries = value;
+      try {
+        if (typeof entries === "string") entries = JSON.parse(entries);
+      } catch {
+        return undefined;
+      }
+      if (!Array.isArray(entries)) return undefined;
+      const normalized = entries.map((entry) =>
+        typeof entry === "string" ? entry.trim() : ""
+      );
+      if (
+        normalized.some(
+          (entry) =>
+            !entry ||
+            !/^[a-z0-9-]+$/.test(entry) ||
+            denied.has(entry.toLowerCase())
+        )
+      )
+        return undefined;
+      return JSON.stringify(normalized);
+    },
     footer_data: (updates) => {
       try {
         const array = JSON.parse(updates)
@@ -620,6 +685,8 @@ const SystemSettings = {
       // --------------------------------------------------------
       // Simple SSO Settings
       // --------------------------------------------------------
+      LarkLoginEnabled:
+        await require("../utils/lark/settings").isLarkLoginEnabled(),
       SimpleSSOEnabled: "SIMPLE_SSO_ENABLED" in process.env || false,
       SimpleSSONoLogin: "SIMPLE_SSO_NO_LOGIN" in process.env || false,
       SimpleSSONoLoginRedirect: this.simpleSSO.noLoginRedirect(),
