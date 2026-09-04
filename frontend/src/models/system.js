@@ -827,6 +827,32 @@ const System = {
   },
 
   /**
+   * Validates a Lark temporary auth token and logs in the user.
+   * @param {string} publicToken - the token to validate against
+   * @returns {Promise<{valid: boolean, user: import("@prisma/client").users | null, token: string | null, message: string | null}>}
+   */
+  larkSSOLogin: async function (publicToken) {
+    return fetch(
+      `${API_BASE}/request-token/sso/lark?token=${encodeURIComponent(publicToken)}`,
+      {
+        method: "GET",
+      }
+    )
+      .then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text();
+          if (!text.startsWith("{")) throw new Error(text);
+          return JSON.parse(text);
+        }
+        return await res.json();
+      })
+      .catch((e) => {
+        console.error(e);
+        return { valid: false, user: null, token: null, message: e.message };
+      });
+  },
+
+  /**
    * Fetches the app version from the server.
    * @returns {Promise<string | null>} The app version.
    */

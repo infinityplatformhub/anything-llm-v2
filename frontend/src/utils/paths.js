@@ -30,6 +30,9 @@ export default {
     login: () => {
       return "/sso/simple";
     },
+    lark: () => {
+      return "/sso/lark";
+    },
   },
   onboarding: {
     home: () => {

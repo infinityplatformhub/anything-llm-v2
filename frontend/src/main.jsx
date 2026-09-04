@@ -9,6 +9,7 @@ import PrivateRoute, {
 } from "@/components/PrivateRoute";
 import Login from "@/pages/Login";
 import SimpleSSOPassthrough from "@/pages/Login/SSO/simple";
+import LarkSSOPassthrough from "@/pages/Login/SSO/lark";
 import OnboardingFlow from "@/pages/OnboardingFlow";
 import "@/index.css";
 
@@ -34,6 +35,10 @@ const router = createBrowserRouter([
       {
         path: "/sso/simple",
         element: <SimpleSSOPassthrough />,
+      },
+      {
+        path: "/sso/lark",
+        element: <LarkSSOPassthrough />,
       },
       {
         path: "/workspace/:slug/settings/:tab",
