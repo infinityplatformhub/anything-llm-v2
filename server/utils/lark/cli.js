@@ -24,6 +24,15 @@ class AuditedError extends Error {
   }
 }
 
+// Diagnostics never take an Error object or any free-form text: only the fixed
+// reason plus a redacted message, so a leaked token cannot reach the log.
+function logFailure(reason, error, secrets = []) {
+  console.error(
+    `Lark CLI ${reason}`,
+    redact(String(error?.message ?? ""), secrets)
+  );
+}
+
 function validateArgs(args) {
   if (!Array.isArray(args) || args.length === 0)
     return { ok: false, reason: "Arguments must be a non-empty array" };
@@ -239,7 +248,7 @@ async function runAsUser({ userId, args, encryption } = {}) {
   } catch (error) {
     // Audits before both secrets resolve carry fixed reasons only; the real
     // error is never a safe audit payload because it can echo config values.
-    console.error("Lark CLI config load failed", error);
+    logFailure("config_load_failed", error);
     await audit(userId, {
       outcome: "error",
       reason: "config_load_failed",
@@ -269,7 +278,7 @@ async function runAsUser({ userId, args, encryption } = {}) {
         encryption: manager,
       });
     } catch (error) {
-      console.error("Lark CLI token refresh failed", error);
+      logFailure("token_refresh_failed", error, secrets);
       throw new AuditedError("token_refresh_failed");
     }
     secrets.push(accessToken);
@@ -277,7 +286,8 @@ async function runAsUser({ userId, args, encryption } = {}) {
     // Still pre-token: fixed reasons only, and never user-controlled args.
     await audit(userId, {
       outcome: "error",
-      reason: error.reason || "identity_missing",
+      reason:
+        error instanceof AuditedError ? error.reason : "identity_missing",
       exitCode: undefined,
       timedOut: false,
       truncated: false,

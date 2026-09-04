@@ -633,3 +633,44 @@ test("audits successful run with recursively redacted arguments", async () => {
     "u-abcdefghijklmnopqrst"
   );
 });
+
+test("ignores a foreign reason property on a rejected identity lookup", async () => {
+  LarkIdentity.get.mockRejectedValue({ reason: "evil text" });
+
+  await expect(
+    runAsUser({ userId: 4, args: ["contact", "search"], encryption })
+  ).resolves.toEqual({ ok: false, error: "Reconnect Lark in Settings" });
+
+  const metadata = EventLogs.logEvent.mock.calls[0][1];
+  expect(metadata.reason).toBe("identity_missing");
+  expect(JSON.stringify(EventLogs.logEvent.mock.calls)).not.toContain(
+    "evil text"
+  );
+});
+
+test("redacts credentials from console diagnostics on pre-secret failures", async () => {
+  loadLarkConfig.mockRejectedValueOnce(
+    new Error("config read u-abcdefghijklmnopqrst failed")
+  );
+  await runAsUser({ userId: 4, args: ["contact", "search"], encryption });
+
+  getFreshAccessToken.mockRejectedValueOnce(
+    new Error("refresh denied for u-zyxwvutsrqponmlkjihg")
+  );
+  await runAsUser({ userId: 4, args: ["contact", "search"], encryption });
+
+  const logged = JSON.stringify(
+    console.error.mock.calls.map((call) =>
+      call.map((entry) =>
+        entry instanceof Error ? entry.stack || entry.message : entry
+      )
+    )
+  );
+  expect(logged).toContain("config_load_failed");
+  expect(logged).toContain("token_refresh_failed");
+  expect(logged).toContain("[redacted]");
+  expect(logged).not.toContain("u-abcdefghijklmnopqrst");
+  expect(logged).not.toContain("u-zyxwvutsrqponmlkjihg");
+  for (const call of console.error.mock.calls)
+    for (const entry of call) expect(entry).not.toBeInstanceOf(Error);
+});
