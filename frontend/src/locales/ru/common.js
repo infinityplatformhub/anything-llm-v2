@@ -783,6 +783,9 @@ const TRANSLATIONS = {
         },
       },
     },
+    workspaceSelector: {
+      scopeNote: null,
+    },
   },
   recorded: {
     title: "Чаты рабочего пространства",

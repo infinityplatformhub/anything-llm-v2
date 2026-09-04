@@ -797,6 +797,9 @@ const TRANSLATIONS = {
         },
       },
     },
+    workspaceSelector: {
+      scopeNote: null,
+    },
   },
   recorded: {
     title: "Workspace-Chats",

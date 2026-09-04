@@ -756,6 +756,9 @@ const TRANSLATIONS = {
         },
       },
     },
+    workspaceSelector: {
+      scopeNote: null,
+    },
   },
   recorded: {
     title: "워크스페이스 채팅",

@@ -731,6 +731,9 @@ const TRANSLATIONS = {
         },
       },
     },
+    workspaceSelector: {
+      scopeNote: null,
+    },
   },
   recorded: {
     title: "工作区聊天历史记录",

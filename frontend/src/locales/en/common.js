@@ -281,6 +281,10 @@ const TRANSLATIONS = {
     },
   },
   agent: {
+    workspaceSelector: {
+      scopeNote:
+        "Everything on this page belongs to the selected workspace only.",
+    },
     "performance-warning":
       "Performance of LLMs that do not explicitly support tool-calling is highly dependent on the model's capabilities and accuracy. Some abilities may be limited or non-functional.",
     provider: {

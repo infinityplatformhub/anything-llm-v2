@@ -1,3 +1,4 @@
+// Anything with "null" requires a translation. Contribute to translation via a PR!
 const TRANSLATIONS = {
   onboarding: {
     home: {
@@ -775,6 +776,9 @@ const TRANSLATIONS = {
             "Hur många förtydligande frågor agenten får ställa i en enda omgång.",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
     },
   },
   recorded: {
