@@ -1,6 +1,11 @@
 const { SystemSettings } = require("../../models/systemSettings");
 const { EncryptionManager } = require("../EncryptionManager");
-const { APP_ACCESS_TOKEN_URL, DEFAULT_SCOPES } = require("./constants");
+const {
+  APP_ACCESS_TOKEN_URL,
+  DEFAULT_SCOPES,
+  TENANT_ACCESS_TOKEN_URL,
+  TENANT_QUERY_URL,
+} = require("./constants");
 
 const LARK_AUTH_CALLBACK_PATH = "/api/lark/auth/callback";
 
@@ -190,22 +195,59 @@ async function isLarkLoginEnabled({ encryption } = {}) {
 }
 
 async function fetchAppAccessToken({ appId, appSecret }) {
+  let response;
+  let payload;
   try {
-    const response = await fetch(APP_ACCESS_TOKEN_URL, {
+    response = await fetch(APP_ACCESS_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
     });
-    const payload = await response.json();
-    if (!response.ok || Number(payload?.code) !== 0)
-      throw new Error("request rejected");
-    return {
-      ...(payload.tenant_key && { tenantKey: payload.tenant_key }),
-      expire: payload.expire,
-    };
+    payload = await response.json();
   } catch {
-    throw new Error("Lark connection failed");
+    throw Object.assign(new Error("Lark connection failed"), {
+      code: "unreachable",
+    });
   }
+  if (!response.ok || Number(payload?.code) !== 0)
+    throw Object.assign(new Error("Lark connection failed"), {
+      code: "rejected",
+    });
+  const result = { expire: payload.expire };
+  try {
+    const tokenResponse = await fetch(TENANT_ACCESS_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+    });
+    const token = await tokenResponse.json();
+    if (
+      !tokenResponse.ok ||
+      Number(token?.code) !== 0 ||
+      typeof token.tenant_access_token !== "string" ||
+      !token.tenant_access_token
+    )
+      return result;
+
+    const tenantResponse = await fetch(TENANT_QUERY_URL, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token.tenant_access_token}` },
+    });
+    const tenantPayload = await tenantResponse.json();
+    const tenant = tenantPayload?.data?.tenant;
+    if (
+      tenantResponse.ok &&
+      Number(tenantPayload?.code) === 0 &&
+      typeof tenant?.tenant_key === "string" &&
+      tenant.tenant_key.trim()
+    ) {
+      result.tenantKey = tenant.tenant_key;
+      if (typeof tenant.name === "string") result.tenantName = tenant.name;
+    }
+  } catch {
+    // Credentials are valid even when tenant discovery is unavailable.
+  }
+  return result;
 }
 
 module.exports = {

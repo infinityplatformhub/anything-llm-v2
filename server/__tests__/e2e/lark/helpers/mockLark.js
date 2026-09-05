@@ -48,6 +48,7 @@ class MockLark {
     this.expiresIn = 7200;
     this.refreshExpiresIn = 604800;
     this.appAccessTokenOk = true;
+    this.tenantQueryOk = true;
     /** access token -> user info snapshot */
     this.accessTokens = new Map();
     /** code -> {user, challenge} */
@@ -72,6 +73,7 @@ class MockLark {
     this.expiresIn = 7200;
     this.refreshExpiresIn = 604800;
     this.appAccessTokenOk = true;
+    this.tenantQueryOk = true;
     this.accessTokens.clear();
     this.codes.clear();
     this.refreshTokens.clear();
@@ -135,6 +137,15 @@ class MockLark {
       return this.userInfo(request, response);
     if (url.pathname === "/open-apis/auth/v3/app_access_token/internal")
       return this.appAccessToken(response);
+    if (url.pathname === "/open-apis/auth/v3/tenant_access_token/internal")
+      return json(response, 200, { code: 0, tenant_access_token: "mock-tenant-token", expire: 7200 });
+    if (url.pathname === "/open-apis/tenant/v2/tenant/query") {
+      if (!this.tenantQueryOk)
+        return json(response, 403, { code: 99991672, msg: "missing scope" });
+      if (request.headers.authorization !== "Bearer mock-tenant-token")
+        return json(response, 401, { code: 99991663, msg: "bad token" });
+      return json(response, 200, { code: 0, data: { tenant: { tenant_key: this.tenantKey, name: "E2E Tenant" } } });
+    }
     return json(response, 404, { code: 404, msg: "not found" });
   }
 
@@ -217,7 +228,6 @@ class MockLark {
       code: 0,
       msg: "ok",
       app_access_token: this.nextId("aat"),
-      tenant_key: this.tenantKey,
       expire: 7200,
     });
   }

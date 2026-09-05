@@ -42,6 +42,7 @@ const LABEL_STYLES = {
  * @param {string} [props.gapClassName] - Additional CSS classes for gap
  */
 export default function Toggle({
+  "data-testid": testId,
   className,
   enabled,
   onChange,
@@ -61,6 +62,8 @@ export default function Toggle({
     enabled !== undefined
       ? { checked: enabled, onChange: (e) => onChange?.(e.target.checked) }
       : { defaultChecked: false };
+
+  inputProps["data-testid"] = testId;
 
   const labelStyles = LABEL_STYLES[size] || LABEL_STYLES.sm;
 

@@ -161,13 +161,35 @@ export default function LarkSettings() {
   async function testConnection() {
     setTesting(true);
     setTestResult(null);
-    const response = await Admin.testLarkConnection();
+    const response = await Admin.testLarkConnection({
+      lark_app_id: appId,
+      ...(secretEditing &&
+        appSecret !== MASKED_SECRET && { lark_app_secret: appSecret }),
+    });
     setTesting(false);
     if (response?.ok) {
-      setTestResult({ ok: true, tenantKey: response.tenant_key || "Unknown" });
+      if (response.tenant_key)
+        setTenantKey((current) =>
+          current.trim() ? current : response.tenant_key
+        );
+      setTestResult({
+        ok: true,
+        message: response.tenant_key
+          ? `Connection successful. Tenant: ${response.tenant_name || response.tenant_key}`
+          : "Connection successful, but the tenant could not be read. Add the tenant:tenant:readonly scope in Lark Developer Console or enter the tenant_key manually.",
+      });
       return;
     }
-    setTestResult({ ok: false });
+    setTestResult({
+      ok: false,
+      message:
+        {
+          missing_credentials: "Enter App ID and App Secret first.",
+          rejected: "Lark rejected the App ID or App Secret.",
+          unreachable: "Could not reach Lark. Check network and try again.",
+        }[response?.error] ||
+        "Could not reach Lark. Check network and try again.",
+    });
   }
 
   if (loading) return <FullScreenLoader />;
@@ -198,6 +220,7 @@ export default function LarkSettings() {
             className="flex w-full max-w-[760px] flex-col gap-6 py-6"
           >
             <Toggle
+              data-testid="lark-enabled"
               size="lg"
               enabled={enabled}
               onChange={setEnabled}
@@ -211,6 +234,7 @@ export default function LarkSettings() {
               <Field label="App ID" error={errors.lark_app_id}>
                 <input
                   id="lark-app-id"
+                  data-testid="lark-app-id"
                   value={appId}
                   onChange={(event) => setAppId(event.target.value)}
                   className={inputClass}
@@ -225,6 +249,7 @@ export default function LarkSettings() {
                 <div className="flex gap-2">
                   <input
                     id="lark-app-secret"
+                    data-testid="lark-app-secret"
                     type={secretEditing ? "password" : "text"}
                     value={appSecret}
                     onChange={(event) => setAppSecret(event.target.value)}
@@ -253,6 +278,7 @@ export default function LarkSettings() {
             >
               <input
                 id="lark-tenant-key"
+                data-testid="lark-tenant-key"
                 value={tenantKey}
                 onChange={(event) => setTenantKey(event.target.value)}
                 className={inputClass}
@@ -358,21 +384,21 @@ export default function LarkSettings() {
             {testResult && (
               <div
                 role="status"
+                data-testid="lark-test-result"
                 className={`rounded-lg border px-4 py-3 text-sm ${
                   testResult.ok
                     ? "border-green-500/30 bg-green-500/10 text-green-400"
                     : "border-red-500/30 bg-red-500/10 text-red-400"
                 }`}
               >
-                {testResult.ok
-                  ? `Connection successful. Tenant: ${testResult.tenantKey}`
-                  : "Connection failed. Check App ID and App Secret."}
+                {testResult.message}
               </div>
             )}
 
             <div className="flex flex-wrap gap-3">
               <button
                 type="button"
+                data-testid="lark-test-connection"
                 onClick={testConnection}
                 disabled={testing}
                 className={secondaryButtonClass}
@@ -381,6 +407,7 @@ export default function LarkSettings() {
               </button>
               <button
                 type="submit"
+                data-testid="lark-save"
                 disabled={saving || enablementIncomplete}
                 className="rounded-lg bg-primary-button px-4 py-2.5 text-sm font-medium text-white hover:bg-primary-button-hover disabled:cursor-not-allowed disabled:opacity-50"
               >

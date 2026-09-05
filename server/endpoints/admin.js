@@ -4,11 +4,11 @@ const { Document } = require("../models/documents");
 const { EventLogs } = require("../models/eventLogs");
 const { Invite } = require("../models/invite");
 const { SystemSettings } = require("../models/systemSettings");
+const { EncryptionManager } = require("../utils/EncryptionManager");
 const { DEFAULT_SCOPES } = require("../utils/lark/constants");
 const {
   DEFAULT_LARK_CLI_ALLOWLIST,
   fetchAppAccessToken,
-  loadLarkConfig,
   validateLarkSettings,
 } = require("../utils/lark/settings");
 const { User } = require("../models/user");
@@ -568,18 +568,47 @@ function adminEndpoints(app) {
   app.post(
     "/admin/lark-settings/test",
     [validatedRequest, strictMultiUserRoleValid([ROLES.admin])],
-    async (_request, response) => {
+    async (request, response) => {
       try {
-        const config = await loadLarkConfig();
-        if (!config) throw new Error("missing configuration");
-        const result = await fetchAppAccessToken(config);
-        response
-          .status(200)
-          .json({ ok: true, tenant_key: result.tenantKey || config.tenantKey });
-      } catch {
-        response
-          .status(200)
-          .json({ ok: false, error: "Lark connection failed" });
+        const body = reqBody(request) || {};
+        const appId =
+          body.lark_app_id ||
+          (await SystemSettings.get({ label: "lark_app_id" }))?.value;
+        let appSecret = body.lark_app_secret;
+        if (
+          appSecret === undefined ||
+          appSecret === "" ||
+          (typeof appSecret === "string" &&
+            (!appSecret.trim() || appSecret.trim() === "********"))
+        ) {
+          const stored = (
+            await SystemSettings.get({ label: "lark_app_secret" })
+          )?.value;
+          appSecret = stored ? new EncryptionManager().decrypt(stored) : null;
+        }
+        const validation = validateLarkSettings({ lark_app_id: appId });
+        if (
+          !validation.ok ||
+          typeof appSecret !== "string" ||
+          !appSecret.trim()
+        )
+          return response
+            .status(200)
+            .json({ ok: false, error: "missing_credentials" });
+        const result = await fetchAppAccessToken({
+          appId: validation.values.lark_app_id,
+          appSecret: appSecret.trim(),
+        });
+        response.status(200).json({
+          ok: true,
+          tenant_key: result.tenantKey || null,
+          tenant_name: result.tenantName || null,
+        });
+      } catch (error) {
+        response.status(200).json({
+          ok: false,
+          error: error.code === "rejected" ? "rejected" : "unreachable",
+        });
       }
     }
   );

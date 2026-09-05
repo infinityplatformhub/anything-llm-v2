@@ -192,13 +192,14 @@ const Admin = {
       .then((res) => res.json())
       .catch((e) => ({ success: false, error: e.message }));
   },
-  testLarkConnection: async () => {
+  testLarkConnection: async (payload = {}) => {
     return await fetch(`${API_BASE}/admin/lark-settings/test`, {
       method: "POST",
       headers: baseHeaders(),
+      body: JSON.stringify(payload),
     })
       .then((res) => res.json())
-      .catch(() => ({ ok: false, error: "Lark connection failed" }));
+      .catch(() => ({ ok: false, error: "unreachable" }));
   },
   updateSystemPreferences: async (updates = {}) => {
     return await fetch(`${API_BASE}/admin/system-preferences`, {

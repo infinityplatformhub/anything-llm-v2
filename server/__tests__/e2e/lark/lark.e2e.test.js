@@ -126,6 +126,31 @@ describe("Lark end-to-end", () => {
     expect(defaults.json.settings.lark_login_enabled).toBe(false);
     expect(defaults.json.settings.lark_app_secret).toBe("");
 
+    const missingConnection = await server.api("/api/admin/lark-settings/test", {
+      method: "POST", token: adminToken, body: {},
+    });
+    expect(missingConnection.status).toBe(200);
+    expect(missingConnection.json).toEqual({ ok: false, error: "missing_credentials" });
+    const beforeSave = await server.api("/api/admin/lark-settings/test", {
+      method: "POST", token: adminToken,
+      body: { lark_app_id: APP_ID, lark_app_secret: APP_SECRET },
+    });
+    expect(beforeSave.status).toBe(200);
+    expect(beforeSave.json).toEqual({ ok: true, tenant_key: TENANT_KEY, tenant_name: "E2E Tenant" });
+    expect(lark.requestsFor("/open-apis/tenant/v2/tenant/query")).toHaveLength(1);
+    lark.tenantQueryOk = false;
+    try {
+      const unreadableTenant = await server.api("/api/admin/lark-settings/test", {
+        method: "POST", token: adminToken,
+        body: { lark_app_id: APP_ID, lark_app_secret: APP_SECRET },
+      });
+      expect(unreadableTenant.json).toEqual({ ok: true, tenant_key: null, tenant_name: null });
+    } finally {
+      lark.tenantQueryOk = true;
+    }
+    const afterTest = await server.api("/api/admin/lark-settings", { token: adminToken });
+    expect(afterTest.json.settings).toEqual(defaults.json.settings);
+
     const denied = await server.api("/api/admin/lark-settings", {
       method: "POST",
       token: adminToken,
@@ -171,7 +196,7 @@ describe("Lark end-to-end", () => {
       method: "POST",
       token: adminToken,
     });
-    expect(connection.json).toEqual({ ok: true, tenant_key: TENANT_KEY });
+    expect(connection.json).toEqual({ ok: true, tenant_key: TENANT_KEY, tenant_name: "E2E Tenant" });
 
     const manager = await server.createUser({
       token: adminToken,

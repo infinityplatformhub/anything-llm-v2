@@ -30,6 +30,8 @@ calendar:calendar
 contact:user.base:readonly
 ```
 
+Also grant the app permission `tenant:tenant:readonly` in Lark Developer Console for **Test connection** to query the tenant and auto-fill its key. This tenant-token permission is separate from the user OAuth scopes above. Without it, credentials can still test successfully, but you must enter the tenant key manually.
+
 The agent acts as the connected member, so it requires a user access token rather than a tenant or bot token. `im:message.send_as_user` permits approved message writes to appear as that member. Before production rollout, use test credentials in the international Lark API Explorer to verify that user access tokens and `im:message.send_as_user` support send-as-user for this app. Stop rollout and return for scope/design review if verification fails; bot fallback is not implemented.
 
 OAuth uses server-generated state and PKCE S256. State is single-use with a ten-minute lifetime. App secrets, OAuth state verifiers, user access tokens, and refresh tokens are encrypted at rest.
@@ -48,7 +50,13 @@ Open **Settings > Authentication > Lark** and configure:
 
 `auth`, `config`, `profile`, `logout`, and `api` are permanently denied, regardless of the configured allowlist. Empty or malformed identifiers, scopes, or allowlist entries fail validation. Invalid updates return HTTP 400. Enabling Lark requires an App ID, an existing or new App Secret, an allowed tenant key, and the `SERVER_URL` environment variable set to the public server origin.
 
-Use **Test connection** after saving. It requests an app access token server-side and returns only sanitized success or failure data and the tenant key. Credentials are never returned to the browser.
+1. Fill **App ID** and **App Secret**, and review the scopes and allowlist.
+2. Click **Test connection** before saving. The server tests the form credentials without persisting them.
+3. When tenant discovery succeeds, the **Allowed tenant key** fills automatically when empty. Verify it matches your company. If the tenant cannot be read, grant `tenant:tenant:readonly` and test again, or enter the tenant key manually.
+4. Turn on **Enable Lark**.
+5. Click **Save settings**.
+
+Test connection returns only sanitized success or failure data and the tenant key/name when available. Stored secrets and access tokens are never returned to the browser. When the secret remains masked, testing uses the stored secret.
 
 ## 3. User flow
 
@@ -116,6 +124,13 @@ Run the end-to-end suite, which boots the real server against a throwaway databa
 
 ```bash
 cd server && npx jest __tests__/e2e/lark --runInBand
+```
+
+Run the Playwright browser suite from the repository root. Install Chromium before the first run:
+
+```bash
+npx playwright install chromium
+npm run test:e2e:lark
 ```
 
 Build each target from the repository root in an environment that permits package postinstall:
