@@ -45,6 +45,8 @@ docker compose -f e2e/docker-compose.e2e.yml down -v
 | Variable | Effect |
 | --- | --- |
 | `AIG_API_KEY` | Required. Gateway key for the LLM provider. The runner refuses to start without it. |
+| `AIG_BASE_URL` | Override the gateway base URL from `e2e/gateway.json`. |
+| `AIG_MODEL` | Override the gateway model from `e2e/gateway.json`. |
 | `E2E_KEEP_UP=1` | Leave Docker fixtures and host processes running after the run and print their PIDs. |
 | `E2E_SKIP_UI=1` | Skip the Playwright UI suite. The run still ends `E2E_RESULT=FAIL reason=UI suite skipped` — this is a debugging aid for iterating on Jest, never a way to get a green run. |
 

@@ -70,9 +70,28 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   export "$key=$value"
 done < "$ROOT/server/.env.development"
 
+# Gateway endpoint and model come from e2e/gateway.json so this script and the
+# suites name them once; AIG_BASE_URL/AIG_MODEL override to aim a run elsewhere.
+# A missing or unreadable file fails the node call; a present but blank field is
+# caught below. Either way the run stops here rather than exporting an empty base
+# path, which the server accepts and then fails on at every inference.
+# shellcheck disable=SC2016
+gateway="$(node -e '
+const config = require(process.argv[1]);
+const baseUrl = process.env.AIG_BASE_URL || config.baseUrl;
+const model = process.env.AIG_MODEL || config.model;
+process.stdout.write(`${baseUrl || ""}\n${model || ""}`);
+' "$ROOT/e2e/gateway.json")" || exit 1
+gateway_base="$(sed -n 1p <<< "$gateway")"
+gateway_model="$(sed -n 2p <<< "$gateway")"
+if [[ -z "$gateway_base" || -z "$gateway_model" ]]; then
+  echo "e2e/gateway.json: baseUrl and model are both required" >&2
+  exit 1
+fi
+
 export LLM_PROVIDER="generic-openai"
-export GENERIC_OPEN_AI_BASE_PATH="https://aig.infinityplatform.tech/v1"
-export GENERIC_OPEN_AI_MODEL_PREF="aix-qwen3.8-flash-next"
+export GENERIC_OPEN_AI_BASE_PATH="$gateway_base"
+export GENERIC_OPEN_AI_MODEL_PREF="$gateway_model"
 export GENERIC_OPEN_AI_MODEL_TOKEN_LIMIT="16000"
 export GENERIC_OPEN_AI_API_KEY="$AIG_API_KEY"
 export EMBEDDING_ENGINE="native"

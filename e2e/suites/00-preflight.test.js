@@ -1,17 +1,23 @@
-const { E2E_A_URL, E2E_B_URL, AIG_API_KEY } = require("../lib/env");
+const {
+  E2E_A_URL,
+  E2E_B_URL,
+  AIG_API_KEY,
+  AIG_BASE_URL,
+  AIG_MODEL,
+} = require("../lib/env");
 const { ping, setupComplete } = require("../lib/api");
 const { pgCount, mysqlCount, mssqlCount } = require("../lib/evidence");
 
 describe("preflight", () => {
   test("gateway accepts tool-enabled chat", async () => {
-    const response = await fetch("https://aig.infinityplatform.tech/v1/chat/completions", {
+    const response = await fetch(`${AIG_BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${AIG_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "aix-qwen3.8-flash-next",
+        model: AIG_MODEL,
         messages: [{ role: "user", content: "Reply OK." }],
         tools: [{
           type: "function",
