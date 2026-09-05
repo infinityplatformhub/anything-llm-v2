@@ -10,3 +10,10 @@ aws_cf_deploy_anything_llm.json
 yarn.lock
 *.bak
 .idea
+
+# Lark browser tests
+e2e/.cache/
+e2e/.state/
+e2e/logs/
+test-results/
+playwright-report/
