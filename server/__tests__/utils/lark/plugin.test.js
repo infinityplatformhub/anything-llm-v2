@@ -20,6 +20,9 @@ jest.mock("../../../models/systemSettings", () => ({
     isMultiUserMode: jest.fn(),
   },
 }));
+jest.mock("../../../models/workspaceAgentSettings", () => ({
+  WorkspaceAgentSettings: { enabledSkills: jest.fn() },
+}));
 
 const cli = require("../../../utils/lark/cli");
 const settings = require("../../../utils/lark/settings");
@@ -301,13 +304,16 @@ test("passes only user ID and args to opaque runner and sanitizes failures", asy
 
 test("registers plugin once in exports and defaults discovery", async () => {
   const plugins = require("../../../utils/agents/aibitat/plugins");
+  const { agentSkillsForWorkspace } = require("../../../utils/agents/defaults");
   const {
-    agentSkillsFromSystemSettings,
-  } = require("../../../utils/agents/defaults");
+    WorkspaceAgentSettings,
+  } = require("../../../models/workspaceAgentSettings");
+  WorkspaceAgentSettings.enabledSkills.mockResolvedValue(["lark-cli"]);
+  SystemSettings.isMultiUserMode.mockResolvedValue(true);
 
   expect(plugins["lark-cli"]).toBe(larkCli);
   expect(plugins["lark-cli"].name).toBe("lark-cli");
-  const discovered = await agentSkillsFromSystemSettings();
+  const discovered = await agentSkillsForWorkspace({ id: 1 });
   expect(discovered.filter((name) => name === "lark-cli")).toEqual([
     "lark-cli",
   ]);
