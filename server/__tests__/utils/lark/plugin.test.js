@@ -86,6 +86,14 @@ test("leaves multi-token arrays untouched and rejects unclosed quotes", () => {
   expect(normalizeArgs(args)).toBe(args);
   expect(normalizeArgs('drive +search --query "unfinished')).toEqual([]);
 });
+test.each([null, 42, ["drive", 42], 'drive +search --query ""'])("normalization rejects invalid input %j", (input) => {
+  expect(normalizeArgs(input)).toEqual([]);
+});
+test("normalization preserves valid command array reference", () => {
+  const args = ["drive", "+search"];
+  expect(normalizeArgs(args)).toBe(args);
+});
+
 test("normalization preserves policy checks on quoted command tokens", () => {
   const real = jest.requireActual("../../../utils/lark/cli");
   const args = normalizeArgs('im +chat-list --verbose "+messages-send"');

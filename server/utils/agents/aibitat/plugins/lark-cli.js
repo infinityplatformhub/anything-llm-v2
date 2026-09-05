@@ -25,15 +25,11 @@ function redactForDisplay(args) {
 function normalizeArgs(input) {
   let command = input;
   if (Array.isArray(input)) {
-    if (
-      input.length !== 1 ||
-      typeof input[0] !== "string" ||
-      !/\s/.test(input[0])
-    )
-      return input;
+    if (input.some((token) => typeof token !== "string")) return [];
+    if (input.length !== 1 || !/\s/.test(input[0])) return input;
     command = input[0];
   }
-  if (typeof command !== "string") return input;
+  if (typeof command !== "string") return [];
   const args = [];
   let token = "";
   let quote = null;
@@ -56,7 +52,7 @@ function normalizeArgs(input) {
   }
   if (quote) return [];
   if (started) args.push(token);
-  return args;
+  return args.some((value) => value.length === 0) ? [] : args;
 }
 
 const larkCli = {
