@@ -134,10 +134,10 @@ const LarkIdentity = {
     try {
       const normalizedWhere = normalizeWhere(where);
       if (!normalizedWhere) return false;
-      await prisma.lark_identities.deleteMany({
+      const result = await prisma.lark_identities.deleteMany({
         where: normalizedWhere,
       });
-      return true;
+      return result.count > 0;
     } catch (error) {
       console.error("LarkIdentity.delete", error.message);
       return false;

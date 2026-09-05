@@ -3,3 +3,5 @@
 server/__tests__/*
 # Base URLs made env-overridable so the suite reaches the mock; defaults unchanged.
 server/utils/lark/constants.js
+# Dev-only generator; spawns the pinned CLI --help, never runs in prod.
+server/utils/lark/scripts/*

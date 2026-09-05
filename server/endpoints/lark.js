@@ -219,9 +219,9 @@ function larkEndpoints(app) {
         user_id: response.locals.user.id,
       });
       if (!deleted)
-        return response.status(500).json({
-          success: false,
-          error: "Failed to disconnect Lark.",
+        return response.status(404).json({
+          ok: false,
+          error: "not_connected",
         });
       return response.json({
         success: true,

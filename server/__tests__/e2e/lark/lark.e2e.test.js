@@ -449,6 +449,12 @@ describe("Lark end-to-end", () => {
       token: session.token,
     });
     expect(after.json.connected).toBe(false);
+    const secondDisconnect = await server.api("/api/lark/identity", {
+      method: "DELETE",
+      token: session.token,
+    });
+    expect(secondDisconnect.status).toBe(404);
+    expect(secondDisconnect.json).toEqual({ ok: false, error: "not_connected" });
   });
 
   it("9. an expiring access token is refreshed once and a stale refresh forces reauth", async () => {
@@ -806,6 +812,66 @@ describe("Lark end-to-end", () => {
     const haystack = allMetadata.map((row) => row.metadata || "").join("\n");
     expect(haystack).not.toContain(uat);
     expect(haystack).not.toContain(APP_SECRET);
+  });
+
+  describe("Drive and Base reads", () => {
+    let userId;
+    let handler;
+    let approvals;
+    beforeAll(async () => {
+      await configureLark({ lark_cli_allowlist: [...ALLOWLIST, "drive", "base"] });
+      const userInfo = nextIdentity("drivebase");
+      await loginWithLark(userInfo);
+      const identity = await withDb(environment, (prisma) => prisma.lark_identities.findFirst({ where: { open_id: userInfo.open_id } }));
+      userId = identity.user_id;
+      const aibitat = {
+        handlerProps: { invocation: { user_id: userId }, log() {} },
+        function: (definition) => { handler = definition.handler; },
+        requestToolApproval: async (payload) => { approvals.push(payload); return { approved: false }; },
+      };
+      require(PLUGIN_PATH).larkCli.plugin().setup(aibitat);
+    });
+    beforeEach(() => { approvals = []; environment.clearInvocations(); environment.setCliMode("ok"); });
+    afterAll(async () => { environment.setCliMode("ok"); await configureLark(); });
+    it("drive +download returns parsed markdown text without approval", async () => {
+      environment.setCliMode("download-md");
+      const args = ["drive", "+download", "--url", "https://example.test/file/token"];
+      const result = JSON.parse(await handler({ args }));
+      expect(result).toMatchObject({ ok: true, filename: "MIS vs RIMB.md", extension: ".md", truncated: false });
+      expect(result.text).toContain("# MIS vs RIMB");
+      expect(approvals).toHaveLength(0);
+      const [invocation] = environment.readInvocations();
+      const output = invocation.argv[invocation.argv.indexOf("--output") + 1];
+      expect(path.dirname(output)).toMatch(/^\/tmp\/anythingllm-lark-out-/);
+      expect(output.startsWith(invocation.env.HOME + path.sep)).toBe(false);
+      expect(fs.existsSync(path.dirname(output))).toBe(false);
+      expect(fs.existsSync(invocation.env.HOME)).toBe(false);
+      const logs = await withDb(environment, (prisma) => prisma.event_logs.findMany({ where: { event: "lark_cli_invocation", userId } }));
+      expect(logs.map(row => JSON.parse(row.metadata).args)).toContainEqual(args);
+      expect(logs.some(row => row.metadata.includes("--output"))).toBe(false);
+    });
+    it("model-supplied download output is rejected before spawn", async () => {
+      expect(await handler({ args: ["drive", "+download", "--output", "bad.md"] })).toBe("Flag is not permitted");
+      expect(environment.readInvocations()).toHaveLength(0);
+    });
+    it("base record-list reads without approval", async () => {
+      const result = JSON.parse(await handler({ args: ["base", "+record-list", "--base-token", "base_x", "--table-id", "tbl_x"] }));
+      expect(result.argv.slice(0, 2)).toEqual(["base", "+record-list"]);
+      expect(approvals).toHaveLength(0);
+    });
+    it("base record-batch-create requires approval", async () => {
+      expect(await handler({ args: ["base", "+record-batch-create"] })).toBe("Lark command was not approved.");
+      expect(approvals).toHaveLength(1);
+      expect(environment.readInvocations()).toHaveLength(0);
+    });
+    it("unsupported extension returns unsupported_file_type", async () => {
+      environment.setCliMode("download-bin");
+      expect(await handler({ args: ["drive", "+download", "--file-token", "token"] })).toBe("unsupported_file_type");
+    });
+    it("escaped download path returns unsafe_path", async () => {
+      environment.setCliMode("download-escape");
+      expect(await handler({ args: ["drive", "+download", "--file-token", "token"] })).toBe("unsafe_path");
+    });
   });
 
   it("15. single-user mode refuses the user routes and the server survives", async () => {

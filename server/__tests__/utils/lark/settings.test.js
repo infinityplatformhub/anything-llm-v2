@@ -62,6 +62,54 @@ async function saveValidSettings(secret = "super-secret") {
   });
 }
 
+test("dumpENV preserves Lark login environment across settings saves", () => {
+  const values = {
+    SERVER_URL: "https://app.example.test",
+    LARK_BASE_URL: "https://open.example.test",
+    LARK_ACCOUNTS_URL: "https://accounts.example.test",
+    LARK_CLI_PATH: "/opt/bin/lark-tool",
+  };
+  const original = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
+  const write = jest.spyOn(require("fs"), "writeFileSync").mockImplementation(() => {});
+  try {
+    Object.assign(process.env, values);
+    expect(require("../../../utils/helpers/updateENV").dumpENV()).toBe(true);
+    const text = write.mock.calls[0][1];
+    for (const [key, value] of Object.entries(values))
+      expect({ key, retained: text.includes(`${key}='${value}'`) }).toEqual({ key, retained: true });
+  } finally {
+    for (const [key, value] of Object.entries(original)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("default allowlist includes Drive and Base", () => {
+  expect(DEFAULT_LARK_CLI_ALLOWLIST).toEqual(
+    expect.arrayContaining(["drive", "base"])
+  );
+});
+
+test("default scopes include Drive and Base read permissions", () => {
+  expect(DEFAULT_SCOPES.split(" ")).toEqual(
+    expect.arrayContaining([
+      "drive:drive:readonly",
+      "drive:file:readonly",
+      "search:docs:read",
+      "base:app:read",
+      "base:table:read",
+      "base:record:retrieve",
+      "base:field:read",
+      "base:view:read",
+      "base:dashboard:read",
+      "base:form:read",
+      "base:workflow:read",
+      "base:role:read",
+    ])
+  );
+});
+
 test("accepts and normalizes exact Lark settings keys", async () => {
   await saveValidSettings();
 
@@ -148,6 +196,16 @@ async function invokeLarkUpdate(body) {
   await route.handler({ body }, response);
   return response;
 }
+
+test("admin Lark settings returns computed redirect_uri", async () => {
+  process.env.SERVER_URL = "https://anything.example";
+  await saveValidSettings();
+  const route = registeredRoutes().find(({ method, path }) => method === "GET" && path === "/admin/lark-settings");
+  const response = mockResponse();
+  await route.handler({}, response);
+  expect(response.statusCode).toBe(200);
+  expect(response.body.settings.redirect_uri).toBe("https://anything.example/api/lark/auth/callback");
+});
 
 test("keeps all Lark settings routes inaccessible to manager role", async () => {
   const routes = registeredRoutes().filter(({ path }) =>

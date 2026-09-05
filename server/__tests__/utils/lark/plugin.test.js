@@ -28,6 +28,7 @@ const { SystemSettings } = require("../../../models/systemSettings");
 const {
   larkCli,
   redactForDisplay,
+  normalizeArgs,
 } = require("../../../utils/agents/aibitat/plugins/lark-cli");
 const { SECRET_PATTERN: REAL_SECRET_PATTERN } = jest.requireActual(
   "../../../utils/lark/cli"
@@ -72,6 +73,50 @@ beforeEach(() => {
   cli.checkPolicy.mockReturnValue({ allowed: true, reason: "allowed" });
   cli.classify.mockReturnValue("read");
   cli.runAsUser.mockResolvedValue({ ok: true, data: { items: [] } });
+});
+
+test.each([
+  'drive +search --query "x y"',
+  ["drive +search --query 'x y'"],
+])("normalizes collapsed args %j", (input) => {
+  expect(normalizeArgs(input)).toEqual(["drive", "+search", "--query", "x y"]);
+});
+test("leaves multi-token arrays untouched and rejects unclosed quotes", () => {
+  const args = ["drive", "+search", "--query", "x y"];
+  expect(normalizeArgs(args)).toBe(args);
+  expect(normalizeArgs('drive +search --query "unfinished')).toEqual([]);
+});
+test.each([null, 42, ["drive", 42], [""], ["drive", ""], 'drive +search --query ""'])("normalization rejects invalid input %j", (input) => {
+  expect(normalizeArgs(input)).toEqual([]);
+});
+test("normalization preserves valid command array reference", () => {
+  const args = ["drive", "+search"];
+  expect(normalizeArgs(args)).toBe(args);
+});
+
+test("normalization preserves policy checks on quoted command tokens", () => {
+  const real = jest.requireActual("../../../utils/lark/cli");
+  const args = normalizeArgs('im +chat-list --verbose "+messages-send"');
+  expect(args).toEqual(["im", "+chat-list", "--verbose", "+messages-send"]);
+  expect(real.validateArgs(args).ok).toBe(false);
+  expect(real.classify(normalizeArgs('im +messages-send --text "hi there"'))).toBe("write");
+});
+test("handler normalizes collapsed command before runner", async () => {
+  await registeredHandler(fakeAibitat())({ args: ['drive +search --query "x y"'] });
+  expect(cli.validateArgs).toHaveBeenCalledWith(["drive", "+search", "--query", "x y"]);
+  expect(cli.runAsUser).toHaveBeenCalledWith({ userId: 7, args: ["drive", "+search", "--query", "x y"] });
+});
+
+test("description routes uploaded wiki files to Drive download", () => {
+  const aibitat = fakeAibitat();
+  registeredHandler(aibitat);
+  const definition = aibitat.function.mock.calls[0][0];
+  expect(definition.description).toContain("Use docs +fetch only for Lark Docs (docx).");
+  expect(definition.description).toContain("drive +download --wiki-token <token>");
+  expect(definition.examples).toContainEqual({
+    prompt: "read the PDF at the wiki page token",
+    call: JSON.stringify({ args: ["drive", "+download", "--wiki-token", "<token>"] }),
+  });
 });
 
 test("reads user_id from handlerProps invocation", async () => {

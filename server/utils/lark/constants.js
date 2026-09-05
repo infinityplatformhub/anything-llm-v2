@@ -15,7 +15,7 @@ const APP_ACCESS_TOKEN_URL = `${LARK_BASE_URL}/open-apis/auth/v3/app_access_toke
 const TENANT_ACCESS_TOKEN_URL = `${LARK_BASE_URL}/open-apis/auth/v3/tenant_access_token/internal`;
 const TENANT_QUERY_URL = `${LARK_BASE_URL}/open-apis/tenant/v2/tenant/query`;
 const DEFAULT_SCOPES =
-  "offline_access contact:user.email:readonly im:message im:message.send_as_user im:chat:readonly docx:document wiki:wiki calendar:calendar contact:user.base:readonly";
+  "offline_access contact:user.email:readonly im:message im:message.send_as_user im:chat:readonly docx:document wiki:wiki calendar:calendar contact:user.base:readonly drive:drive:readonly drive:file:readonly search:docs:read base:app:read base:table:read base:record:retrieve base:field:read base:view:read base:dashboard:read base:form:read base:workflow:read base:role:read";
 
 module.exports = {
   APP_ACCESS_TOKEN_URL,

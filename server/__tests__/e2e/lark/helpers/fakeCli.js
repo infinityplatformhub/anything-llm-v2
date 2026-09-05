@@ -7,6 +7,7 @@
  * that file carries the mode and where to append invocation records.
  */
 const fs = require("fs");
+const path = require("path");
 
 function readState() {
   try {
@@ -44,7 +45,21 @@ function main() {
   // No "sleep" mode: the TIMEOUT_MS kill path is proven with fake timers in
   // __tests__/utils/lark/cli.test.js, and a real 60 s wait would only stall
   // this suite.
-  if (mode === "fail") {
+  if (mode.startsWith("download-")) {
+    const outputIndex = argv.indexOf("--output");
+    if (outputIndex < 0) {
+      process.stderr.write("missing runner-owned output");
+      process.exit(2);
+    }
+    const output = argv[outputIndex + 1];
+    const filePath = mode === "download-escape"
+      ? path.join(path.dirname(process.env.FAKE_CLI_STATE), "escaped.md")
+      : output;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "# MIS vs RIMB\nMIS tracks operations; RIMB tracks reporting.\n");
+    process.stdout.write(JSON.stringify({ file_path: filePath, name: mode === "download-bin" ? "unknown.bin" : "MIS vs RIMB.md" }));
+    process.exit(0);
+  } else if (mode === "fail") {
     process.stderr.write(`fake cli failed while using token ${token}\n`);
     process.exit(2);
   } else if (mode === "big") {
