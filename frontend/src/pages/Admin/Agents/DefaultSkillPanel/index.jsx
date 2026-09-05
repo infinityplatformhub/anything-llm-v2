@@ -1,6 +1,5 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { DefaultBadge } from "../Badges/default";
 import Toggle from "@/components/lib/Toggle";
 
 export default function DefaultSkillPanel({
@@ -30,7 +29,6 @@ export default function DefaultSkillPanel({
             >
               {title}
             </label>
-            <DefaultBadge title={title} />
           </div>
           <Toggle
             size="lg"
@@ -43,7 +41,7 @@ export default function DefaultSkillPanel({
           {description}
           <br />
           <br />
-          {t("agent.skill.default_skill")}
+          {t("agent.skill.workspace_scoped")}
         </p>
       </div>
     </div>

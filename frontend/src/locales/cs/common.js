@@ -331,8 +331,6 @@ const TRANSLATIONS = {
         description:
           "Umožněte svému agentovi, aby mohl využívat SQL k zodpovězení vašich otázek, a to prostřednictvím připojení k různým poskytovatelům databází.",
       },
-      default_skill:
-        "Výchozí nastavení je, že tato schopnost je aktivní, ale můžete ji vypnout, pokud nechcete, aby ji mohl využít zástupce.",
       filesystem: {
         title: "Přístup k souborovému systému",
         description:
@@ -736,6 +734,7 @@ const TRANSLATIONS = {
         description:
           "Nechte, aby agent generoval obrázky z chatu nebo upravoval obrázky přiložené ke konverzaci pomocí vašeho nakonfigurovaného poskytovatele pro generování obrázků.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "Servery společnosti MCP",
@@ -785,6 +784,12 @@ const TRANSLATIONS = {
             "Kolik otázek pro objasnění může agent položit během jedné dotazní?",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

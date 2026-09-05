@@ -316,8 +316,6 @@ const TRANSLATIONS = {
         description:
           "Tagage, et teie esindaja saaks kasutada SQL-i, et vastata teie küsimustele, ühendades erinevate SQL andmebaasiteenustega.",
       },
-      default_skill:
-        "Vaikimisi on see funktsioon lubatud, kuid saate seda välja lülitada, kui ei soovi, et see oleks saadaval kaagentile.",
       filesystem: {
         title: "Failisüsteemi juurdepääs",
         description:
@@ -716,6 +714,7 @@ const TRANSLATIONS = {
         description:
           "Lase esindajal luua pilte vestluse põhjal või muuta dialoogi külge lisatud pilte, kasutades teie konfigureeritud piltide genereerimisteenust.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "MCP-serverid",
@@ -765,6 +764,12 @@ const TRANSLATIONS = {
             "Kuivõrd küsimusi vahendaja võib ühe uuringu käigus esitada.",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

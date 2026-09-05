@@ -10,11 +10,7 @@ const { WorkspaceChats } = require("../../models/workspaceChats");
 const { WorkspaceParsedFiles } = require("../../models/workspaceParsedFiles");
 const { DocumentManager } = require("../DocumentManager");
 const { safeJsonParse } = require("../http");
-const {
-  USER_AGENT,
-  WORKSPACE_AGENT,
-  agentSkillsFromSystemSettings,
-} = require("./defaults");
+const { USER_AGENT, WORKSPACE_AGENT } = require("./defaults");
 const { AgentHandler } = require(".");
 const {
   WorkspaceAgentInvocation,
@@ -409,22 +405,14 @@ class EphemeralAgentHandler extends AgentHandler {
       ? await User.get({ id: Number(this.#userId) })
       : null;
 
-    this.aibitat.agent(
-      WORKSPACE_AGENT.name,
-      await WORKSPACE_AGENT.getDefinition(
-        this.provider,
-        this.#workspace,
-        user,
-        this.#prompt
-      )
+    const definition = await WORKSPACE_AGENT.getDefinition(
+      this.provider,
+      this.#workspace,
+      user,
+      this.#prompt
     );
-
-    this.#funcsToLoad = [
-      ...(await agentSkillsFromSystemSettings()),
-      ...ImportedPlugin.activeImportedPlugins(),
-      ...AgentFlows.activeFlowPlugins(),
-      ...(await new MCPCompatibilityLayer().activeMCPServers()),
-    ];
+    this.aibitat.agent(WORKSPACE_AGENT.name, definition);
+    this.#funcsToLoad = [...definition.functions];
   }
 
   async init() {

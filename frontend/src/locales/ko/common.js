@@ -318,8 +318,6 @@ const TRANSLATIONS = {
         description:
           "여러 SQL 데이터베이스 제공업체에 연결하여 에이전트가 SQL을 활용하여 질문에 답변할 수 있도록 지원합니다.",
       },
-      default_skill:
-        "기본적으로 이 기능은 활성화되어 있지만, 에이전트에게 이 기능을 사용하지 않도록 설정할 수도 있습니다.",
       filesystem: {
         title: "파일 시스템 접근",
         description:
@@ -706,6 +704,7 @@ const TRANSLATIONS = {
         description:
           "에이전트가 채팅에서 이미지를 생성하거나, 구성된 이미지 생성 제공업체를 사용하여 대화에 첨부된 이미지를 편집할 수 있도록 합니다.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "MCP 서버",
@@ -755,6 +754,12 @@ const TRANSLATIONS = {
             "담당자가 단일 설문 조사에서 질문할 수 있는 질문의 수는 몇 개입니까?",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

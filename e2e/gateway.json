@@ -1,0 +1,4 @@
+{
+  "baseUrl": "https://aig.infinityplatform.tech/v1",
+  "model": "aix-qwen3.8-flash-next"
+}

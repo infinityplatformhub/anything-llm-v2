@@ -323,8 +323,6 @@ const TRANSLATIONS = {
         description:
           "Permita que seu agente utilize o SQL para responder às suas perguntas, conectando-se a diversos provedores de bancos de dados SQL.",
       },
-      default_skill:
-        "Por padrão, essa habilidade está ativada, mas você pode desativá-la se não quiser que ela esteja disponível para o agente.",
       filesystem: {
         title: "Acesso ao Sistema de Arquivos",
         description:
@@ -739,6 +737,7 @@ const TRANSLATIONS = {
         description:
           "Permita que o agente gere imagens a partir do chat, ou edite as imagens anexadas à conversa, utilizando o provedor de geração de imagens configurado.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "Servidores MCP",
@@ -789,6 +788,12 @@ const TRANSLATIONS = {
             "Quantas perguntas de esclarecimento o agente pode fazer em uma única pesquisa.",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

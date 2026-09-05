@@ -281,6 +281,14 @@ const TRANSLATIONS = {
     },
   },
   agent: {
+    workspaceSelector: {
+      label: "Workspace",
+      noWorkspaces: "No workspaces found.",
+      scopeNote:
+        "Built-in agent skills on this page belong to the selected workspace only. Custom skills, agent flows and MCP servers are still global until a later phase.",
+      emptyNote:
+        "This workspace has no skills enabled yet. New workspaces start from zero.",
+    },
     "performance-warning":
       "Performance of LLMs that do not explicitly support tool-calling is highly dependent on the model's capabilities and accuracy. Some abilities may be limited or non-functional.",
     provider: {
@@ -721,8 +729,8 @@ const TRANSLATIONS = {
           },
         },
       },
-      default_skill:
-        "By default, this skill is enabled, but you can disable it if you don't want it to be available to the agent.",
+      workspace_scoped:
+        "Enabled per workspace. New workspaces start with this skill off.",
     },
     mcp: {
       title: "MCP Servers",

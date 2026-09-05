@@ -213,6 +213,33 @@ const Admin = {
         return { success: false, error: e.message };
       });
   },
+  workspaceAgentSkills: async (slug) => {
+    return await fetch(
+      `${API_BASE}/admin/workspace/${encodeURIComponent(slug)}/agent-skills`,
+      {
+        method: "GET",
+        headers: baseHeaders(),
+      }
+    )
+      .then((res) =>
+        res.ok ? res.json() : { enabledSkills: null, error: res.status }
+      )
+      .catch((e) => ({ enabledSkills: null, error: e.message }));
+  },
+  updateWorkspaceAgentSkills: async (slug, enabledSkills = []) => {
+    return await fetch(
+      `${API_BASE}/admin/workspace/${encodeURIComponent(slug)}/agent-skills`,
+      {
+        method: "POST",
+        headers: baseHeaders(),
+        body: JSON.stringify({ enabledSkills }),
+      }
+    )
+      .then((res) =>
+        res.ok ? res.json() : { success: false, error: `HTTP ${res.status}` }
+      )
+      .catch((e) => ({ success: false, error: e.message }));
+  },
 
   // API Keys
   getApiKeys: async function () {

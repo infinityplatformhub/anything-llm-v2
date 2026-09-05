@@ -314,8 +314,6 @@ const TRANSLATIONS = {
         description:
           "エージェントが、さまざまなSQLデータベースプロバイダーに接続することで、SQLを活用してお客様からの質問に回答できるようにする。",
       },
-      default_skill:
-        "デフォルトでは、この機能は有効になっていますが、エージェントに利用させたくない場合は、無効にすることができます。",
       filesystem: {
         title: "ファイルシステムのアクセス",
         description:
@@ -707,6 +705,7 @@ const TRANSLATIONS = {
         description:
           "エージェントが、設定した画像生成プロバイダーを使用して、チャットから画像を生成したり、会話に添付された画像を編集できるようにする。",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "MCP サーバー",
@@ -757,6 +756,12 @@ const TRANSLATIONS = {
             "調査において、担当者が尋ねることができる質問の最大数はいくつですか。",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

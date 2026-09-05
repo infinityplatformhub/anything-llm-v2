@@ -10,6 +10,8 @@ aws_cf_deploy_anything_llm.json
 yarn.lock
 *.bak
 .idea
+.superpowers/
+.claude/worktrees/
 
 # Lark browser tests
 e2e/.cache/

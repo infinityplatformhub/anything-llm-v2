@@ -317,8 +317,6 @@ const TRANSLATIONS = {
         description:
           "אפשרו לסוכן שלכם לנצל את SQL כדי לענות על שאלותיכם, על ידי חיבור למספר ספקי מסדי נתונים של SQL.",
       },
-      default_skill:
-        "כברירת מחדל, הכישורים הזה מופעל, אך ניתן להשבית אותו אם אינכם רוצים שהוא יהיה זמין עבור הסוכן.",
       filesystem: {
         title: "גישה למערכת הקבצים",
         description:
@@ -703,6 +701,7 @@ const TRANSLATIONS = {
         description:
           "אפשר לסוכן ליצור תמונות מתוך השיחה, או לערוך תמונות המצורפות לשיחה, תוך שימוש בספק יצירת התמונות שהגדרת.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "שרתי MCP",
@@ -751,6 +750,12 @@ const TRANSLATIONS = {
           description: "כמה שאלות הבהרה יכול סוכן לשאול במהלך סקר אחד?",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

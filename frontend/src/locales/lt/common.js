@@ -330,8 +330,6 @@ const TRANSLATIONS = {
         description:
           "Leidžia jūsų agentui naudoti SQL užklausas atsakymams per įvairius SQL duomenų bazių tiekėjus.",
       },
-      default_skill:
-        "Pagal numatytuosius nustatymus šis įgūdis yra įjungtas, bet galite jį išjungti, jei nenorite, kad jis būtų prieinamas agentui.",
       filesystem: {
         title: "Failų sistemos prieigos teisės",
         description:
@@ -736,6 +734,7 @@ const TRANSLATIONS = {
         description:
           "Leiskite agentui generuoti vaizdus iš pokalbio arba redaguoti pokalbio metu pridedamus vaizdus, naudodami jūsų konfiguruotą vaizdų generavimo paslaugą.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "MCP serveriai",
@@ -785,6 +784,12 @@ const TRANSLATIONS = {
             "Kiek klausimų agentas gali užduoti vienoje apklausoje, siekiant paaiškinti dalyviams?",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

@@ -323,8 +323,6 @@ const TRANSLATIONS = {
         description:
           "Umożliw agentowi korzystanie z języka SQL, aby odpowiadał na Twoje pytania, poprzez połączenie z różnymi dostawcami baz danych SQL.",
       },
-      default_skill:
-        "Domyślnie, ta umiejętność jest włączona, ale można ją wyłączyć, jeśli nie chcemy, aby była dostępna dla agenta.",
       filesystem: {
         title: "Dostęp do systemu plików",
         description:
@@ -742,6 +740,7 @@ const TRANSLATIONS = {
         description:
           "Pozwól przedstawicielowi generować obrazy na podstawie rozmowy lub edytować dołączone obrazy, korzystając z wybranego dostawcy usług generowania obrazów.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "Serwery MCP",
@@ -792,6 +791,12 @@ const TRANSLATIONS = {
             "Ile pytań wyjaśniających może zadać agent podczas jednej ankiety?",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {
