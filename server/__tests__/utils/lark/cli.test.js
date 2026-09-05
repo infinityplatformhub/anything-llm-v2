@@ -264,8 +264,10 @@ test("classifies only allowlisted read pairs and defaults everything to write", 
   expect(classify(["im", "+messages-delete-list"])).toBe("write");
   expect(classify(["docs", "+blocks-batch-update-get"])).toBe("write");
   expect(classify(["wiki", "+spaces-node-move-get"])).toBe("write");
-  // Read pairs stay read no matter what flags follow; unknown flags cannot
-  // exist because validateArgs rejects them first.
+  // Read pairs stay read no matter what flags follow. classify only looks at
+  // the two command tokens; validateArgs separately guarantees no further
+  // positional/command token can appear (S1), while syntactically valid
+  // unknown flags are allowed through to the CLI.
   expect(classify(["docs", "+fetch", "--doc", "document-get"])).toBe("read");
   expect(classify(["im", "+messages-send", "--text", "document-get"])).toBe(
     "write"
