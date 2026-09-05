@@ -30,6 +30,9 @@ export default {
     login: () => {
       return "/sso/simple";
     },
+    lark: () => {
+      return "/sso/lark";
+    },
   },
   onboarding: {
     home: () => {
@@ -140,6 +143,12 @@ export default {
     },
     vectorDatabase: () => {
       return "/settings/vector-database";
+    },
+    lark: () => {
+      return "/settings/lark";
+    },
+    larkAuth: () => {
+      return "/settings/authentication/lark";
     },
     security: () => {
       return "/settings/security";

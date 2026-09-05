@@ -1,3 +1,11 @@
+# Paths exempt from the production-code diff check for task 13 (#2).
+# Test-only harness: real server, real sqlite, mock Lark, fake CLI.
+server/__tests__/*
+# Base URLs made env-overridable so the suite reaches the mock; defaults unchanged.
+server/utils/lark/constants.js
+# Dev-only generator; spawns the pinned CLI --help, never runs in prod.
+server/utils/lark/scripts/*
+
 # Comments here are deliberately paraphrased: this file is itself scanned, so
 # spelling a marker word or a skip pattern literally would trip the very gates
 # these entries exempt.

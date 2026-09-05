@@ -299,6 +299,12 @@ const SidebarOptions = ({ user = null, t }) => (
               roles: ["admin", "manager"],
             },
             {
+              btnText: "Lark",
+              href: paths.settings.larkAuth(),
+              flex: true,
+              roles: ["admin"],
+            },
+            {
               btnText: "Default System Prompt",
               href: paths.settings.defaultSystemPrompt(),
               flex: true,

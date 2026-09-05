@@ -1,0 +1,318 @@
+<title>Lark Login Mockup</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root { --bg:#0e0f0f; --panel:#1b1b1e; --panel-2:#27282a; --line:#3f3f42; --text:#fff; --muted:rgba(255,255,255,.6); --accent:#36bffa; --accent-2:#7cd4fd; --ok:#39c985; --warn:#f4b740; --bad:#ef6671; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; min-width:320px; }
+  button,input,textarea { font:inherit; }
+  button { cursor:pointer; }
+  button:focus-visible,input:focus-visible,textarea:focus-visible { outline:3px solid rgba(148,124,255,.45); outline-offset:2px; }
+  .app { min-height:100vh; padding-bottom:50px; }
+  .topbar { position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:20px; padding:12px 20px; background:rgba(11,13,16,.92); border-bottom:1px solid var(--line); backdrop-filter:blur(14px); }
+  .brand { display:flex; align-items:center; gap:10px; font-weight:750; white-space:nowrap; }
+  .brand-mark { width:27px; height:27px; display:grid; place-items:center; background:var(--accent); border-radius:8px; font-size:13px; }
+  .tabs { display:flex; gap:4px; overflow-x:auto; }
+  .tab { border:0; background:transparent; color:var(--muted); padding:9px 12px; border-radius:8px; white-space:nowrap; font-size:13px; font-weight:650; }
+  .tab:hover { color:var(--text); background:var(--panel-2); }
+  .tab.active { color:var(--text); background:var(--panel-2); box-shadow:inset 0 0 0 1px var(--line); }
+  .screen { display:none; }
+  .screen.active { display:block; }
+  .page { width:min(1100px,calc(100% - 32px)); margin:30px auto; }
+  .footer { position:fixed; bottom:0; left:0; right:0; z-index:20; padding:9px 16px; text-align:center; color:#727b88; background:#0b0d10; border-top:1px solid var(--line); font-size:12px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; box-shadow:0 18px 50px rgba(0,0,0,.2); }
+  .btn { min-height:40px; border:1px solid var(--line); border-radius:8px; padding:9px 14px; background:var(--panel-2); color:var(--text); font-weight:700; font-size:13px; transition:.16s ease; }
+  .btn:hover { border-color:#46505f; transform:translateY(-1px); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:white; }
+  .btn.primary:hover { background:var(--accent-2); }
+  .btn.danger { color:#ffb4ba; border-color:#63333a; background:#29191d; }
+  .btn.ghost { background:transparent; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; transform:none; }
+  .field { display:grid; gap:7px; }
+  .field label { color:#cdd3dc; font-size:12px; font-weight:700; }
+  .input { width:100%; min-height:42px; border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:var(--text); background:#0f1216; }
+  textarea.input { min-height:120px; resize:vertical; }
+  .input[readonly] { color:var(--muted); background:#101216; }
+  .muted { color:var(--muted); }
+  .eyebrow { color:var(--accent-2); text-transform:uppercase; letter-spacing:.12em; font-size:11px; font-weight:800; }
+  .notice { padding:12px 14px; border:1px solid var(--line); border-radius:9px; font-size:13px; line-height:1.45; }
+  .notice.error { background:#28171b; border-color:#5c2a32; color:#ffb8bf; }
+  .notice.success { background:#12261d; border-color:#285d43; color:#9ee7c0; }
+  .notice.warning { background:#2a2414; border-color:#615022; color:#ffe09a; }
+  .switch { width:44px; height:24px; padding:2px; border:0; border-radius:99px; background:#3a414c; transition:.2s; }
+  .switch span { display:block; width:20px; height:20px; border-radius:50%; background:#fff; transition:.2s; }
+  .switch.on { background:var(--accent); }
+  .switch.on span { transform:translateX(20px); }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:6px 9px; border:1px solid var(--line); border-radius:7px; background:#20242c; color:#dce1e8; font-size:12px; }
+  .chip button { border:0; background:transparent; color:var(--muted); padding:0; line-height:1; }
+  .statebar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:18px; }
+  .statebar .btn { min-height:34px; padding:6px 10px; }
+  .statebar .btn.selected { color:#d9d0ff; border-color:#6654ad; background:#241e3c; }
+  .spinner { width:16px; height:16px; display:inline-block; vertical-align:-3px; margin-right:7px; border:2px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .sr-only { position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }
+  .tool-card { border:1px solid var(--line);border-radius:9px;background:#121416;overflow:hidden; }
+  .tool-head { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px; }
+  .tool-body { padding:12px;font-size:12px;line-height:1.5; }
+  .command { padding:10px;background:#08090a;border-radius:7px;color:#d8dde4;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-x:auto;white-space:nowrap; }
+  @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important;transition-duration:.01ms!important; } }
+  @media (max-width:720px) { .topbar{align-items:flex-start;flex-direction:column;gap:9px;padding:12px}.tabs{width:100%}.page{width:min(100% - 20px,1100px);margin:18px auto}.desktop-only{display:none!important;} }
+</style>
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">A</span><span>AnythingLLM</span></div>
+    <nav class="tabs" aria-label="Mockup screens">
+      <button class="tab active" data-screen="login">Login</button>
+      <button class="tab" data-screen="admin">Admin · Lark</button>
+      <button class="tab" data-screen="user">User · Lark</button>
+      <button class="tab" data-screen="chat">Agent chat</button>
+    </nav>
+  </header>
+  <main>
+    <section id="login" class="screen active"><div class="page" id="login-content">
+      <div class="statebar" aria-label="Login states">
+        <span class="muted">Preview:</span>
+        <button class="btn selected" data-login-state="default">Default</button>
+        <button class="btn" data-login-state="tenant">Tenant blocked</button>
+        <button class="btn" data-login-state="denied">Access denied</button>
+        <button class="btn" data-login-state="suspended">Suspended</button>
+        <button class="btn" data-login-state="link_conflict">Link conflict</button>
+        <button class="btn" data-login-state="unknown">Unknown</button>
+        <button class="btn" id="toggle-lark-login">Disable Lark login</button>
+      </div>
+      <div id="login-home" hidden class="panel" style="min-height:620px;overflow:hidden;">
+        <div style="display:grid;grid-template-columns:220px 1fr;min-height:620px;">
+          <aside style="padding:18px;border-right:1px solid var(--line);background:#101214;">
+            <div class="brand"><span class="brand-mark">A</span>AnythingLLM</div>
+            <div style="margin-top:28px;display:grid;gap:8px;"><span class="muted">Workspaces</span><div class="chip">Company Assistant</div></div>
+          </aside>
+          <div style="display:grid;place-items:center;text-align:center;padding:30px;"><div><div class="eyebrow">Signed in with Lark</div><h2 style="font-size:28px;margin:10px 0 8px;">Welcome, Narin</h2><p class="muted">Your workspace is ready.</p></div></div>
+        </div>
+      </div>
+      <div id="login-shell" style="min-height:620px;display:grid;place-items:center;padding:32px 12px;">
+        <div style="width:min(396px,100%);">
+          <div style="text-align:center;margin-bottom:28px;">
+            <div class="brand-mark" style="margin:0 auto 18px;width:42px;height:42px;font-size:20px;">A</div>
+            <h1 style="font-size:36px;line-height:1.1;margin:0 0 10px;font-weight:600;">Welcome</h1>
+            <p class="muted" style="margin:0;">Sign in to AnythingLLM</p>
+          </div>
+          <div id="login-error" hidden class="notice error" style="margin-bottom:15px;"></div>
+          <form id="password-form" class="panel" style="padding:26px;display:grid;gap:15px;">
+            <div class="field"><label for="login-user">Username</label><input id="login-user" class="input" autocomplete="username" value="narin" /></div>
+            <div class="field"><label for="login-password">Password</label><input id="login-password" class="input" type="password" autocomplete="current-password" value="not-a-real-password" /></div>
+            <button class="btn" type="submit" style="background:#f6f7f8;color:#17191c;border-color:#f6f7f8;">Login</button>
+            <div id="lark-login-block" style="display:grid;gap:14px;">
+              <div style="display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;"><span style="height:1px;background:var(--line);flex:1;"></span>or<span style="height:1px;background:var(--line);flex:1;"></span></div>
+              <button id="lark-login-button" class="btn" type="button" style="display:flex;align-items:center;justify-content:center;gap:9px;">
+                <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="2" y="2" width="6" height="6" rx="1" fill="#36bffa"></rect><rect x="10" y="2" width="6" height="6" rx="1" fill="#7cd4fd"></rect><rect x="2" y="10" width="6" height="6" rx="1" fill="#7cd4fd"></rect><rect x="10" y="10" width="6" height="6" rx="1" fill="#36bffa"></rect></svg>
+                <span>Login with Lark</span>
+              </button>
+            </div>
+            <button type="button" style="border:0;background:none;color:#7cd4fd;font-size:13px;">Forgot your password? <strong>Reset</strong></button>
+          </form>
+        </div>
+      </div>
+    </div></section>
+    <section id="admin" class="screen"><div class="page" id="admin-content">
+      <div class="statebar"><span class="muted">Preview:</span><button id="admin-fresh" class="btn">Fresh setup</button><button id="admin-configured" class="btn selected">Configured</button></div>
+      <div class="panel" style="display:grid;grid-template-columns:minmax(190px,230px) 1fr;min-height:690px;overflow:hidden;">
+        <aside class="desktop-only" style="padding:20px 14px;background:#101214;border-right:1px solid var(--line);">
+          <div class="eyebrow" style="padding:8px;">System settings</div>
+          <div style="display:grid;gap:3px;margin-top:10px;color:var(--muted);font-size:13px;">
+            <div style="padding:10px;">General</div><div style="padding:10px;">Users</div><div style="padding:10px;background:var(--panel-2);color:var(--text);border-radius:7px;">Authentication</div><div style="padding:10px;">Security</div>
+          </div>
+        </aside>
+        <div style="padding:26px clamp(18px,4vw,46px);overflow:auto;">
+          <div style="border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:24px;">
+            <div class="eyebrow">Authentication provider</div><h1 style="font-size:23px;margin:7px 0;">Lark</h1>
+            <p class="muted" style="margin:0;font-size:13px;max-width:680px;">Let company members sign in and allow connected users to run approved Lark actions through chat.</p>
+          </div>
+          <form id="admin-form" style="display:grid;gap:22px;max-width:760px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:18px;"><div><strong style="font-size:14px;">Enable Lark</strong><p class="muted" style="margin:4px 0 0;font-size:12px;">Available only in multi-user mode.</p></div><button id="enable-lark" class="switch on" type="button" role="switch" aria-checked="true" aria-label="Enable Lark"><span></span></button></div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;">
+              <div class="field"><label for="app-id">App ID</label><input id="app-id" class="input" value="cli_a73f90c21e8d900b" /></div>
+              <div class="field"><label for="app-secret">App Secret</label><div style="display:flex;gap:8px;"><input id="app-secret" class="input" value="••••••••••••••••" readonly /><button id="replace-secret" class="btn" type="button">Replace</button></div><small class="muted">Write-only. Existing secret cannot be revealed.</small></div>
+            </div>
+            <div class="field"><label for="tenant-key">Allowed tenant_key</label><input id="tenant-key" class="input" value="cli_9d1358f49a3c100d" /><small class="muted">Only accounts from this company can sign in. Auto-linking by email local-part relies on this restriction.</small></div>
+            <div class="field"><label for="redirect-url">Redirect URL</label><div style="display:flex;gap:8px;"><input id="redirect-url" class="input" readonly value="https://anything.company.com/api/lark/auth/callback" /><button id="copy-url" class="btn" type="button">Copy</button></div><small class="muted">Add this exact URL in Lark Developer Console.</small></div>
+            <div class="field"><label for="scopes">OAuth scopes</label><textarea id="scopes" class="input">offline_access
+contact:user.email:readonly
+im:message
+im:message.send_as_user
+im:chat:readonly
+docx:document
+wiki:wiki
+calendar:calendar
+contact:user.base:readonly</textarea></div>
+            <div class="field"><label>CLI allowlist</label><div id="allowlist" style="display:flex;flex-wrap:wrap;gap:7px;"></div><div style="display:flex;gap:8px;max-width:350px;"><label class="sr-only" for="allow-add">Add command prefix</label><input id="allow-add" class="input" placeholder="Command prefix" /><button id="allow-add-button" class="btn" type="button">Add</button></div></div>
+            <div class="field"><label>Always denied</label><div style="display:flex;flex-wrap:wrap;gap:7px;opacity:.55;"><span class="chip">auth</span><span class="chip">config</span><span class="chip">profile</span><span class="chip">logout</span></div><small class="muted">These commands cannot be enabled.</small></div>
+            <div id="admin-status"></div>
+            <div style="display:flex;gap:9px;flex-wrap:wrap;"><button id="test-connection" class="btn" type="button">Test connection</button><button id="test-failure" class="btn ghost" type="button">Simulate failure</button><button id="save-admin" class="btn primary" type="submit">Save settings</button></div>
+          </form>
+        </div>
+      </div>
+    </div></section>
+    <section id="user" class="screen"><div class="page" id="user-content">
+      <div class="statebar" aria-label="Connection states"><span class="muted">Preview:</span><button class="btn selected" data-user-state="disconnected">Not connected</button><button class="btn" data-user-state="connected">Connected</button><button class="btn" data-user-state="reauth">Needs re-auth</button></div>
+      <div class="panel" style="display:grid;grid-template-columns:minmax(190px,230px) 1fr;min-height:580px;overflow:hidden;">
+        <aside class="desktop-only" style="padding:20px 14px;background:#101214;border-right:1px solid var(--line);"><div class="eyebrow" style="padding:8px;">User settings</div><div style="display:grid;gap:3px;margin-top:10px;color:var(--muted);font-size:13px;"><div style="padding:10px;">Account</div><div style="padding:10px;">Security</div><div style="padding:10px;background:var(--panel-2);color:var(--text);border-radius:7px;">Lark</div></div></aside>
+        <div style="padding:28px clamp(18px,4vw,48px);">
+          <div style="padding-bottom:20px;border-bottom:1px solid var(--line);"><div class="eyebrow">Connected account</div><h1 style="font-size:23px;margin:7px 0;">Lark</h1><p class="muted" style="font-size:13px;margin:0;">Connect your company account so agent actions can run as you.</p></div>
+          <div id="user-state" style="padding-top:28px;max-width:700px;"></div>
+        </div>
+      </div>
+      <div id="disconnect-modal" hidden style="position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.72);display:none;place-items:center;padding:20px;">
+        <div class="panel" role="dialog" aria-modal="true" aria-labelledby="disconnect-title" style="width:min(430px,100%);padding:24px;"><h2 id="disconnect-title" style="margin:0 0 10px;font-size:20px;">Disconnect Lark?</h2><p class="muted" style="line-height:1.5;font-size:13px;">Agent actions will stop working. Lark does not provide a remote token revoke endpoint.</p><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:22px;"><button id="cancel-disconnect" class="btn">Cancel</button><button id="confirm-disconnect" class="btn danger">Disconnect</button></div></div>
+      </div>
+    </div></section>
+    <section id="chat" class="screen"><div class="page" id="chat-content">
+      <div class="statebar"><span class="muted">Preview:</span><button id="chat-reset" class="btn selected">Connected flow</button><button id="chat-disconnected" class="btn">Lark not connected</button></div>
+      <div class="panel" style="display:grid;grid-template-columns:minmax(190px,235px) 1fr;min-height:680px;overflow:hidden;">
+        <aside class="desktop-only" style="padding:18px 14px;background:#101214;border-right:1px solid var(--line);"><div class="brand"><span class="brand-mark">A</span>AnythingLLM</div><button class="btn" style="width:100%;margin:25px 0 20px;">+ New thread</button><div class="eyebrow" style="padding:7px;">Company Assistant</div><div style="padding:10px;margin-top:8px;background:var(--panel-2);border-radius:7px;font-size:13px;">Message Mei on Lark</div></aside>
+        <div style="display:grid;grid-template-rows:auto 1fr auto;min-width:0;">
+          <header style="padding:16px 22px;border-bottom:1px solid var(--line);"><strong>Company Assistant</strong><div class="muted" style="font-size:11px;margin-top:2px;">Lark tools enabled</div></header>
+          <div id="chat-thread" style="padding:26px clamp(16px,4vw,48px);overflow-y:auto;display:grid;align-content:start;gap:20px;">
+            <div style="display:flex;justify-content:flex-end;"><div style="max-width:620px;padding:12px 15px;background:#27282a;border-radius:12px 12px 3px 12px;font-size:14px;line-height:1.5;">Send Mei Tan a Lark message saying “The launch review is moved to 3 PM.”</div></div>
+            <div style="display:flex;gap:11px;"><div class="brand-mark" style="width:28px;height:28px;flex:0 0 auto;">A</div><div style="min-width:0;max-width:680px;width:100%;"><div style="font-size:13px;line-height:1.5;">I’ll find Mei’s company contact first.</div><div id="chat-flow" style="margin-top:12px;"></div></div></div>
+          </div>
+          <div style="padding:15px 20px;border-top:1px solid var(--line);"><div style="border:1px solid #525355;border-radius:10px;padding:13px;color:var(--muted);font-size:13px;">Ask anything…</div></div>
+        </div>
+      </div>
+    </div></section>
+  </main>
+  <footer class="footer">Mockup — throwaway, not production code</footer>
+</div>
+<script>
+  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab,.screen').forEach(el => el.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.screen).classList.add('active');
+  }));
+
+  const loginErrors = {
+    tenant: ['Company not allowed', 'This Lark account belongs to a different company. Sign in with your company account or use your password.'],
+    denied: ['Access denied', 'Lark sign-in was cancelled. Try again when you are ready.'],
+    suspended: ['Account suspended', 'Your AnythingLLM account is suspended. Contact an administrator.'],
+    link_conflict: ['Account already linked', 'This Lark account is connected to another user. Sign in to that account or contact an administrator.'],
+    unknown: ['Lark sign-in failed', 'Something went wrong while completing sign-in. Try again or use your password.']
+  };
+  let larkLoginEnabled = true;
+  document.querySelectorAll('[data-login-state]').forEach(button => button.addEventListener('click', () => {
+    document.querySelectorAll('[data-login-state]').forEach(item => item.classList.remove('selected'));
+    button.classList.add('selected');
+    const error = document.getElementById('login-error');
+    if (button.dataset.loginState === 'default') { error.hidden = true; return; }
+    const message = loginErrors[button.dataset.loginState];
+    error.innerHTML = '<strong>' + message[0] + '</strong><br>' + message[1];
+    error.hidden = false;
+  }));
+  document.getElementById('toggle-lark-login').addEventListener('click', event => {
+    larkLoginEnabled = !larkLoginEnabled;
+    document.getElementById('lark-login-block').hidden = !larkLoginEnabled;
+    event.currentTarget.textContent = larkLoginEnabled ? 'Disable Lark login' : 'Enable Lark login';
+    event.currentTarget.classList.toggle('selected', !larkLoginEnabled);
+  });
+  document.getElementById('password-form').addEventListener('submit', event => event.preventDefault());
+  document.getElementById('lark-login-button').addEventListener('click', event => {
+    const label = event.currentTarget.querySelector('span');
+    event.currentTarget.disabled = true;
+    label.innerHTML = '<span class="spinner"></span>Redirecting…';
+    setTimeout(() => {
+      document.getElementById('login-shell').hidden = true;
+      document.getElementById('login-home').hidden = false;
+      event.currentTarget.disabled = false;
+      label.textContent = 'Login with Lark';
+    }, 900);
+  });
+
+  let allowlist = ['im','docs','docx','wiki','calendar','contact'];
+  function renderAllowlist() {
+    document.getElementById('allowlist').innerHTML = allowlist.map(item => '<span class="chip">' + item + '<button type="button" data-remove="' + item + '" aria-label="Remove ' + item + '">×</button></span>').join('');
+    document.querySelectorAll('[data-remove]').forEach(button => button.addEventListener('click', () => { allowlist = allowlist.filter(item => item !== button.dataset.remove); renderAllowlist(); }));
+  }
+  renderAllowlist();
+  document.getElementById('allow-add-button').addEventListener('click', () => {
+    const input = document.getElementById('allow-add');
+    const value = input.value.trim().toLowerCase();
+    if (value && !allowlist.includes(value) && !['auth','config','profile','logout'].includes(value)) allowlist.push(value);
+    input.value = '';
+    renderAllowlist();
+  });
+  document.getElementById('enable-lark').addEventListener('click', event => {
+    event.currentTarget.classList.toggle('on');
+    event.currentTarget.setAttribute('aria-checked', event.currentTarget.classList.contains('on'));
+  });
+  document.getElementById('replace-secret').addEventListener('click', () => {
+    const secret = document.getElementById('app-secret');
+    secret.readOnly = false; secret.value = ''; secret.placeholder = 'Paste new App Secret'; secret.focus();
+  });
+  document.getElementById('copy-url').addEventListener('click', event => {
+    navigator.clipboard?.writeText(document.getElementById('redirect-url').value).catch(() => {});
+    event.currentTarget.textContent = 'Copied'; setTimeout(() => event.currentTarget.textContent = 'Copy', 900);
+  });
+  function setAdminMode(configured) {
+    document.getElementById('admin-fresh').classList.toggle('selected', !configured);
+    document.getElementById('admin-configured').classList.toggle('selected', configured);
+    document.getElementById('app-id').value = configured ? 'cli_a73f90c21e8d900b' : '';
+    document.getElementById('app-secret').value = configured ? '••••••••••••••••' : '';
+    document.getElementById('app-secret').readOnly = configured;
+    document.getElementById('tenant-key').value = configured ? 'cli_9d1358f49a3c100d' : '';
+    document.getElementById('admin-status').innerHTML = '';
+  }
+  document.getElementById('admin-fresh').addEventListener('click', () => setAdminMode(false));
+  document.getElementById('admin-configured').addEventListener('click', () => setAdminMode(true));
+  function adminAction(button, loading, result, kind) {
+    button.disabled = true; button.innerHTML = '<span class="spinner"></span>' + loading;
+    setTimeout(() => { button.disabled = false; button.textContent = button.id === 'save-admin' ? 'Save settings' : button.id === 'test-connection' ? 'Test connection' : 'Simulate failure'; document.getElementById('admin-status').innerHTML = '<div class="notice ' + kind + '">' + result + '</div>'; }, 850);
+  }
+  document.getElementById('test-connection').addEventListener('click', event => adminAction(event.currentTarget, 'Testing…', '<strong>Connection successful</strong><br>Connected to Acme Global tenant.', 'success'));
+  document.getElementById('test-failure').addEventListener('click', event => adminAction(event.currentTarget, 'Testing…', '<strong>Connection failed</strong><br>App credentials were rejected. Check App ID and App Secret.', 'error'));
+  document.getElementById('admin-form').addEventListener('submit', event => { event.preventDefault(); adminAction(document.getElementById('save-admin'), 'Saving…', '<strong>Settings saved</strong><br>New sign-ins now use this configuration.', 'success'); });
+
+  const userState = document.getElementById('user-state');
+  function showUserState(state) {
+    document.querySelectorAll('[data-user-state]').forEach(button => button.classList.toggle('selected', button.dataset.userState === state));
+    if (state === 'disconnected') userState.innerHTML = '<div class="notice" style="margin-bottom:18px;"><strong>Not connected</strong><br><span class="muted">Connect Lark to let agent tools find contacts, work with docs, and send approved messages as you.</span></div><button id="connect-lark" class="btn primary">Connect Lark</button>';
+    if (state === 'consent') userState.innerHTML = '<div class="panel" style="padding:24px;background:#111316;"><div class="eyebrow">Lark authorization</div><h2 style="font-size:20px;margin:8px 0;">AnythingLLM wants access</h2><p class="muted" style="font-size:13px;line-height:1.5;">View your basic profile and contacts, work with messages, docs, wikis, and calendars. Write actions still require your approval in chat.</p><div style="display:flex;gap:8px;margin-top:20px;"><button id="cancel-consent" class="btn">Cancel</button><button id="allow-consent" class="btn primary">Allow</button></div></div>';
+    if (state === 'connected') userState.innerHTML = '<div style="display:flex;align-items:center;gap:14px;margin-bottom:24px;"><div style="width:50px;height:50px;border-radius:50%;background:#294f5f;display:grid;place-items:center;font-weight:800;">NT</div><div><strong>Narin Thana</strong><div class="muted" style="font-size:12px;margin-top:3px;">narin.thana@acme.example</div></div><span class="chip" style="margin-left:auto;color:#9ee7c0;">Connected</span></div><div style="display:grid;grid-template-columns:140px 1fr;gap:12px;font-size:13px;padding:18px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);"><span class="muted">Tenant</span><span>Acme Global</span><span class="muted">Granted scopes</span><span>Profile, contacts, messages, docs, wiki, calendar</span><span class="muted">Connected</span><span>September 5, 2026</span></div><button id="disconnect-lark" class="btn danger" style="margin-top:22px;">Disconnect</button>';
+    if (state === 'reauth') userState.innerHTML = '<div class="notice warning" style="margin-bottom:18px;"><strong>Reconnect required</strong><br>Your Lark authorization expired or was revoked. Agent tools cannot run until you reconnect.</div><button id="reconnect-lark" class="btn primary">Reconnect Lark</button>';
+    wireUserActions();
+  }
+  function wireUserActions() {
+    document.getElementById('connect-lark')?.addEventListener('click', () => showUserState('consent'));
+    document.getElementById('cancel-consent')?.addEventListener('click', () => showUserState('disconnected'));
+    document.getElementById('allow-consent')?.addEventListener('click', event => { event.currentTarget.disabled = true; event.currentTarget.innerHTML = '<span class="spinner"></span>Connecting…'; setTimeout(() => showUserState('connected'), 800); });
+    document.getElementById('reconnect-lark')?.addEventListener('click', () => showUserState('consent'));
+    document.getElementById('disconnect-lark')?.addEventListener('click', () => { const modal = document.getElementById('disconnect-modal'); modal.hidden = false; modal.style.display = 'grid'; });
+  }
+  document.querySelectorAll('[data-user-state]').forEach(button => button.addEventListener('click', () => showUserState(button.dataset.userState)));
+  document.getElementById('cancel-disconnect').addEventListener('click', () => { const modal = document.getElementById('disconnect-modal'); modal.hidden = true; modal.style.display = 'none'; });
+  document.getElementById('confirm-disconnect').addEventListener('click', () => { const modal = document.getElementById('disconnect-modal'); modal.hidden = true; modal.style.display = 'none'; showUserState('disconnected'); });
+  showUserState('disconnected');
+
+  const chatFlow = document.getElementById('chat-flow');
+  function showChatConnected() {
+    document.getElementById('chat-reset').classList.add('selected');
+    document.getElementById('chat-disconnected').classList.remove('selected');
+    chatFlow.innerHTML = '<div class="tool-card"><div class="tool-head"><strong>Contact search</strong><span class="muted"><span class="spinner"></span>Running read</span></div><div class="tool-body command">contact users search --query "Mei Tan" --as user --json</div></div>';
+    setTimeout(() => {
+      chatFlow.innerHTML = '<div class="tool-card"><div class="tool-head"><strong>Contact search</strong><span style="color:#9ee7c0;">Completed</span></div><div class="tool-body"><div style="display:flex;align-items:center;gap:10px;"><div style="width:34px;height:34px;border-radius:50%;background:#4c365d;display:grid;place-items:center;font-weight:700;">MT</div><div><strong>Mei Tan</strong><div class="muted">mei.tan@acme.example · Product</div></div></div></div></div><p style="font-size:13px;margin:14px 0 10px;">I found Mei Tan. Sending this message changes data, so approval is required.</p><div class="tool-card"><div class="tool-head"><strong>Approve Lark action</strong><span class="chip">Write</span></div><div class="tool-body" style="display:grid;gap:12px;"><div class="command">im messages send --receive-id ou_8a01… --receive-id-type open_id --msg-type text --content {"text":"The launch review is moved to 3 PM."} --as user --json</div><div class="notice warning"><strong>Acts as: Narin Thana (you)</strong><br>This message will appear from your Lark account.</div><div style="display:flex;gap:8px;"><button id="deny-write" class="btn">Deny</button><button id="approve-write" class="btn primary">Approve</button></div></div></div>';
+      document.getElementById('approve-write').addEventListener('click', approveChat);
+      document.getElementById('deny-write').addEventListener('click', denyChat);
+    }, 900);
+  }
+  function approveChat(event) {
+    event.currentTarget.disabled = true;
+    event.currentTarget.innerHTML = '<span class="spinner"></span>Sending…';
+    setTimeout(() => { chatFlow.innerHTML += '<div class="notice success" style="margin-top:12px;"><strong>Message sent</strong><br>Delivered to Mei Tan as Narin Thana.</div><p style="font-size:13px;margin:12px 0 0;">Done. Mei received the updated launch review time.</p>'; }, 850);
+  }
+  function denyChat() {
+    chatFlow.innerHTML += '<div class="notice" style="margin-top:12px;"><strong>Action denied</strong><br>No Lark message was sent.</div><p style="font-size:13px;margin:12px 0 0;">Understood. I did not send the message.</p>';
+  }
+  document.getElementById('chat-reset').addEventListener('click', showChatConnected);
+  document.getElementById('chat-disconnected').addEventListener('click', () => {
+    document.getElementById('chat-reset').classList.remove('selected');
+    document.getElementById('chat-disconnected').classList.add('selected');
+    chatFlow.innerHTML = '<div class="tool-card"><div class="tool-head"><strong>Contact search</strong><span style="color:#ffb8bf;">Could not run</span></div><div class="tool-body"><div class="notice error"><strong>Lark is not connected</strong><br>Reconnect Lark in Settings, then try this action again.</div></div></div><p style="font-size:13px;margin:12px 0 0;">I can’t search contacts or send this message until you connect Lark in Settings.</p>';
+  });
+  showChatConnected();
+</script>

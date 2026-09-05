@@ -5,10 +5,12 @@ import App from "@/App.jsx";
 import PrivateRoute, {
   AdminRoute,
   ManagerRoute,
+  MultiUserRoute,
   SingleUserRoute,
 } from "@/components/PrivateRoute";
 import Login from "@/pages/Login";
 import SimpleSSOPassthrough from "@/pages/Login/SSO/simple";
+import LarkSSOPassthrough from "@/pages/Login/SSO/lark";
 import OnboardingFlow from "@/pages/OnboardingFlow";
 import "@/index.css";
 
@@ -34,6 +36,10 @@ const router = createBrowserRouter([
       {
         path: "/sso/simple",
         element: <SimpleSSOPassthrough />,
+      },
+      {
+        path: "/sso/lark",
+        element: <LarkSSOPassthrough />,
       },
       {
         path: "/workspace/:slug/settings/:tab",
@@ -139,6 +145,24 @@ const router = createBrowserRouter([
           return {
             element: <AdminRoute Component={GeneralVectorDatabase} />,
           };
+        },
+      },
+      {
+        path: "/settings/lark",
+        lazy: async () => {
+          const { default: LarkConnection } = await import(
+            "@/pages/GeneralSettings/LarkConnection"
+          );
+          return { element: <MultiUserRoute Component={LarkConnection} /> };
+        },
+      },
+      {
+        path: "/settings/authentication/lark",
+        lazy: async () => {
+          const { default: LarkSettings } = await import(
+            "@/pages/Admin/LarkSettings"
+          );
+          return { element: <AdminRoute Component={LarkSettings} /> };
         },
       },
       {

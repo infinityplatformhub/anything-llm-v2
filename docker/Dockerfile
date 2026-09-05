@@ -37,6 +37,9 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Lark CLI for the per-user Lark agent tool; pinned. Postinstall downloads the checksummed Go binary for this stage's arch.
+RUN npm install -g @larksuite/cli@1.0.93
+
 # Create a group and user with specific UID and GID
 # First, remove any existing user/group with the target UID/GID to avoid conflicts
 RUN (getent passwd "$ARG_UID" && userdel -f "$(getent passwd "$ARG_UID" | cut -d: -f1)") || true && \
@@ -105,6 +108,9 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
         echo "Installed uvx! $(uv --version)" && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# Lark CLI for the per-user Lark agent tool; pinned. Postinstall downloads the checksummed Go binary for this stage's arch.
+RUN npm install -g @larksuite/cli@1.0.93
 
 # Create a group and user with specific UID and GID
 # First, remove any existing user/group with the target UID/GID to avoid conflicts

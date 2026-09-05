@@ -87,6 +87,7 @@ model users {
   desktop_mobile_devices       desktop_mobile_devices[]
   workspace_parsed_files       workspace_parsed_files[]
   memories                     memories[]
+  lark_identity                lark_identities?
 }
 
 model recovery_codes {
@@ -486,6 +487,35 @@ model model_router_rules {
   @@unique([router_id, title])
   @@index([router_id])
   @@index([router_id, enabled, priority])
+}
+
+model lark_identities {
+  id                 Int      @id @default(autoincrement())
+  user_id            Int      @unique
+  open_id            String   @unique
+  union_id           String?
+  tenant_key         String
+  email              String?
+  display_name       String?
+  avatar_url         String?
+  access_token       String
+  refresh_token      String
+  access_expires_at  DateTime
+  refresh_expires_at DateTime
+  scopes             String
+  needs_reauth       Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  lastUpdatedAt      DateTime @default(now())
+  user               users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}
+
+model lark_oauth_states {
+  state         String   @id
+  code_verifier String
+  mode          String
+  user_id       Int?
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
 }
 
 model workspace_agent_settings {

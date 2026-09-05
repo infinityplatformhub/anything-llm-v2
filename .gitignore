@@ -12,8 +12,10 @@ yarn.lock
 .idea
 .superpowers/
 .claude/worktrees/
-e2e/.state/
+
+# Lark browser tests
 e2e/.cache/
+e2e/.state/
 e2e/logs/
 test-results/
 playwright-report/
