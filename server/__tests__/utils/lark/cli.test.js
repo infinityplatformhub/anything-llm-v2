@@ -7,6 +7,10 @@ jest.mock("fs", () => ({
   promises: {
     mkdtemp: jest.fn(),
     rm: jest.fn(),
+    mkdir: jest.fn(),
+    realpath: jest.fn(),
+    stat: jest.fn(),
+    rename: jest.fn(),
   },
 }));
 jest.mock("../../../utils/lark/settings", () => ({
@@ -25,6 +29,8 @@ jest.mock("../../../utils/EncryptionManager", () => ({
   EncryptionManager: jest.fn(),
 }));
 
+jest.mock("../../../utils/lark/fileText", () => ({ extractText: jest.fn() }));
+const { extractText } = require("../../../utils/lark/fileText");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const { loadLarkConfig } = require("../../../utils/lark/settings");
@@ -85,6 +91,10 @@ beforeEach(() => {
   jest.clearAllMocks();
   fs.promises.mkdtemp.mockResolvedValue("/tmp/lark-run-1");
   fs.promises.rm.mockResolvedValue(undefined);
+  fs.promises.mkdir.mockResolvedValue(undefined);
+  fs.promises.realpath.mockImplementation(async (value) => value);
+  fs.promises.stat.mockResolvedValue({ size: 20 });
+  extractText.mockResolvedValue({ ok: true, filename: "file", extension: ".md", bytes: 20, text: "app-secret user-access-token", truncated: false });
   loadLarkConfig.mockResolvedValue(config);
   LarkIdentity.get.mockResolvedValue({ id: 17, needs_reauth: false });
   getFreshAccessToken.mockResolvedValue("user-access-token");
@@ -95,6 +105,68 @@ beforeEach(() => {
 afterEach(() => {
   jest.useRealTimers();
   jest.restoreAllMocks();
+});
+
+describe("Drive file text", () => {
+  beforeEach(() => loadLarkConfig.mockResolvedValue({ ...config, allowlist: ["drive", "base", "docs"] }));
+  test.each(["+download", "+preview"])("%s injects private output without auditing it and redacts text", async (sub) => {
+    const args = ["drive", sub, "--url", "https://example.test/file/token"];
+    spawn.mockImplementation(() => closeChild({ stdout: JSON.stringify({ name: "MIS vs RIMB.md" }) }));
+    const result = await runAsUser({ userId: 4, args, encryption });
+    expect(spawn.mock.calls[0][1]).toEqual([...args, "--output", "/tmp/lark-run-1/download/file", "--as", "user", "--json"]);
+    expect(fs.promises.mkdir).toHaveBeenCalledWith("/tmp/lark-run-1/download", { recursive: true });
+    expect(extractText).toHaveBeenCalledWith({ filePath: "/tmp/lark-run-1/download/file", extension: ".md", maxBytes: MAX_OUTPUT_BYTES });
+    expect(result).toMatchObject({ ok: true, data: { filename: "MIS vs RIMB.md", text: "[redacted] [redacted]" } });
+    expect(EventLogs.logEvent.mock.calls.at(-1)[1].args).toEqual(args);
+  });
+  test.each(["+download", "+preview"])("%s rejects model output before spawn", async (sub) => {
+    expect(await runAsUser({ userId: 4, args: ["drive", sub, "--output", "bad.md"], encryption })).toEqual({ ok: false, error: "Flag is not permitted" });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+  test.each([["drive", "+search"], ["base", "+record-list"], ["docs", "+fetch"]])("%s %s never injects output", async (group, sub) => {
+    spawn.mockImplementation(() => closeChild());
+    await runAsUser({ userId: 4, args: [group, sub], encryption });
+    expect(spawn.mock.calls[0][1]).not.toContain("--output");
+    expect(extractText).not.toHaveBeenCalled();
+  });
+  test.each(["/tmp/lark-run-10/out.md", "/etc/passwd"])("rejects escaped saved path %s", async (file_path) => {
+    spawn.mockImplementation(() => closeChild({ stdout: JSON.stringify({ file_path, name: "x.md" }) }));
+    expect(await runAsUser({ userId: 4, args: ["drive", "+download"], encryption })).toEqual({ ok: false, error: "unsafe_path" });
+    expect(extractText).not.toHaveBeenCalled();
+  });
+  test("missing reported download returns download_missing and still audits and cleans up", async () => {
+    spawn.mockImplementation(() => closeChild({ stdout: JSON.stringify({ file_path: "/tmp/lark-run-1/download/missing.md" }) }));
+    fs.promises.realpath.mockRejectedValueOnce(Object.assign(new Error("missing file"), { code: "ENOENT" }));
+    expect(await runAsUser({ userId: 4, args: ["drive", "+download"], encryption })).toEqual({ ok: false, error: "download_missing" });
+    expect(extractText).not.toHaveBeenCalled();
+    expect(fs.promises.rm).toHaveBeenCalled();
+    expect(EventLogs.logEvent.mock.calls.at(-1)[1].outcome).toBe("error");
+  });
+  test("top-level saved path takes precedence over nested metadata", async () => {
+    spawn.mockImplementation(() => closeChild({ stdout: JSON.stringify({ file_path: "/etc/passwd", data: { file_path: "/tmp/lark-run-1/download/file.md" } }) }));
+    expect(await runAsUser({ userId: 4, args: ["drive", "+download"], encryption })).toEqual({ ok: false, error: "unsafe_path" });
+    expect(extractText).not.toHaveBeenCalled();
+  });
+  test("reads documented nested preview output_path and preserves its extension", async () => {
+    spawn.mockImplementation(() => closeChild({ stdout: JSON.stringify({ data: { output_path: "/tmp/lark-run-1/download/file.pdf", name: "source.docx" } }) }));
+    await runAsUser({ userId: 4, args: ["drive", "+preview", "--type", "pdf"], encryption });
+    expect(extractText).toHaveBeenCalledWith({ filePath: "/tmp/lark-run-1/download/file.pdf", extension: ".pdf", maxBytes: MAX_OUTPUT_BYTES });
+  });
+  test("gives extensionless office downloads a parser-visible suffix", async () => {
+    spawn.mockImplementation(() => closeChild({ stdout: JSON.stringify({ file_path: "/tmp/lark-run-1/download/file", name: "report.pdf" }) }));
+    await runAsUser({ userId: 4, args: ["drive", "+download"], encryption });
+    expect(fs.promises.rename).toHaveBeenCalledWith("/tmp/lark-run-1/download/file", "/tmp/lark-run-1/download/parsed.pdf");
+    expect(extractText).toHaveBeenCalledWith({ filePath: "/tmp/lark-run-1/download/parsed.pdf", extension: ".pdf", maxBytes: MAX_OUTPUT_BYTES });
+  });
+  test("rejects symlink escapes and oversized files before parsing", async () => {
+    spawn.mockImplementation(() => closeChild({ stdout: JSON.stringify({ file_path: "/tmp/lark-run-1/download/file", name: "x.md" }) }));
+    fs.promises.realpath.mockImplementation(async (value) => value.endsWith("file") ? "/etc/passwd" : value);
+    expect(await runAsUser({ userId: 4, args: ["drive", "+download"], encryption })).toEqual({ ok: false, error: "unsafe_path" });
+    fs.promises.realpath.mockImplementation(async (value) => value);
+    fs.promises.stat.mockResolvedValue({ size: 8 * 1024 * 1024 + 1 });
+    expect(await runAsUser({ userId: 4, args: ["drive", "+download"], encryption })).toEqual({ ok: false, error: "file_too_large" });
+    expect(extractText).not.toHaveBeenCalled();
+  });
 });
 
 test("allows configured canonical contact search docs fetch and message send", () => {
@@ -167,6 +239,21 @@ test("classifies only allowlisted read pairs and defaults everything to write", 
   expect(classify(["im", "+chat-list"])).toBe("read");
   expect(classify(["wiki", "+node-list"])).toBe("read");
   expect(classify(["calendar", "+agenda"])).toBe("read");
+  expect(classify(["drive", "+download"])).toBe("read");
+  expect(classify(["base", "+record-list"])).toBe("read");
+  expect(classify(["base", "+data-query"])).toBe("read");
+  expect(classify(["base", "+title-resolve"])).toBe("read");
+  expect(classify(["base", "+table-copy-status"])).toBe("read");
+  expect(classify(["base", "+record-share-link-create"])).toBe("write");
+  expect(classify(["drive", "+task_result"])).toBe("write");
+  for (const pair of [
+    ["drive", "+upload"],
+    ["drive", "+delete"],
+    ["base", "+record-batch-create"],
+    ["base", "+form-submit"],
+    ["base", "+view-set-filter"],
+  ])
+    expect(classify(pair)).toBe("write");
   // Case and the optional + prefix are normalized before the lookup.
   expect(classify(["CONTACT", "search-user"])).toBe("read");
 
@@ -195,11 +282,34 @@ test("READ_COMMANDS is a frozen pinned pair allowlist", () => {
   expect(READ_COMMANDS).toContain("docs +fetch");
   for (const pair of READ_COMMANDS)
     expect(pair).toMatch(/^[a-z][a-z0-9-]* \+[a-z][a-z0-9-]*$/);
-  // Nothing mutating may sit in the allowlist.
-  for (const pair of READ_COMMANDS)
-    expect(pair).not.toMatch(
-      /\+(create|update|delete|remove|send|reply|edit|move|copy|add|revert|insert|upload|download|transfer|rsvp|join|cancel|script)/
+  expect(READ_COMMANDS).toEqual([...new Set(READ_COMMANDS)].sort());
+  // Mutating hyphen segments are denied; copy status and resolve are reads.
+  for (const pair of READ_COMMANDS) {
+    const sub = pair.split(" +")[1];
+    expect(sub).not.toMatch(
+      /(^|-)(create|update|delete|upsert|submit|upload|move|rename|set|enable|disable|revert|restore|remove|add|bind|unbind|arrange)(-|$)|share-update/
     );
+    if (sub.split("-").includes("copy")) expect(sub.endsWith("-status")).toBe(true);
+    expect(pair).not.toMatch(
+      /\+(send|reply|edit|insert|transfer|rsvp|join|cancel|script)/
+    );
+  }
+});
+
+test.each([
+  ["im", "+chat-list", "--verbose", "+messages-send", "--user-id", "ou_x", "--text", "hi"],
+  ["im", "+chat-list", "--json", "+messages-send"],
+  ["contact", "+search-user", "--all", "+batch-delete"],
+  ["im", "+chat-list", "-v", "+messages-send"],
+  ["im", "+chat-list", "--verbose", "auth"],
+])("rejects command smuggling after flags: %j", async (...args) => {
+  expect(validateArgs(args)).toEqual({ ok: false, reason: "Malformed argument value" });
+  expect(await runAsUser({ userId: 4, args, encryption })).toEqual({ ok: false, error: "Malformed argument value" });
+  expect(spawn).not.toHaveBeenCalled();
+});
+test("rejects plus-prefixed phone values but keeps plain phone values", () => {
+  expect(validateArgs(["contact", "+search-user", "--query", "+66 812"]).ok).toBe(false);
+  expect(validateArgs(["contact", "+search-user", "--query", "66 812"]).ok).toBe(true);
 });
 
 test("validates every argument token, not only the first two", () => {

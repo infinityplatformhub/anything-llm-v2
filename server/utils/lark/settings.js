@@ -22,6 +22,8 @@ const DEFAULT_LARK_CLI_ALLOWLIST = [
   "wiki",
   "calendar",
   "contact",
+  "drive",
+  "base",
 ];
 
 function validateLarkSettings(payload = {}, { existing = {} } = {}) {

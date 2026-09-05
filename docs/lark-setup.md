@@ -28,6 +28,18 @@ docx:document
 wiki:wiki
 calendar:calendar
 contact:user.base:readonly
+drive:drive:readonly
+drive:file:readonly
+search:docs:read
+base:app:read
+base:table:read
+base:record:retrieve
+base:field:read
+base:view:read
+base:dashboard:read
+base:form:read
+base:workflow:read
+base:role:read
 ```
 
 Also grant the app permission `tenant:tenant:readonly` in Lark Developer Console for **Test connection** to query the tenant and auto-fill its key. This tenant-token permission is separate from the user OAuth scopes above. Without it, credentials can still test successfully, but you must enter the tenant key manually.
@@ -46,7 +58,9 @@ Open **Settings > Authentication > Lark** and configure:
 - **Allowed tenant key** (`lark_tenant_key`): enter `<tenant_key>`. User information must contain this exact tenant key before identity resolution, linking, provisioning, token persistence, or session issuance.
 - **Redirect URL**: read-only computed value. Register it in the Lark app exactly as shown.
 - **Scopes** (`lark_scopes`): space-separated list. The default is the exact scope list in section 1.
-- **CLI allowlist** (`lark_cli_allowlist`): allowed first command tokens. Default entries are `im`, `docs`, `docx`, `wiki`, `calendar`, and `contact`.
+- **CLI allowlist** (`lark_cli_allowlist`): allowed first command tokens. Default entries are `im`, `docs`, `docx`, `wiki`, `calendar`, `contact`, `drive`, and `base`.
+
+Existing instances keep their saved allowlist and scopes. To enable Drive and Base reads, add `drive` and `base` in **Admin → Lark** and add the scopes from section 1 to the saved **Scopes** setting. Import the same user OAuth scopes in Lark Developer Console and **publish a version**. Users must then **Reconnect** in Settings to grant the added scopes.
 
 `auth`, `config`, `profile`, `logout`, and `api` are permanently denied, regardless of the configured allowlist. Empty or malformed identifiers, scopes, or allowlist entries fail validation. Invalid updates return HTTP 400. Enabling Lark requires an App ID, an existing or new App Secret, an allowed tenant key, and the `SERVER_URL` environment variable set to the public server origin.
 
@@ -84,7 +98,7 @@ docs +fetch --doc "<url or token>"
 
 Policy checks the first command token against the admin allowlist and checks grouped command tokens against the permanent denylist. Arguments are passed as an array with no shell parsing. The runner always adds `--as user --json`.
 
-Every argument token is validated, not only the command tokens. An accepted invocation is exactly two positional command tokens followed by flags and their values. A third positional token is rejected, so a second subcommand cannot ride along behind a read-shaped one. Flag values may not name a local file: a leading `@`, an absolute path, a drive letter, `..`, a control character, or a value beyond 4096 characters is refused. Flags the runner owns (`--as`, `--config`, `--profile`, `--brand`, `--app-id`, `--user-access-token`, `--tenant-access-token`) and flags that name a filesystem location (`--output`, `-o`, `--output-dir`, `--out`, `--local-dir`, `--file`, `--body-file`, `--patch-file`, `--data`, `--csv`, `--image`, `--attachment`, `--path`, and any flag ending in `-file`, `-dir`, or `-path`) are rejected outright.
+Every argument token is validated, not only the command tokens. An accepted invocation is exactly two positional command tokens followed by flags and their values. A third positional token is rejected. Flag values starting with `+` or exactly matching a permanent-denylist command, case-insensitively, are also rejected so boolean flags cannot hide another subcommand. Phone-like query values must omit their leading `+`, for example `66 812` instead of `+66 812`. Flag values may not name a local file: a leading `@`, an absolute path, a drive letter, `..`, a control character, or a value beyond 4096 characters is refused. Flags the runner owns (`--as`, `--config`, `--profile`, `--brand`, `--app-id`, `--user-access-token`, `--tenant-access-token`) and flags that name a filesystem location (`--output`, `-o`, `--output-dir`, `--out`, `--local-dir`, `--file`, `--body-file`, `--patch-file`, `--data`, `--csv`, `--image`, `--attachment`, `--path`, and any flag ending in `-file`, `-dir`, or `-path`) are rejected outright.
 
 The fail-closed classifier reads an explicit allowlist of `group +subcommand` pairs pinned to `@larksuite/cli@1.0.93`, exported as `READ_COMMANDS`. Only non-mutating verbs are listed, for example `contact +search-user`, `docs +fetch`, `im +chat-list`, `im +messages-search`, `wiki +node-list`, and `calendar +agenda`.
 
