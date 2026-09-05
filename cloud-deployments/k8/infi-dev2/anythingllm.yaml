@@ -1,0 +1,156 @@
+# AnythingLLM (infinityplatformhub/anything-llm-v2) on INFI-JORHOR-Dev2
+# Namespace: anythingllm. Image is built + pushed by PodPilot (project "anythingllm",
+# deployment "anythingllm-image"); this manifest is applied with kubectl.
+#
+# Persistence fix vs the old deployment: the app writes admin-UI settings to
+# /app/server/.env, which lived in the container filesystem and was lost on every
+# restart. Here .env is a file on the PVC (subPath) seeded once by an initContainer,
+# and the fixed secrets (JWT/SIG) come from a Secret so re-created pods never
+# regenerate them (regenerated SIG_KEY makes DB-encrypted values unreadable).
+#
+# Required before apply (see secrets.sh):
+#   Secret anythingllm-env  keys: JWT_SECRET SIG_KEY SIG_SALT SERVER_URL ENV_SEED
+#   Secret regcred          docker pull secret for the byteplus registry
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: anythingllm-storage
+  namespace: anythingllm
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ebs-ssd
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anythingllm
+  namespace: anythingllm
+spec:
+  selector:
+    app: anythingllm
+  ports:
+    - name: http
+      port: 3001
+      targetPort: 3001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anythingllm
+  namespace: anythingllm
+  labels:
+    app: anythingllm
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # RWO volume
+  selector:
+    matchLabels:
+      app: anythingllm
+  template:
+    metadata:
+      labels:
+        app: anythingllm
+    spec:
+      securityContext:
+        fsGroup: 1000
+      imagePullSecrets:
+        - name: regcred
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: anythingllm-storage
+      initContainers:
+        # Seed storage/.env once from the Secret; later pods keep the UI-edited copy.
+        - name: seed-env
+          image: infinityplatform-ap-southeast-1.cr.bytepluses.com/infi/anythingllm-v2:staging
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              if [ ! -s /app/server/storage/.env ]; then
+                printf '%s\n' "$ENV_SEED" > /app/server/storage/.env
+                echo "seeded storage/.env"
+              else
+                echo "storage/.env exists, keeping it"
+              fi
+          env:
+            - name: ENV_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: anythingllm-env
+                  key: ENV_SEED
+          volumeMounts:
+            - name: storage
+              mountPath: /app/server/storage
+      containers:
+        - name: anythingllm
+          image: infinityplatform-ap-southeast-1.cr.bytepluses.com/infi/anythingllm-v2:staging
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3001
+          env:
+            - name: STORAGE_DIR
+              value: /app/server/storage
+            - name: SERVER_PORT
+              value: "3001"
+            - name: DISABLE_TELEMETRY
+              value: "true"
+            - name: NODE_ENV
+              value: production
+            - name: JWT_SECRET
+              valueFrom: { secretKeyRef: { name: anythingllm-env, key: JWT_SECRET } }
+            - name: SIG_KEY
+              valueFrom: { secretKeyRef: { name: anythingllm-env, key: SIG_KEY } }
+            - name: SIG_SALT
+              valueFrom: { secretKeyRef: { name: anythingllm-env, key: SIG_SALT } }
+            - name: SERVER_URL
+              valueFrom: { secretKeyRef: { name: anythingllm-env, key: SERVER_URL } }
+          volumeMounts:
+            - name: storage
+              mountPath: /app/server/storage
+            - name: storage
+              mountPath: /app/server/.env
+              subPath: .env
+          readinessProbe:
+            httpGet: { path: /api/ping, port: 3001 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/ping, port: 3001 }
+            initialDelaySeconds: 120
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { cpu: "2", memory: 4Gi }
+        # Kept from the previous deployment: FlowAccount MCP over SSE for the agent.
+        - name: mcp-bridge
+          image: node:20-bookworm-slim
+          command:
+            - npx
+            - -y
+            - supergateway
+            - --stdio
+            - npx -y mcp-remote https://mcp.flowaccount.com/mcp
+            - --port
+            - "8080"
+            - --ssePath
+            - /sse
+            - --messagePath
+            - /message
+          env:
+            - name: MCP_REMOTE_CONFIG_DIR
+              value: /app/server/storage/.mcp-auth
+            - name: npm_config_cache
+              value: /app/server/storage/.npm-bridge
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: storage
+              mountPath: /app/server/storage
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
