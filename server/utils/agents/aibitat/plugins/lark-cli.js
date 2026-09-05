@@ -25,7 +25,8 @@ function redactForDisplay(args) {
 function normalizeArgs(input) {
   let command = input;
   if (Array.isArray(input)) {
-    if (input.some((token) => typeof token !== "string")) return [];
+    if (input.some((token) => typeof token !== "string" || token.length === 0))
+      return [];
     if (input.length !== 1 || !/\s/.test(input[0])) return input;
     command = input[0];
   }
