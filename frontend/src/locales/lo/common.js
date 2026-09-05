@@ -689,13 +689,12 @@ const TRANSLATIONS = {
           },
         },
       },
-      default_skill:
-        "ໂດຍເລີ່ມຕົ້ນ ທັກສະນີ້ຈະຖືກເປີດໃຊ້ງານ, ແຕ່ທ່ານສາມາດປິດມັນໄດ້ຖ້າບໍ່ຕ້ອງການໃຫ້ເອເຈນໃຊ້.",
       generateImage: {
         title: "ສ້າງຮູບພາບ",
         description:
           "ໃຫ້ເອເຈນສ້າງຮູບຈາກການສົນທະນາ ຫຼື ແກ້ໄຂຮູບທີ່ແນບມາໃນການສົນທະນາ ໂດຍໃຊ້ຜູ້ສະໜອງການສ້າງຮູບທີ່ເຈົ້າຕັ້ງໄວ້.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "ເຊີບເວີ MCP",
@@ -743,6 +742,12 @@ const TRANSLATIONS = {
           description: "ເອເຈນສາມາດຖາມໄດ້ຈັກຄຳຖາມໃນໜຶ່ງຮອບ.",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

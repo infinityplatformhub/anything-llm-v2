@@ -321,8 +321,6 @@ const TRANSLATIONS = {
         description:
           "Permetti al tuo agente di utilizzare SQL per rispondere alle tue domande, collegandosi a diversi fornitori di database SQL.",
       },
-      default_skill:
-        "Per impostazione predefinita, questa funzionalità è attiva, ma è possibile disabilitarla se non si desidera che sia disponibile per l'agente.",
       filesystem: {
         title: "Accesso al file system",
         description:
@@ -740,6 +738,7 @@ const TRANSLATIONS = {
         description:
           "Permetti all'agente di generare immagini a partire dalla conversazione, oppure di modificare le immagini allegate alla conversazione, utilizzando il fornitore di generazione di immagini configurato.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "Server MCP",
@@ -791,6 +790,12 @@ const TRANSLATIONS = {
             "Quante domande di chiarimento può porre l'agente durante un singolo questionario.",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

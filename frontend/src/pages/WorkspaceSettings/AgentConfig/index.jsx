@@ -91,14 +91,13 @@ export default function WorkspaceAgentConfiguration({ workspace }) {
               <div className="flex flex-col gap-y-4">
                 <a
                   className="w-fit transition-all duration-300 border border-slate-200 px-5 py-2.5 rounded-lg text-white text-sm items-center flex gap-x-2 hover:bg-slate-200 hover:text-slate-800 focus:ring-gray-800"
-                  href={paths.settings.agentSkills()}
+                  href={`${paths.settings.agentSkills()}?workspace=${encodeURIComponent(workspace.slug)}`}
                 >
                   Configure Agent Skills
                 </a>
                 <p className="text-white text-opacity-60 text-xs font-medium">
-                  Customize and enhance the default agent's capabilities by
-                  enabling or disabling specific skills. These settings will be
-                  applied across all workspaces.
+                  Enable or disable agent skills for this workspace only. New
+                  workspaces start with no skills enabled.
                 </p>
               </div>
             )}

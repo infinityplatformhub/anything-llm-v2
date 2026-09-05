@@ -317,8 +317,6 @@ const TRANSLATIONS = {
         description:
           "Maak het mogelijk voor uw agent om SQL te gebruiken om uw vragen te beantwoorden, door verbinding te maken met verschillende SQL-databaseproviders.",
       },
-      default_skill:
-        "Standaard is deze functie ingeschakeld, maar u kunt deze uitschakelen als u niet wilt dat de agent er gebruik van kan maken.",
       filesystem: {
         title: "Toegang tot het bestandssysteem",
         description:
@@ -727,6 +725,7 @@ const TRANSLATIONS = {
         description:
           "Laat de agent afbeeldingen genereren op basis van de chat, of bestaande afbeeldingen in het gesprek bewerken, met behulp van uw geconfigureerde dienst voor het genereren van afbeeldingen.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "MCP-servers",
@@ -777,6 +776,12 @@ const TRANSLATIONS = {
             "Hoeveel vragen voor verduidelijking mag de agent stellen tijdens één enquête?",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

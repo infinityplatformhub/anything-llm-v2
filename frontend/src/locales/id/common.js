@@ -723,13 +723,12 @@ const TRANSLATIONS = {
           },
         },
       },
-      default_skill:
-        "Secara bawaan, keterampilan ini diaktifkan, tetapi Anda dapat menonaktifkannya jika tidak ingin tersedia untuk agen.",
       generateImage: {
         title: "Menghasilkan gambar",
         description:
           "Izinkan agen untuk menghasilkan gambar dari percakapan, atau mengedit gambar yang terlampir dalam percakapan, menggunakan penyedia pembuatan gambar yang telah Anda konfigurasi.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "Server MCP",
@@ -779,6 +778,12 @@ const TRANSLATIONS = {
             "Berapa banyak pertanyaan klarifikasi yang boleh diajukan agen dalam satu survei.",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

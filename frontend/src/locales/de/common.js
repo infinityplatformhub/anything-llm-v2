@@ -322,8 +322,6 @@ const TRANSLATIONS = {
         description:
           "Ermöglichen Sie Ihrem Agenten, SQL zu nutzen, um Ihre Fragen zu beantworten, indem Sie eine Verbindung zu verschiedenen SQL-Datenbankanbietern herstellen.",
       },
-      default_skill:
-        "Standardmäßig ist diese Funktion aktiviert, aber Sie können sie deaktivieren, wenn Sie nicht möchten, dass sie für den Agenten verfügbar ist.",
       filesystem: {
         title: "Zugriff auf das Dateisystem",
         description:
@@ -743,6 +741,7 @@ const TRANSLATIONS = {
         description:
           "Ermöglichen Sie dem Agenten, Bilder aus dem Chat zu generieren oder Bilder zu bearbeiten, die an das Gespräch angehängt sind, unter Verwendung Ihres konfigurierten Bildgenerierungsdienstes.",
       },
+      workspace_scoped: null,
     },
     "performance-warning":
       "Die Leistung von LLMs, die keine explizite Unterstützung für das Aufrufen von Tools bieten, hängt stark von den Fähigkeiten und der Genauigkeit des Modells ab. Einige Fähigkeiten können eingeschränkt oder nicht funktionsfähig sein.",
@@ -796,6 +795,12 @@ const TRANSLATIONS = {
             "Wie viele Nachfragen darf der Mitarbeiter während einer einzelnen Befragung stellen?",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

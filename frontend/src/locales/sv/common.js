@@ -1,3 +1,4 @@
+// Anything with "null" requires a translation. Contribute to translation via a PR!
 const TRANSLATIONS = {
   onboarding: {
     home: {
@@ -719,13 +720,12 @@ const TRANSLATIONS = {
           },
         },
       },
-      default_skill:
-        "Som standard är denna färdighet aktiverad, men du kan stänga av den om du inte vill att den ska vara tillgänglig för agenten.",
       generateImage: {
         title: "Generera bilder",
         description:
           "Låt agenten generera bilder från chattet, eller redigera befintliga bilder som är kopplade till samtalet, med hjälp av den bildgenereringsleverantör som du har konfigurerat.",
       },
+      workspace_scoped: null,
     },
     mcp: {
       title: "MCP-servrar",
@@ -775,6 +775,12 @@ const TRANSLATIONS = {
             "Hur många förtydligande frågor agenten får ställa i en enda omgång.",
         },
       },
+    },
+    workspaceSelector: {
+      scopeNote: null,
+      emptyNote: null,
+      label: null,
+      noWorkspaces: null,
     },
   },
   recorded: {

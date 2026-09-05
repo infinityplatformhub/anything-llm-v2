@@ -10,3 +10,10 @@ aws_cf_deploy_anything_llm.json
 yarn.lock
 *.bak
 .idea
+.superpowers/
+.claude/worktrees/
+e2e/.state/
+e2e/.cache/
+e2e/logs/
+test-results/
+playwright-report/

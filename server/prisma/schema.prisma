@@ -149,6 +149,7 @@ model workspaces {
   prompt_history               prompt_history[]
   workspace_parsed_files       workspace_parsed_files[]
   memories                     memories[]
+  agent_settings               workspace_agent_settings?
 }
 
 model workspace_threads {
@@ -485,4 +486,13 @@ model model_router_rules {
   @@unique([router_id, title])
   @@index([router_id])
   @@index([router_id, enabled, priority])
+}
+
+model workspace_agent_settings {
+  id             Int        @id @default(autoincrement())
+  workspace_id   Int        @unique
+  enabled_skills String     @default("[]") // JSON array of AgentPlugins keys
+  createdAt      DateTime   @default(now())
+  lastUpdatedAt  DateTime   @default(now()) @updatedAt
+  workspace      workspaces @relation(fields: [workspace_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
 }

@@ -16,7 +16,6 @@ import {
   Package,
 } from "@phosphor-icons/react";
 import ContextualSaveBar from "@/components/ContextualSaveBar";
-import { castToType } from "@/utils/types";
 import { FullScreenLoader } from "@/components/Preloader";
 import {
   getDefaultSkills,
@@ -35,6 +34,7 @@ import { Link } from "react-router-dom";
 import paths from "@/utils/paths";
 import AgentFlows from "@/models/agentFlows";
 import AgentSkillSettings from "./AgentSkillSettings";
+import WorkspaceSelector from "./WorkspaceSelector";
 
 const IGNORE_CHANGE_SETTINGS = [
   "agentSkillRerankerEnabled",
@@ -53,9 +53,11 @@ export default function AdminAgents() {
   const [loading, setLoading] = useState(true);
   const [showSkillModal, setShowSkillModal] = useState(false);
 
+  const [workspaceSlug, setWorkspaceSlug] = useState(null);
+  const workspaceSlugRef = useRef(workspaceSlug);
   const [agentSkills, setAgentSkills] = useState([]);
+  const [skillsLoadFailed, setSkillsLoadFailed] = useState(true);
   const [importedSkills, setImportedSkills] = useState([]);
-  const [disabledAgentSkills, setDisabledAgentSkills] = useState([]);
 
   const [agentFlows, setAgentFlows] = useState([]);
   const [selectedFlow, setSelectedFlow] = useState(null);
@@ -121,8 +123,6 @@ export default function AdminAgents() {
       ] = await Promise.all([
         System.keys(),
         Admin.systemPreferencesByFields([
-          "disabled_agent_skills",
-          "default_agent_skills",
           "imported_agent_skills",
           "active_agent_flows",
         ]),
@@ -132,12 +132,9 @@ export default function AdminAgents() {
       ]);
 
       const { flows = [] } = flowsRes;
-      setSettings({ ..._settings, preferences: _preferences.settings } ?? {});
-      setAgentSkills(_preferences.settings?.default_agent_skills ?? []);
-      setDisabledAgentSkills(
-        _preferences.settings?.disabled_agent_skills ?? []
-      );
-      setImportedSkills(_preferences.settings?.imported_agent_skills ?? []);
+      const preferences = _preferences?.settings ?? {};
+      setSettings({ ..._settings, preferences });
+      setImportedSkills(preferences.imported_agent_skills ?? []);
       setActiveFlowIds(flows.filter((f) => f.active).map((f) => f.uuid));
       setAgentFlows(flows);
       setFileSystemAgentAvailable(fsAgentAvailable);
@@ -147,17 +144,42 @@ export default function AdminAgents() {
     fetchSettings();
   }, []);
 
-  const toggleDefaultSkill = (skillName) => {
-    setDisabledAgentSkills((prev) => {
-      const updatedSkills = prev.includes(skillName)
-        ? prev.filter((name) => name !== skillName)
-        : [...prev, skillName];
-      setHasChanges(true);
-      return updatedSkills;
-    });
+  const loadWorkspaceSkills = async (slug, isCancelled = () => false) => {
+    setSkillsLoadFailed(true);
+    setAgentSkills([]);
+    const { enabledSkills, error } = await Admin.workspaceAgentSkills(slug);
+    if (isCancelled() || workspaceSlugRef.current !== slug) return false;
+    if (enabledSkills === null) {
+      showToast(error || "Failed to load workspace skills.", "error", {
+        clear: true,
+      });
+      return false;
+    }
+
+    setAgentSkills(enabledSkills);
+    setSkillsLoadFailed(false);
+    setHasChanges(false);
+    return true;
+  };
+
+  useEffect(() => {
+    workspaceSlugRef.current = workspaceSlug;
+    if (!workspaceSlug) return;
+
+    let cancelled = false;
+    loadWorkspaceSkills(workspaceSlug, () => cancelled);
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceSlug]);
+
+  const handleCancel = () => {
+    if (!workspaceSlug) return;
+    loadWorkspaceSkills(workspaceSlug);
   };
 
   const toggleAgentSkill = (skillName) => {
+    if (skillsLoadFailed) return;
     setAgentSkills((prev) => {
       const updatedSkills = prev.includes(skillName)
         ? prev.filter((name) => name !== skillName)
@@ -188,7 +210,6 @@ export default function AdminAgents() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     const data = {
-      workspace: {},
       system: {},
       env: {},
     };
@@ -206,33 +227,51 @@ export default function AdminAgents() {
         data.env[label] = String(value);
         continue;
       }
-      data.workspace[key] = castToType(key, value);
     }
 
-    const { success } = await Admin.updateSystemPreferences(data.system);
-    await System.updateSystem(data.env);
+    const shouldSaveSkills = Boolean(workspaceSlug) && !skillsLoadFailed;
+    const [preferencesRes, envRes, skillRes] = await Promise.all([
+      Admin.updateSystemPreferences(data.system),
+      System.updateSystem(data.env),
+      shouldSaveSkills
+        ? Admin.updateWorkspaceAgentSkills(workspaceSlug, agentSkills)
+        : null,
+    ]);
 
-    if (success) {
-      const _settings = await System.keys();
-      const _preferences = await Admin.systemPreferencesByFields([
-        "disabled_agent_skills",
-        "default_agent_skills",
-        "imported_agent_skills",
-      ]);
-      setSettings({ ..._settings, preferences: _preferences.settings } ?? {});
-      setAgentSkills(_preferences.settings?.default_agent_skills ?? []);
-      setDisabledAgentSkills(
-        _preferences.settings?.disabled_agent_skills ?? []
+    if (skillRes?.success && workspaceSlugRef.current === workspaceSlug) {
+      setAgentSkills(skillRes.enabledSkills ?? []);
+      setSkillsLoadFailed(false);
+    }
+
+    const failures = [];
+    if (!preferencesRes.success)
+      failures.push(
+        `System preferences: ${preferencesRes.error || "Unknown error"}`
       );
-      setImportedSkills(_preferences.settings?.imported_agent_skills ?? []);
-      showToast(`Agent preferences saved successfully.`, "success", {
+    if (envRes?.error)
+      failures.push(`Environment: ${envRes.error || "Unknown error"}`);
+    if (skillRes && !skillRes.success)
+      failures.push(`Workspace skills: ${skillRes.error || "Unknown error"}`);
+
+    const [_settings, _preferences] = await Promise.all([
+      System.keys(),
+      Admin.systemPreferencesByFields(["imported_agent_skills"]),
+    ]);
+    const preferences = _preferences?.settings ?? {};
+    setSettings({ ..._settings, preferences });
+    setImportedSkills(preferences.imported_agent_skills ?? []);
+
+    if (failures.length > 0) {
+      showToast(`Failed to save ${failures.join("; ")}`, "error", {
         clear: true,
       });
-    } else {
-      showToast(`Agent preferences failed to save.`, "error", { clear: true });
+      return;
     }
 
     setHasChanges(false);
+    showToast(`Agent preferences saved successfully.`, "success", {
+      clear: true,
+    });
   };
 
   let SelectedSkillComponent = null;
@@ -350,278 +389,49 @@ export default function AdminAgents() {
     return (
       <SkillLayout
         hasChanges={hasChanges}
-        handleCancel={() => setHasChanges(false)}
+        handleCancel={handleCancel}
         handleSubmit={handleSubmit}
       >
-        <form
-          onSubmit={handleSubmit}
-          onChange={() => !selectedFlow && setHasChanges(true)}
-          ref={formEl}
-          className="flex flex-col w-full p-4 mt-10"
-        >
-          <input
-            name="system::default_agent_skills"
-            type="hidden"
-            value={agentSkills.join(",")}
+        <div className="flex-1 flex flex-col w-full p-4 mt-10">
+          <WorkspaceSelector
+            selectedSlug={workspaceSlug}
+            onChange={setWorkspaceSlug}
+            showEmptyNote={
+              Boolean(workspaceSlug) &&
+              !skillsLoadFailed &&
+              agentSkills.length === 0
+            }
           />
-          <input
-            name="system::disabled_agent_skills"
-            type="hidden"
-            value={disabledAgentSkills.join(",")}
-          />
-
-          {/* Skill settings nav */}
-          <div
-            hidden={showSkillModal}
-            className="flex flex-col gap-y-[18px] overflow-y-scroll no-scroll"
+          <form
+            onSubmit={handleSubmit}
+            onChange={() => !selectedFlow && setHasChanges(true)}
+            ref={formEl}
+            className="flex flex-col w-full min-h-0"
           >
-            <div className="text-theme-text-primary flex items-center gap-x-2">
-              <Robot size={24} />
-              <p className="text-lg font-medium">Agent Skills</p>
-            </div>
-            {/* Default skills */}
-            <SkillList
-              skills={defaultSkills}
-              selectedSkill={selectedSkill}
-              handleClick={handleDefaultSkillClick}
-              activeSkills={Object.keys(defaultSkills).filter(
-                (skill) => !disabledAgentSkills.includes(skill)
-              )}
-            />
-            {/* Configurable skills */}
-            <SkillList
-              skills={configurableSkills}
-              selectedSkill={selectedSkill}
-              handleClick={handleDefaultSkillClick}
-              activeSkills={agentSkills}
-            />
-
-            {Object.keys(appIntegrationSkills).length > 0 && (
-              <>
-                <div className="text-theme-text-primary flex items-center gap-x-2 mt-6">
-                  <Package size={24} />
-                  <p className="text-lg font-medium">App Integrations</p>
-                </div>
-                <SkillList
-                  skills={appIntegrationSkills}
-                  selectedSkill={selectedSkill}
-                  handleClick={handleSkillClick}
-                  activeSkills={agentSkills}
-                />
-              </>
-            )}
-
-            <div className="text-theme-text-primary flex items-center gap-x-2">
-              <Plug size={24} />
-              <p className="text-lg font-medium">Custom Skills</p>
-            </div>
-            <ImportedSkillList
-              skills={importedSkills}
-              selectedSkill={selectedSkill}
-              handleClick={handleSkillClick}
-            />
-
-            <div className="text-theme-text-primary flex items-center gap-x-2 mt-6">
-              <FlowArrow size={24} />
-              <p className="text-lg font-medium">Agent Flows</p>
-            </div>
-            <AgentFlowsList
-              flows={agentFlows}
-              selectedFlow={selectedFlow}
-              handleClick={handleFlowClick}
-              activeFlowIds={activeFlowIds}
-            />
-            <input
-              type="hidden"
-              name="system::active_agent_flows"
-              id="active_agent_flows"
-              value={activeFlowIds.join(",")}
-            />
-            <MCPServerHeader
-              setMcpServers={setMcpServers}
-              setSelectedMcpServer={setSelectedMcpServer}
+            {/* Skill settings nav */}
+            <div
+              hidden={showSkillModal}
+              className="flex flex-col gap-y-[18px] overflow-y-scroll no-scroll"
             >
-              {({ loadingMcpServers }) => {
-                return (
-                  <MCPServersList
-                    isLoading={loadingMcpServers}
-                    servers={mcpServers}
-                    selectedServer={selectedMcpServer}
-                    handleClick={handleMCPClick}
-                  />
-                );
-              }}
-            </MCPServerHeader>
-          </div>
-
-          {/* Selected agent skill modal */}
-          {showSkillModal && (
-            <div className="fixed top-0 left-0 w-full h-full bg-sidebar z-30">
-              <div className="flex flex-col h-full">
-                <div className="flex items-center p-4">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowSkillModal(false);
-                      setSelectedSkill("");
-                    }}
-                    className="text-white/60 hover:text-white transition-colors duration-200"
-                  >
-                    <div className="flex items-center text-sky-400">
-                      <CaretLeft size={24} />
-                      <div>Back</div>
-                    </div>
-                  </button>
-                </div>
-                <div className="flex-1 overflow-y-auto p-4">
-                  <div className=" bg-theme-bg-secondary text-white rounded-xl p-4 overflow-y-scroll overflow-x-visible no-scroll">
-                    {SelectedSkillComponent ? (
-                      <>
-                        {selectedMcpServer ? (
-                          <ServerPanel
-                            server={selectedMcpServer}
-                            toggleServer={toggleMCP}
-                            onDelete={handleMCPServerDelete}
-                            onToggleTool={handleMCPToolToggle}
-                          />
-                        ) : selectedFlow ? (
-                          <FlowPanel
-                            flow={selectedFlow}
-                            toggleFlow={toggleFlow}
-                            enabled={activeFlowIds.includes(selectedFlow.uuid)}
-                            onDelete={handleFlowDelete}
-                          />
-                        ) : selectedSkill.imported ? (
-                          <ImportedSkillConfig
-                            key={selectedSkill.hubId}
-                            selectedSkill={selectedSkill}
-                            setImportedSkills={setImportedSkills}
-                          />
-                        ) : (
-                          <>
-                            {defaultSkills?.[selectedSkill] ? (
-                              // The selected skill is a default skill - show the default skill panel
-                              <SelectedSkillComponent
-                                skill={defaultSkills[selectedSkill]?.skill}
-                                settings={settings}
-                                toggleSkill={toggleDefaultSkill}
-                                enabled={
-                                  !disabledAgentSkills.includes(
-                                    defaultSkills[selectedSkill]?.skill
-                                  )
-                                }
-                                setHasChanges={setHasChanges}
-                                {...defaultSkills[selectedSkill]}
-                              />
-                            ) : configurableSkills?.[selectedSkill] ? (
-                              // The selected skill is a configurable skill - show the configurable skill panel
-                              <SelectedSkillComponent
-                                skill={configurableSkills[selectedSkill]?.skill}
-                                settings={settings}
-                                toggleSkill={toggleAgentSkill}
-                                enabled={agentSkills.includes(
-                                  configurableSkills[selectedSkill]?.skill
-                                )}
-                                setHasChanges={setHasChanges}
-                                hasChanges={hasChanges}
-                                {...configurableSkills[selectedSkill]}
-                              />
-                            ) : (
-                              // The selected skill is an app integration skill
-                              <SelectedSkillComponent
-                                skill={
-                                  appIntegrationSkills[selectedSkill]?.skill
-                                }
-                                settings={settings}
-                                toggleSkill={toggleAgentSkill}
-                                enabled={agentSkills.includes(
-                                  appIntegrationSkills[selectedSkill]?.skill
-                                )}
-                                setHasChanges={setHasChanges}
-                                hasChanges={hasChanges}
-                                {...appIntegrationSkills[selectedSkill]}
-                              />
-                            )}
-                          </>
-                        )}
-                      </>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center h-full text-theme-text-secondary">
-                        <Robot size={40} />
-                        <p className="font-medium">
-                          Select an Agent Skill, Agent Flow, or MCP Server
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
+              <div className="text-theme-text-primary flex items-center gap-x-2">
+                <Robot size={24} />
+                <p className="text-lg font-medium">Agent Skills</p>
               </div>
-            </div>
-          )}
-        </form>
-      </SkillLayout>
-    );
-  }
-
-  return (
-    <SkillLayout
-      hasChanges={hasChanges}
-      handleCancel={() => setHasChanges(false)}
-      handleSubmit={handleSubmit}
-    >
-      <form
-        onSubmit={handleSubmit}
-        onChange={(e) => {
-          if (IGNORE_CHANGE_SETTINGS.includes(e.target.name)) return;
-          if (!selectedSkill?.imported && !selectedFlow) setHasChanges(true);
-        }}
-        ref={formEl}
-        className="flex-1 flex gap-x-6 p-4 mt-10"
-      >
-        <input
-          name="system::default_agent_skills"
-          type="hidden"
-          value={agentSkills.join(",")}
-        />
-        <input
-          name="system::disabled_agent_skills"
-          type="hidden"
-          value={disabledAgentSkills.join(",")}
-        />
-        <input
-          type="hidden"
-          name="system::active_agent_flows"
-          id="active_agent_flows"
-          value={activeFlowIds.join(",")}
-        />
-
-        {/* Skill settings nav - Make this section scrollable */}
-        <div className="flex flex-col min-w-[360px] h-[calc(100vh-90px)]">
-          <div className="flex-none flex justify-between items-center mb-4">
-            <div className="text-theme-text-primary flex items-center gap-x-2">
-              <Robot size={24} />
-              <p className="text-lg font-medium">Agent Skills</p>
-            </div>
-            <AgentSkillSettings />
-          </div>
-
-          <div className="flex-1 overflow-y-auto pr-2 pb-4">
-            <div className="space-y-4">
-              {/* Default skills list */}
+              {/* Default skills */}
               <SkillList
                 skills={defaultSkills}
                 selectedSkill={selectedSkill}
-                handleClick={handleSkillClick}
-                activeSkills={Object.keys(defaultSkills).filter(
-                  (skill) => !disabledAgentSkills.includes(skill)
-                )}
+                handleClick={handleDefaultSkillClick}
+                activeSkills={agentSkills}
+                disabled={skillsLoadFailed}
               />
               {/* Configurable skills */}
               <SkillList
                 skills={configurableSkills}
                 selectedSkill={selectedSkill}
-                handleClick={handleSkillClick}
+                handleClick={handleDefaultSkillClick}
                 activeSkills={agentSkills}
+                disabled={skillsLoadFailed}
               />
 
               {Object.keys(appIntegrationSkills).length > 0 && (
@@ -635,11 +445,12 @@ export default function AdminAgents() {
                     selectedSkill={selectedSkill}
                     handleClick={handleSkillClick}
                     activeSkills={agentSkills}
+                    disabled={skillsLoadFailed}
                   />
                 </>
               )}
 
-              <div className="text-theme-text-primary flex items-center gap-x-2 mt-4">
+              <div className="text-theme-text-primary flex items-center gap-x-2">
                 <Plug size={24} />
                 <p className="text-lg font-medium">Custom Skills</p>
               </div>
@@ -649,28 +460,9 @@ export default function AdminAgents() {
                 handleClick={handleSkillClick}
               />
 
-              <div className="text-theme-text-primary flex items-center justify-between gap-x-2 mt-4">
-                <div className="flex items-center gap-x-2">
-                  <FlowArrow size={24} />
-                  <p className="text-lg font-medium">Agent Flows</p>
-                </div>
-                {agentFlows.length === 0 ? (
-                  <Link
-                    to={paths.agents.builder()}
-                    className="text-cta-button flex items-center gap-x-1 hover:underline"
-                  >
-                    <Hammer size={16} />
-                    <p className="text-sm">Create Flow</p>
-                  </Link>
-                ) : (
-                  <Link
-                    to={paths.agents.builder()}
-                    className="text-theme-text-secondary hover:text-cta-button flex items-center gap-x-1"
-                  >
-                    <Hammer size={16} />
-                    <p className="text-sm">Open Builder</p>
-                  </Link>
-                )}
+              <div className="text-theme-text-primary flex items-center gap-x-2 mt-6">
+                <FlowArrow size={24} />
+                <p className="text-lg font-medium">Agent Flows</p>
               </div>
               <AgentFlowsList
                 flows={agentFlows}
@@ -678,7 +470,12 @@ export default function AdminAgents() {
                 handleClick={handleFlowClick}
                 activeFlowIds={activeFlowIds}
               />
-
+              <input
+                type="hidden"
+                name="system::active_agent_flows"
+                id="active_agent_flows"
+                value={activeFlowIds.join(",")}
+              />
               <MCPServerHeader
                 setMcpServers={setMcpServers}
                 setSelectedMcpServer={setSelectedMcpServer}
@@ -695,91 +492,338 @@ export default function AdminAgents() {
                 }}
               </MCPServerHeader>
             </div>
-          </div>
-        </div>
 
-        {/* Selected agent skill setting panel */}
-        <div className="flex-[2] flex flex-col gap-y-[18px] mt-10">
-          <div className="bg-theme-bg-secondary text-white rounded-xl flex-1 p-4 overflow-y-scroll overflow-x-visible no-scroll">
-            {SelectedSkillComponent ? (
-              <>
-                {selectedMcpServer ? (
-                  <ServerPanel
-                    server={selectedMcpServer}
-                    toggleServer={toggleMCP}
-                    onDelete={handleMCPServerDelete}
-                    onToggleTool={handleMCPToolToggle}
-                  />
-                ) : selectedFlow ? (
-                  <FlowPanel
-                    flow={selectedFlow}
-                    toggleFlow={toggleFlow}
-                    enabled={activeFlowIds.includes(selectedFlow.uuid)}
-                    onDelete={handleFlowDelete}
-                  />
-                ) : selectedSkill.imported ? (
-                  <ImportedSkillConfig
-                    key={selectedSkill.hubId}
-                    selectedSkill={selectedSkill}
-                    setImportedSkills={setImportedSkills}
-                  />
-                ) : (
-                  <>
-                    {defaultSkills?.[selectedSkill] ? (
-                      // The selected skill is a default skill - show the default skill panel
-                      <SelectedSkillComponent
-                        skill={defaultSkills[selectedSkill]?.skill}
-                        settings={settings}
-                        toggleSkill={toggleDefaultSkill}
-                        enabled={
-                          !disabledAgentSkills.includes(
-                            defaultSkills[selectedSkill]?.skill
-                          )
-                        }
-                        setHasChanges={setHasChanges}
-                        {...defaultSkills[selectedSkill]}
-                      />
-                    ) : configurableSkills?.[selectedSkill] ? (
-                      // The selected skill is a configurable skill - show the configurable skill panel
-                      <SelectedSkillComponent
-                        skill={configurableSkills[selectedSkill]?.skill}
-                        settings={settings}
-                        toggleSkill={toggleAgentSkill}
-                        enabled={agentSkills.includes(
-                          configurableSkills[selectedSkill]?.skill
-                        )}
-                        setHasChanges={setHasChanges}
-                        hasChanges={hasChanges}
-                        {...configurableSkills[selectedSkill]}
-                      />
-                    ) : (
-                      // The selected skill is an app integration skill
-                      <SelectedSkillComponent
-                        skill={appIntegrationSkills[selectedSkill]?.skill}
-                        settings={settings}
-                        toggleSkill={toggleAgentSkill}
-                        enabled={agentSkills.includes(
-                          appIntegrationSkills[selectedSkill]?.skill
-                        )}
-                        setHasChanges={setHasChanges}
-                        hasChanges={hasChanges}
-                        {...appIntegrationSkills[selectedSkill]}
-                      />
-                    )}
-                  </>
-                )}
-              </>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full text-theme-text-secondary">
-                <Robot size={40} />
-                <p className="font-medium">
-                  Select an Agent Skill, Agent Flow, or MCP Server
-                </p>
+            {/* Selected agent skill modal */}
+            {showSkillModal && (
+              <div className="fixed top-0 left-0 w-full h-full bg-sidebar z-30">
+                <div className="flex flex-col h-full">
+                  <div className="flex items-center p-4">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowSkillModal(false);
+                        setSelectedSkill("");
+                      }}
+                      className="text-white/60 hover:text-white transition-colors duration-200"
+                    >
+                      <div className="flex items-center text-sky-400">
+                        <CaretLeft size={24} />
+                        <div>Back</div>
+                      </div>
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4">
+                    <div className=" bg-theme-bg-secondary text-white rounded-xl p-4 overflow-y-scroll overflow-x-visible no-scroll">
+                      {SelectedSkillComponent ? (
+                        <>
+                          {selectedMcpServer ? (
+                            <ServerPanel
+                              server={selectedMcpServer}
+                              toggleServer={toggleMCP}
+                              onDelete={handleMCPServerDelete}
+                              onToggleTool={handleMCPToolToggle}
+                            />
+                          ) : selectedFlow ? (
+                            <FlowPanel
+                              flow={selectedFlow}
+                              toggleFlow={toggleFlow}
+                              enabled={activeFlowIds.includes(
+                                selectedFlow.uuid
+                              )}
+                              onDelete={handleFlowDelete}
+                            />
+                          ) : selectedSkill.imported ? (
+                            <ImportedSkillConfig
+                              key={selectedSkill.hubId}
+                              selectedSkill={selectedSkill}
+                              setImportedSkills={setImportedSkills}
+                            />
+                          ) : (
+                            <>
+                              {defaultSkills?.[selectedSkill] ? (
+                                // The selected skill is a default skill - show the default skill panel
+                                <SelectedSkillComponent
+                                  skill={defaultSkills[selectedSkill]?.skill}
+                                  settings={settings}
+                                  toggleSkill={toggleAgentSkill}
+                                  enabled={agentSkills.includes(
+                                    defaultSkills[selectedSkill]?.skill
+                                  )}
+                                  setHasChanges={setHasChanges}
+                                  {...defaultSkills[selectedSkill]}
+                                />
+                              ) : configurableSkills?.[selectedSkill] ? (
+                                // The selected skill is a configurable skill - show the configurable skill panel
+                                <SelectedSkillComponent
+                                  skill={
+                                    configurableSkills[selectedSkill]?.skill
+                                  }
+                                  settings={settings}
+                                  toggleSkill={toggleAgentSkill}
+                                  enabled={agentSkills.includes(
+                                    configurableSkills[selectedSkill]?.skill
+                                  )}
+                                  setHasChanges={setHasChanges}
+                                  hasChanges={hasChanges}
+                                  {...configurableSkills[selectedSkill]}
+                                />
+                              ) : (
+                                // The selected skill is an app integration skill
+                                <SelectedSkillComponent
+                                  skill={
+                                    appIntegrationSkills[selectedSkill]?.skill
+                                  }
+                                  settings={settings}
+                                  toggleSkill={toggleAgentSkill}
+                                  enabled={agentSkills.includes(
+                                    appIntegrationSkills[selectedSkill]?.skill
+                                  )}
+                                  setHasChanges={setHasChanges}
+                                  hasChanges={hasChanges}
+                                  {...appIntegrationSkills[selectedSkill]}
+                                />
+                              )}
+                            </>
+                          )}
+                        </>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center h-full text-theme-text-secondary">
+                          <Robot size={40} />
+                          <p className="font-medium">
+                            Select an Agent Skill, Agent Flow, or MCP Server
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
-          </div>
+          </form>
         </div>
-      </form>
+      </SkillLayout>
+    );
+  }
+
+  return (
+    <SkillLayout
+      hasChanges={hasChanges}
+      handleCancel={handleCancel}
+      handleSubmit={handleSubmit}
+    >
+      <div className="flex-1 flex flex-col p-4 mt-10">
+        <WorkspaceSelector
+          selectedSlug={workspaceSlug}
+          onChange={setWorkspaceSlug}
+          showEmptyNote={
+            Boolean(workspaceSlug) &&
+            !skillsLoadFailed &&
+            agentSkills.length === 0
+          }
+        />
+        <form
+          onSubmit={handleSubmit}
+          onChange={(e) => {
+            if (IGNORE_CHANGE_SETTINGS.includes(e.target.name)) return;
+            if (!selectedSkill?.imported && !selectedFlow) setHasChanges(true);
+          }}
+          ref={formEl}
+          className="flex-1 flex flex-col min-h-0"
+        >
+          <div className="flex flex-1 gap-x-6 min-h-0">
+            <input
+              type="hidden"
+              name="system::active_agent_flows"
+              id="active_agent_flows"
+              value={activeFlowIds.join(",")}
+            />
+
+            {/* Skill settings nav - Make this section scrollable */}
+            <div className="flex flex-col min-w-[360px] h-[calc(100vh-90px)]">
+              <div className="flex-none flex justify-between items-center mb-4">
+                <div className="text-theme-text-primary flex items-center gap-x-2">
+                  <Robot size={24} />
+                  <p className="text-lg font-medium">Agent Skills</p>
+                </div>
+                <AgentSkillSettings />
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-2 pb-4">
+                <div className="space-y-4">
+                  {/* Default skills list */}
+                  <SkillList
+                    skills={defaultSkills}
+                    selectedSkill={selectedSkill}
+                    handleClick={handleSkillClick}
+                    activeSkills={agentSkills}
+                    disabled={skillsLoadFailed}
+                  />
+                  {/* Configurable skills */}
+                  <SkillList
+                    skills={configurableSkills}
+                    selectedSkill={selectedSkill}
+                    handleClick={handleSkillClick}
+                    activeSkills={agentSkills}
+                    disabled={skillsLoadFailed}
+                  />
+
+                  {Object.keys(appIntegrationSkills).length > 0 && (
+                    <>
+                      <div className="text-theme-text-primary flex items-center gap-x-2 mt-6">
+                        <Package size={24} />
+                        <p className="text-lg font-medium">App Integrations</p>
+                      </div>
+                      <SkillList
+                        skills={appIntegrationSkills}
+                        selectedSkill={selectedSkill}
+                        handleClick={handleSkillClick}
+                        activeSkills={agentSkills}
+                        disabled={skillsLoadFailed}
+                      />
+                    </>
+                  )}
+
+                  <div className="text-theme-text-primary flex items-center gap-x-2 mt-4">
+                    <Plug size={24} />
+                    <p className="text-lg font-medium">Custom Skills</p>
+                  </div>
+                  <ImportedSkillList
+                    skills={importedSkills}
+                    selectedSkill={selectedSkill}
+                    handleClick={handleSkillClick}
+                  />
+
+                  <div className="text-theme-text-primary flex items-center justify-between gap-x-2 mt-4">
+                    <div className="flex items-center gap-x-2">
+                      <FlowArrow size={24} />
+                      <p className="text-lg font-medium">Agent Flows</p>
+                    </div>
+                    {agentFlows.length === 0 ? (
+                      <Link
+                        to={paths.agents.builder()}
+                        className="text-cta-button flex items-center gap-x-1 hover:underline"
+                      >
+                        <Hammer size={16} />
+                        <p className="text-sm">Create Flow</p>
+                      </Link>
+                    ) : (
+                      <Link
+                        to={paths.agents.builder()}
+                        className="text-theme-text-secondary hover:text-cta-button flex items-center gap-x-1"
+                      >
+                        <Hammer size={16} />
+                        <p className="text-sm">Open Builder</p>
+                      </Link>
+                    )}
+                  </div>
+                  <AgentFlowsList
+                    flows={agentFlows}
+                    selectedFlow={selectedFlow}
+                    handleClick={handleFlowClick}
+                    activeFlowIds={activeFlowIds}
+                  />
+
+                  <MCPServerHeader
+                    setMcpServers={setMcpServers}
+                    setSelectedMcpServer={setSelectedMcpServer}
+                  >
+                    {({ loadingMcpServers }) => {
+                      return (
+                        <MCPServersList
+                          isLoading={loadingMcpServers}
+                          servers={mcpServers}
+                          selectedServer={selectedMcpServer}
+                          handleClick={handleMCPClick}
+                        />
+                      );
+                    }}
+                  </MCPServerHeader>
+                </div>
+              </div>
+            </div>
+
+            {/* Selected agent skill setting panel */}
+            <div className="flex-[2] flex flex-col gap-y-[18px] mt-10">
+              <div className="bg-theme-bg-secondary text-white rounded-xl flex-1 p-4 overflow-y-scroll overflow-x-visible no-scroll">
+                {SelectedSkillComponent ? (
+                  <>
+                    {selectedMcpServer ? (
+                      <ServerPanel
+                        server={selectedMcpServer}
+                        toggleServer={toggleMCP}
+                        onDelete={handleMCPServerDelete}
+                        onToggleTool={handleMCPToolToggle}
+                      />
+                    ) : selectedFlow ? (
+                      <FlowPanel
+                        flow={selectedFlow}
+                        toggleFlow={toggleFlow}
+                        enabled={activeFlowIds.includes(selectedFlow.uuid)}
+                        onDelete={handleFlowDelete}
+                      />
+                    ) : selectedSkill.imported ? (
+                      <ImportedSkillConfig
+                        key={selectedSkill.hubId}
+                        selectedSkill={selectedSkill}
+                        setImportedSkills={setImportedSkills}
+                      />
+                    ) : (
+                      <>
+                        {defaultSkills?.[selectedSkill] ? (
+                          // The selected skill is a default skill - show the default skill panel
+                          <SelectedSkillComponent
+                            skill={defaultSkills[selectedSkill]?.skill}
+                            settings={settings}
+                            toggleSkill={toggleAgentSkill}
+                            enabled={agentSkills.includes(
+                              defaultSkills[selectedSkill]?.skill
+                            )}
+                            setHasChanges={setHasChanges}
+                            {...defaultSkills[selectedSkill]}
+                          />
+                        ) : configurableSkills?.[selectedSkill] ? (
+                          // The selected skill is a configurable skill - show the configurable skill panel
+                          <SelectedSkillComponent
+                            skill={configurableSkills[selectedSkill]?.skill}
+                            settings={settings}
+                            toggleSkill={toggleAgentSkill}
+                            enabled={agentSkills.includes(
+                              configurableSkills[selectedSkill]?.skill
+                            )}
+                            setHasChanges={setHasChanges}
+                            hasChanges={hasChanges}
+                            {...configurableSkills[selectedSkill]}
+                          />
+                        ) : (
+                          // The selected skill is an app integration skill
+                          <SelectedSkillComponent
+                            skill={appIntegrationSkills[selectedSkill]?.skill}
+                            settings={settings}
+                            toggleSkill={toggleAgentSkill}
+                            enabled={agentSkills.includes(
+                              appIntegrationSkills[selectedSkill]?.skill
+                            )}
+                            setHasChanges={setHasChanges}
+                            hasChanges={hasChanges}
+                            {...appIntegrationSkills[selectedSkill]}
+                          />
+                        )}
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full text-theme-text-secondary">
+                    <Robot size={40} />
+                    <p className="font-medium">
+                      Select an Agent Skill, Agent Flow, or MCP Server
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </form>
+      </div>
     </SkillLayout>
   );
 }
@@ -813,6 +857,7 @@ function SkillList({
   handleClick = null,
   activeSkills = [],
   Icon = null,
+  disabled = false,
 }) {
   if (skills.length === 0) return null;
 
@@ -832,12 +877,17 @@ function SkillList({
               index === Object.keys(skills).length - 1
                 ? "rounded-b-xl"
                 : "border-b border-white/10"
-            } cursor-pointer transition-all duration-300  hover:bg-theme-bg-primary ${
+            } ${
+              disabled
+                ? "cursor-not-allowed opacity-50"
+                : "cursor-pointer hover:bg-theme-bg-primary"
+            } transition-all duration-300 ${
               selectedSkill === skill
                 ? "bg-white/10 light:bg-theme-bg-sidebar"
                 : ""
             }`}
-            onClick={() => handleClick?.(skill)}
+            onClick={() => !disabled && handleClick?.(skill)}
+            aria-disabled={disabled}
           >
             <div className="flex items-center gap-x-2">
               {settings.Icon ? (

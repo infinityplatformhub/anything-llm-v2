@@ -37,10 +37,15 @@
     "translations:verify": "cd frontend/src/locales && node verifyTranslations.mjs",
     "translations:normalize": "cd frontend/src/locales && node normalizeEn.mjs && cd ../../.. && cd frontend && yarn lint && cd .. && yarn translations:verify",
     "translations:prune": "cd frontend/src/locales && node findUnusedTranslations.mjs --delete && cd ../../../ && yarn translations:normalize",
-    "translations:create": "cd extras/translator && node index.mjs --all && cd ../../frontend && yarn lint && cd ../.."
+    "translations:create": "cd extras/translator && node index.mjs --all && cd ../../frontend && yarn lint && cd ../..",
+    "e2e:up": "docker compose -f e2e/docker-compose.e2e.yml up -d && bash e2e/scripts/seed.sh",
+    "e2e:down": "docker compose -f e2e/docker-compose.e2e.yml down -v",
+    "test:e2e": "bash e2e/run.sh",
+    "test:e2e:ui": "playwright test -c e2e/playwright.config.ts"
   },
   "private": false,
   "devDependencies": {
+    "@playwright/test": "^1.47.0",
     "concurrently": "^9.1.2",
     "jest": "^29.7.0"
   }
