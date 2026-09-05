@@ -842,7 +842,9 @@ describe("Lark end-to-end", () => {
       expect(approvals).toHaveLength(0);
       const [invocation] = environment.readInvocations();
       const output = invocation.argv[invocation.argv.indexOf("--output") + 1];
-      expect(output.startsWith(invocation.env.HOME + path.sep)).toBe(true);
+      expect(path.dirname(output)).toMatch(/^\/tmp\/anythingllm-lark-out-/);
+      expect(output.startsWith(invocation.env.HOME + path.sep)).toBe(false);
+      expect(fs.existsSync(path.dirname(output))).toBe(false);
       expect(fs.existsSync(invocation.env.HOME)).toBe(false);
       const logs = await withDb(environment, (prisma) => prisma.event_logs.findMany({ where: { event: "lark_cli_invocation", userId } }));
       expect(logs.map(row => JSON.parse(row.metadata).args)).toContainEqual(args);

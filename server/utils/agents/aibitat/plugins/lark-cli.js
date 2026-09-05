@@ -52,7 +52,7 @@ const larkCli = {
           super: aibitat,
           name: this.name,
           description:
-            'Run Lark commands as the connected user. Use canonical forms: contact +search-user --query "<email or name>", im +messages-send --user-id ou_xxx --text "...", docs +fetch --doc "<url or token>", drive +search --query "<text>", drive +download --url "<file url>", base +table-list --base-token <tok>, base +record-list --base-token <tok> --table-id <tbl>, and base +data-query --base-token <tok> --dsl \'<json>\'. Drive file content returns as text, max 64 KB. Never supply --output; the runner owns downloads. Write commands require the user\'s approval.',
+            'Run Lark commands as the connected user. Use canonical forms: contact +search-user --query "<email or name>", im +messages-send --user-id ou_xxx --text "...", docs +fetch --doc "<url or token>", drive +search --query "<text>", drive +download --url "<file url>", base +table-list --base-token <tok>, base +record-list --base-token <tok> --table-id <tbl>, base +record-search --base-token <tok> --table-id <tbl> --keyword "<text>" --search-field <field>, and base +data-query --base-token <tok> --dsl \'<json>\'. Drive file content returns as text, max 64 KB. Never supply --output; the runner owns downloads. Write commands require the user\'s approval.',
           examples: [
             {
               prompt: "read a file from my Drive",

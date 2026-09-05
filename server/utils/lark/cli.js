@@ -7,7 +7,7 @@ const { EventLogs } = require("../../models/eventLogs");
 const { EncryptionManager } = require("../EncryptionManager");
 const { getFreshAccessToken } = require("./oauth");
 const { loadLarkConfig } = require("./settings");
-const { extractText } = require("./fileText");
+const { extractText, sniffExtension } = require("./fileText");
 
 const PERMANENT_DENYLIST = ["auth", "config", "profile", "logout", "api"];
 const TIMEOUT_MS = 60_000;
@@ -158,6 +158,11 @@ const READ_COMMANDS = Object.freeze([
   "wiki +space-list",
 ]);
 const READ_COMMAND_SET = new Set(READ_COMMANDS);
+// CLI 1.0.93 uses --json for request bodies on these pairs.
+const JSON_VALUE_PAIRS = Object.freeze([
+  "base +record-get",
+  "base +record-search",
+]);
 
 class AuditedError extends Error {
   constructor(reason) {
@@ -315,7 +320,7 @@ function safeInheritedEnv() {
   );
 }
 
-function execute(args, env, secrets) {
+function execute(args, env, secrets, cwd) {
   return new Promise((resolve) => {
     let child;
     let stdout = Buffer.alloc(0);
@@ -362,11 +367,16 @@ function execute(args, env, secrets) {
     );
 
     try {
+      const pair = `${normalizeCommandToken(args[0])} +${normalizeCommandToken(args[1])}`;
+      const outputFlags = JSON_VALUE_PAIRS.includes(pair)
+        ? ["--format", "json"]
+        : ["--json"];
       child = childProcess.spawn(
         LARK_CLI_BIN,
-        [...args, "--as", "user", "--json"],
+        [...args, "--as", "user", ...outputFlags],
         {
           env,
+          ...(cwd ? { cwd } : {}),
           shell: false,
           windowsHide: true,
           stdio: ["ignore", "pipe", "pipe"],
@@ -507,6 +517,7 @@ async function runAsUser({ userId, args, encryption } = {}) {
   }
 
   let tmp;
+  let outDir;
   let result;
   try {
     tmp = await fs.promises.mkdtemp(
@@ -527,22 +538,31 @@ async function runAsUser({ userId, args, encryption } = {}) {
       ["download", "preview"].includes(normalizeCommandToken(args[1]));
     let outputPath;
     if (download) {
-      const directory = path.join(tmp, "download");
-      await fs.promises.mkdir(directory, { recursive: true });
-      outputPath = path.join(directory, "file");
+      try {
+        outDir = await fs.promises.mkdtemp("/tmp/anythingllm-lark-out-");
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        outDir = await fs.promises.mkdtemp(
+          path.join(os.tmpdir(), "anythingllm-lark-out-")
+        );
+      }
+      outputPath = path.join(outDir, "file");
     }
     result = await execute(
       download ? [...args, "--output", outputPath] : args,
       env,
-      secrets
+      secrets,
+      outDir
     );
     if (download && result.ok) {
       const metadata = result.data?.data || result.data;
       const saved =
         result.data?.file_path ||
         result.data?.output_path ||
+        result.data?.saved_path ||
         result.data?.data?.file_path ||
         result.data?.data?.output_path ||
+        result.data?.data?.saved_path ||
         outputPath;
       let savedPath;
       try {
@@ -550,19 +570,24 @@ async function runAsUser({ userId, args, encryption } = {}) {
       } catch {
         savedPath = null;
       }
-      const root = await fs.promises.realpath(tmp);
+      const root = await fs.promises.realpath(outDir);
       if (!savedPath) {
         result = { ok: false, error: "download_missing" };
       } else if (!savedPath.startsWith(root + path.sep)) {
         result = { ok: false, error: "unsafe_path" };
-      } else if ((await fs.promises.stat(savedPath)).size > 8 * 1024 * 1024) {
+      } else if (
+        metadata?.size_bytes > 8 * 1024 * 1024 ||
+        (await fs.promises.stat(savedPath)).size > 8 * 1024 * 1024
+      ) {
         result = { ok: false, error: "file_too_large" };
       } else {
         const name =
           metadata?.name || metadata?.file_name || path.basename(savedPath);
         const filename = path.basename(name);
         const extension = (
-          path.extname(savedPath) || path.extname(filename)
+          path.extname(savedPath) ||
+          path.extname(filename) ||
+          (await sniffExtension(savedPath))
         ).toLowerCase();
         // Collector selects its parser from the absolute path's extension.
         let filePath = savedPath;
@@ -570,7 +595,7 @@ async function runAsUser({ userId, args, encryption } = {}) {
           !path.extname(savedPath) &&
           [".pdf", ".docx", ".xlsx", ".pptx"].includes(extension)
         ) {
-          filePath = path.join(tmp, "download", `parsed${extension}`);
+          filePath = path.join(outDir, `parsed${extension}`);
           await fs.promises.rename(savedPath, filePath);
         }
         const extracted = await extractText({
@@ -590,9 +615,10 @@ async function runAsUser({ userId, args, encryption } = {}) {
   } catch (error) {
     result = { ok: false, error: redact(error.message, secrets) };
   } finally {
-    if (tmp) {
+    for (const directory of [tmp, outDir]) {
+      if (!directory) continue;
       try {
-        await fs.promises.rm(tmp, { recursive: true, force: true });
+        await fs.promises.rm(directory, { recursive: true, force: true });
       } catch {}
     }
   }
