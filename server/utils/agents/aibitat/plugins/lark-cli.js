@@ -60,8 +60,8 @@ const larkCli = {
                 args: [
                   "drive",
                   "+download",
-                  "--url",
-                  "https://example.larksuite.com/file/token",
+                  "--file-token",
+                  "boxcnExampleFileToken",
                 ],
               }),
             },
