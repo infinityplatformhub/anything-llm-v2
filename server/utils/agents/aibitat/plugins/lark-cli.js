@@ -22,6 +22,43 @@ function redactForDisplay(args) {
   return args.map((arg) => arg.replace(SECRET_PATTERN, "[redacted]"));
 }
 
+function normalizeArgs(input) {
+  let command = input;
+  if (Array.isArray(input)) {
+    if (
+      input.length !== 1 ||
+      typeof input[0] !== "string" ||
+      !/\s/.test(input[0])
+    )
+      return input;
+    command = input[0];
+  }
+  if (typeof command !== "string") return input;
+  const args = [];
+  let token = "";
+  let quote = null;
+  let started = false;
+  for (const character of command) {
+    if (quote) {
+      if (character === quote) quote = null;
+      else token += character;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+      started = true;
+    } else if (/\s/.test(character)) {
+      if (started) args.push(token);
+      token = "";
+      started = false;
+    } else {
+      token += character;
+      started = true;
+    }
+  }
+  if (quote) return [];
+  if (started) args.push(token);
+  return args;
+}
+
 const larkCli = {
   name: "lark-cli",
   startupConfig: { params: {} },
@@ -52,8 +89,14 @@ const larkCli = {
           super: aibitat,
           name: this.name,
           description:
-            'Run Lark commands as the connected user. Use canonical forms: contact +search-user --query "<email or name>", im +messages-send --user-id ou_xxx --text "...", docs +fetch --doc "<url or token>", drive +search --query "<text>", drive +download --url "<file url>", base +table-list --base-token <tok>, base +record-list --base-token <tok> --table-id <tbl>, base +record-search --base-token <tok> --table-id <tbl> --keyword "<text>" --search-field <field>, and base +data-query --base-token <tok> --dsl \'<json>\'. Drive file content returns as text, max 64 KB. Never supply --output; the runner owns downloads. Write commands require the user\'s approval.',
+            'Run Lark commands as the connected user. args is an ARRAY where every token is its own element, e.g. ["drive","+search","--query","PO งาน MIS"]. Use canonical forms: contact +search-user --query "<email or name>", im +messages-send --user-id ou_xxx --text "...", docs +fetch --doc "<url or token>", drive +search --query "<text>", drive +download --url "<file url>", base +table-list --base-token <tok>, base +record-list --base-token <tok> --table-id <tbl>, base +record-search --base-token <tok> --table-id <tbl> --keyword "<text>" --search-field <field>, and base +data-query --base-token <tok> --dsl \'<json>\'. Use docs +fetch only for Lark Docs (docx). For uploaded files, PDFs, spreadsheets, or anything returned by drive +search with doc_types FILE or a /wiki/ or /file/ URL, use drive +download --wiki-token <token> (wiki URL) or --file-token <token> / --url <url>. Drive file content returns as text, max 64 KB. Never supply --output; the runner owns downloads. Write commands require the user\'s approval.',
           examples: [
+            {
+              prompt: "read the PDF at the wiki page token",
+              call: JSON.stringify({
+                args: ["drive", "+download", "--wiki-token", "<token>"],
+              }),
+            },
             {
               prompt: "read a file from my Drive",
               call: JSON.stringify({
@@ -77,7 +120,8 @@ const larkCli = {
             properties: {
               args: {
                 type: "array",
-                description: "Canonical Lark command arguments.",
+                description:
+                  "Command tokens, one per array element: group, +subcommand, then flags and values.",
                 items: { type: "string" },
                 minItems: 1,
               },
@@ -110,6 +154,7 @@ const larkCli = {
               return unavailable();
             }
 
+            args = normalizeArgs(args);
             const validation = validateArgs(args);
             if (!validation.ok) return validation.reason;
 
@@ -139,4 +184,4 @@ const larkCli = {
   },
 };
 
-module.exports = { larkCli, redactForDisplay };
+module.exports = { larkCli, redactForDisplay, normalizeArgs };
