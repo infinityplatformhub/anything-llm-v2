@@ -257,6 +257,11 @@ describe("LarkIdentity", () => {
     expect(prisma.lark_identities.deleteMany).not.toHaveBeenCalled();
   });
 
+  it("returns false when deleting a nonexistent identity", async () => {
+    prisma.lark_identities.deleteMany.mockResolvedValue({ count: 0 });
+    await expect(LarkIdentity.delete({ user_id: 999 })).resolves.toBe(false);
+  });
+
   it("rejects empty deletes and accepts numeric identity selectors", async () => {
     await expect(LarkIdentity.delete()).resolves.toBe(false);
     expect(prisma.lark_identities.deleteMany).not.toHaveBeenCalled();

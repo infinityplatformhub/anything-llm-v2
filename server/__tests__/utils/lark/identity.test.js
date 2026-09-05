@@ -25,6 +25,12 @@ const {
   resolveLoginUser,
 } = require("../../../utils/lark/identity");
 
+test("fallback username sanitizes mixed-case invalid open ID characters", async () => {
+  const username = await deriveUsername({ email: "", openId: "OU_WeIrD!!", exists: async () => false });
+  expect(username).toBe("lark_ou_weird");
+  expect(User.usernameRegex.test(username)).toBe(true);
+});
+
 const config = { tenantKey: "tenant-1" };
 const userInfo = {
   open_id: "ou_1234567890abcdef",

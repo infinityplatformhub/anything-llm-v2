@@ -451,10 +451,10 @@ test("reports local disconnect failure", async () => {
 
   const res = await invoke(app.routes["DELETE /lark/identity"], request());
 
-  expect(res.status).toHaveBeenCalledWith(500);
+  expect(res.status).toHaveBeenCalledWith(404);
   expect(res.json).toHaveBeenCalledWith({
-    success: false,
-    error: "Failed to disconnect Lark.",
+    ok: false,
+    error: "not_connected",
   });
 });
 

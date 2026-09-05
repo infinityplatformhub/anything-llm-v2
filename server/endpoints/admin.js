@@ -9,6 +9,7 @@ const { DEFAULT_SCOPES } = require("../utils/lark/constants");
 const {
   DEFAULT_LARK_CLI_ALLOWLIST,
   fetchAppAccessToken,
+  loadLarkConfig,
   validateLarkSettings,
 } = require("../utils/lark/settings");
 const { User } = require("../models/user");
@@ -505,6 +506,7 @@ function adminEndpoints(app) {
         );
         response.status(200).json({
           settings: {
+            redirect_uri: (await loadLarkConfig())?.redirectUri || "",
             lark_login_enabled: values.lark_login_enabled === "true",
             lark_app_id: values.lark_app_id || "",
             lark_app_secret: values.lark_app_secret ? "********" : "",

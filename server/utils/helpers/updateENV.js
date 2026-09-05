@@ -1484,6 +1484,11 @@ function dumpENV() {
     "STORAGE_DIR",
     "SERVER_PORT",
     "COLLECTOR_PORT",
+    // Lark login
+    "SERVER_URL",
+    "LARK_BASE_URL",
+    "LARK_ACCOUNTS_URL",
+    "LARK_CLI_PATH",
     // For persistent data encryption
     "SIG_KEY",
     "SIG_SALT",

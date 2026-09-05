@@ -32,7 +32,12 @@ function isValidUsername(username) {
 
 async function deriveUsername({ email, openId, exists }) {
   const localPart = sanitizeLocalPart(email);
-  const fallback = `lark_${String(openId ?? "").slice(0, 12)}`;
+  let fallback = `lark_${String(openId ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]/g, "")
+    .slice(0, 12)}`;
+  if (!isValidUsername(fallback))
+    fallback = `lark_${crypto.randomBytes(6).toString("hex")}`;
   const base = isValidUsername(localPart) ? localPart : fallback;
 
   if (!(await exists(base))) return base;
