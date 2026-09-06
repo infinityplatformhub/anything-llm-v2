@@ -3,7 +3,7 @@ const { describe, beforeEach, it, expect } = require("@jest/globals");
 require("../utils/lark/_polyfill");
 jest.mock("../../models/workspace", () => ({ Workspace: { get: jest.fn() } }));
 jest.mock("../../models/workspaceMcpConnection", () => ({
-  WorkspaceMcpConnection: { enabledNames: jest.fn() },
+  WorkspaceMcpConnection: { enabledNames: jest.fn(), find: jest.fn() },
 }));
 jest.mock("../../utils/MCP", () => jest.fn());
 
@@ -18,6 +18,16 @@ const { mcpServersEndpoints } = require("../../endpoints/mcpServers");
 
 let route;
 let servers;
+let bootWorkspaceServer;
+let listTools;
+const oauthPlaceholder = {
+  name: "flowaccount",
+  config: { anythingllm: { perWorkspaceAuth: true } },
+  running: false,
+  tools: [],
+  error: null,
+  process: null,
+};
 async function invoke(query = {}, user = { role: "admin" }) {
   const response = {
     locals: { user },
@@ -55,8 +65,25 @@ describe("workspace MCP list", () => {
     Workspace.get.mockResolvedValue({ id: 5, slug: "legal" });
     WorkspaceMcpConnection.enabledNames.mockResolvedValue(["flowaccount"]);
     servers = [{ name: "flowaccount" }, { name: "other" }];
+    WorkspaceMcpConnection.find.mockResolvedValue({
+      enabled: true,
+      access_token: "access-secret",
+      refresh_token: "refresh-secret",
+    });
+    listTools = jest.fn().mockResolvedValue({
+      tools: [
+        {
+          name: "get_company_info",
+          description: "Company info",
+          inputSchema: {},
+        },
+        { name: "handle_mcp_connection_mcp_internal" },
+      ],
+    });
+    bootWorkspaceServer = jest.fn().mockResolvedValue({ listTools });
     MCPCompatibilityLayer.mockImplementation(() => ({
       servers: async () => servers,
+      bootWorkspaceServer,
     }));
     mcpServersEndpoints({
       get(path, middlewares, handler) {
@@ -97,6 +124,83 @@ describe("workspace MCP list", () => {
     WorkspaceMcpConnection.enabledNames.mockResolvedValue([]);
     expect((await invoke({ workspaceSlug: "legal" })).body.servers).toEqual([]);
   });
+
+  it("lists workspace client tools for enabled OAuth connections", async () => {
+    servers = [oauthPlaceholder];
+    const response = await invoke({ workspaceSlug: "legal" });
+    expect(response.body.servers).toEqual([
+      {
+        ...oauthPlaceholder,
+        running: true,
+        tools: [
+          {
+            name: "get_company_info",
+            description: "Company info",
+            inputSchema: {},
+          },
+        ],
+      },
+    ]);
+    expect(bootWorkspaceServer).toHaveBeenCalledWith(
+      { id: 5, slug: "legal" },
+      "flowaccount"
+    );
+    expect(listTools).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    null,
+    { enabled: true },
+    { enabled: true, access_token: "access-secret" },
+    {
+      enabled: false,
+      access_token: "access-secret",
+      refresh_token: "refresh-secret",
+    },
+  ])(
+    "does not boot OAuth connection without enabled tokens: %p",
+    async (connection) => {
+      servers = [oauthPlaceholder];
+      WorkspaceMcpConnection.find.mockResolvedValue(connection);
+      expect((await invoke({ workspaceSlug: "legal" })).body.servers).toEqual([
+        oauthPlaceholder,
+      ]);
+      expect(bootWorkspaceServer).not.toHaveBeenCalled();
+    }
+  );
+
+  it("does not boot OAuth servers absent from workspace allowlist", async () => {
+    servers = [oauthPlaceholder];
+    WorkspaceMcpConnection.enabledNames.mockResolvedValue([]);
+    expect((await invoke({ workspaceSlug: "legal" })).body.servers).toEqual([]);
+    expect(bootWorkspaceServer).not.toHaveBeenCalled();
+  });
+
+  it("keeps global OAuth catalog as placeholders without booting", async () => {
+    servers = [oauthPlaceholder];
+    expect((await invoke()).body.servers).toEqual([oauthPlaceholder]);
+    expect(bootWorkspaceServer).not.toHaveBeenCalled();
+  });
+
+  it.each(["boot", "listTools"])(
+    "returns safe placeholder on %s failure",
+    async (failure) => {
+      servers = [oauthPlaceholder];
+      const operation = failure === "boot" ? bootWorkspaceServer : listTools;
+      operation.mockRejectedValue(
+        new Error("provider exposed access-secret refresh-secret")
+      );
+      const response = await invoke({ workspaceSlug: "legal" });
+      expect(response.statusCode).toBe(200);
+      expect(response.body.servers).toEqual([
+        {
+          ...oauthPlaceholder,
+          error: "Unable to load tools for this MCP server",
+        },
+      ]);
+      expect(JSON.stringify(response.body)).not.toContain("secret");
+    }
+  );
 
   it("rejects unknown workspace before reading allowlist", async () => {
     Workspace.get.mockResolvedValue(null);

@@ -146,12 +146,13 @@ function mcpServersEndpoints(app) {
       try {
         const { workspaceSlug } = request.query;
         let enabledNames = null;
+        let workspace;
         if (workspaceSlug !== undefined) {
           if (typeof workspaceSlug !== "string" || !workspaceSlug.trim())
             return response
               .status(400)
               .json({ success: false, error: "Invalid workspaceSlug" });
-          const workspace = await Workspace.get({ slug: workspaceSlug });
+          workspace = await Workspace.get({ slug: workspaceSlug });
           if (!workspace)
             return response
               .status(404)
@@ -160,11 +161,52 @@ function mcpServersEndpoints(app) {
             workspace.id
           );
         }
-        const allServers = await new MCPCompatibilityLayer().servers();
+        const mcp = new MCPCompatibilityLayer();
+        const allServers = await mcp.servers();
         const servers =
           enabledNames === null
             ? allServers
-            : allServers.filter((server) => enabledNames.includes(server.name));
+            : await Promise.all(
+                allServers
+                  .filter((server) => enabledNames.includes(server.name))
+                  .map(async (server) => {
+                    if (!server.config?.anythingllm?.perWorkspaceAuth)
+                      return server;
+                    try {
+                      const connection = await WorkspaceMcpConnection.find(
+                        workspace.id,
+                        server.name
+                      );
+                      if (
+                        !connection?.enabled ||
+                        !connection.access_token ||
+                        !connection.refresh_token
+                      )
+                        return server;
+                      const client = await mcp.bootWorkspaceServer(
+                        workspace,
+                        server.name
+                      );
+                      const { tools } = await client.listTools();
+                      return {
+                        ...server,
+                        running: true,
+                        tools: tools.filter(
+                          (tool) =>
+                            !tool.name.startsWith("handle_mcp_connection_mcp_")
+                        ),
+                        error: null,
+                      };
+                    } catch {
+                      return {
+                        ...server,
+                        running: false,
+                        tools: [],
+                        error: "Unable to load tools for this MCP server",
+                      };
+                    }
+                  })
+              );
         return response.status(200).json({
           success: true,
           servers,
