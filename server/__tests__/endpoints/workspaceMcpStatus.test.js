@@ -124,6 +124,7 @@ describe("workspace MCP status and toggle", () => {
         serverName: "flowaccount",
         enabled: true,
         connected: true,
+        needsReauth: false,
         companyLabel: "Company",
         expiresAt: "2030-01-01",
       },
@@ -131,6 +132,7 @@ describe("workspace MCP status and toggle", () => {
         serverName: "plain",
         enabled: false,
         connected: false,
+        needsReauth: false,
         companyLabel: null,
         expiresAt: null,
       },
@@ -138,6 +140,7 @@ describe("workspace MCP status and toggle", () => {
         serverName: "missing-row",
         enabled: false,
         connected: false,
+        needsReauth: false,
         companyLabel: null,
         expiresAt: null,
       },
@@ -147,6 +150,24 @@ describe("workspace MCP status and toggle", () => {
     );
     expect(WorkspaceMcpConnection.list).toHaveBeenCalledWith(5);
   });
+
+  it.each([
+    ["refresh-token", false],
+    [null, true],
+  ])(
+    "reports needsReauth for refresh token %p",
+    async (refresh_token, needsReauth) => {
+      WorkspaceMcpConnection.list.mockResolvedValue([
+        {
+          server_name: "flowaccount",
+          access_token: "access-token",
+          refresh_token,
+        },
+      ]);
+      const response = await invoke();
+      expect(response.body.connections[0].needsReauth).toBe(needsReauth);
+    }
+  );
 
   it("enables ordinary server and returns safe row", async () => {
     const response = await invoke("post", {
@@ -160,6 +181,7 @@ describe("workspace MCP status and toggle", () => {
         serverName: "plain",
         enabled: true,
         connected: false,
+        needsReauth: false,
         companyLabel: null,
         expiresAt: null,
       },

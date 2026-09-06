@@ -13,6 +13,8 @@ function connectionStatus(serverName, connection) {
     serverName,
     enabled: connection?.enabled === true,
     connected: !!connection?.access_token,
+    needsReauth:
+      !!connection?.access_token && connection.refresh_token === null,
     companyLabel: connection?.company_label ?? null,
     expiresAt: connection?.expires_at ?? null,
   };
