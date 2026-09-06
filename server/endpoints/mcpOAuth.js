@@ -1,7 +1,7 @@
 const { reqBody } = require("../utils/http");
 const { Workspace } = require("../models/workspace");
 const { WorkspaceMcpConnection } = require("../models/workspaceMcpConnection");
-const MCPHypervisor = require("../utils/MCP/hypervisor");
+const MCPCompatibilityLayer = require("../utils/MCP");
 const oauth = require("../utils/MCP/oauth");
 const prisma = require("../utils/prisma");
 const { EncryptionManager } = require("../utils/EncryptionManager");
@@ -26,7 +26,7 @@ function mcpOAuthEndpoints(app) {
     )
       throw new Error("invalid_target");
     const workspace = await Workspace.get({ slug: workspaceSlug });
-    const hypervisor = new MCPHypervisor();
+    const hypervisor = new MCPCompatibilityLayer();
     const config = hypervisor.mcpServerConfigs.find(
       ({ name }) => name === serverName
     )?.server;

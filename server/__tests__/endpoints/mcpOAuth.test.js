@@ -11,8 +11,8 @@ const {
 require("../utils/lark/_polyfill");
 const http = require("http");
 const crypto = require("crypto");
-jest.mock("../../utils/MCP/hypervisor", () => jest.fn());
-const Hypervisor = require("../../utils/MCP/hypervisor");
+jest.mock("../../utils/MCP", () => jest.fn());
+const Hypervisor = require("../../utils/MCP");
 const prisma = require("../../utils/prisma");
 const { SystemSettings } = require("../../models/systemSettings");
 const {
