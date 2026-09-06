@@ -23,7 +23,8 @@ const oauth = require("../../utils/MCP/oauth");
 const { mcpOAuthEndpoints } = require("../../endpoints/mcpOAuth");
 
 let server, origin, workspace, routes, logs, tokenRequests, registrations;
-let configs, stop;
+let configs, stop, resourceOverrides, metadataOverrides, tokenOverrides;
+const originalNodeEnv = process.env.NODE_ENV;
 const originalSecret = process.env.JWT_SECRET;
 const originalServerUrl = process.env.SERVER_URL;
 function sign(payload) {
@@ -101,7 +102,11 @@ describe("MCP OAuth", () => {
       res.setHeader("Content-Type", "application/json");
       if (req.url === "/.well-known/oauth-protected-resource")
         return res.end(
-          JSON.stringify({ resource: origin, authorization_servers: [origin] })
+          JSON.stringify({
+            resource: origin,
+            authorization_servers: [origin],
+            ...resourceOverrides,
+          })
         );
       if (req.url === "/.well-known/oauth-authorization-server")
         return res.end(
@@ -120,6 +125,7 @@ describe("MCP OAuth", () => {
               "flowaccount-api",
               "offline_access",
             ],
+            ...metadataOverrides,
           })
         );
       if (req.url === "/oauth/register") {
@@ -136,6 +142,7 @@ describe("MCP OAuth", () => {
             refresh_token: "private-refresh-token",
             token_type: "Bearer",
             expires_in: 3600,
+            ...tokenOverrides,
           })
         );
       }
@@ -146,6 +153,10 @@ describe("MCP OAuth", () => {
     origin = `http://127.0.0.1:${server.address().port}`;
   });
   beforeEach(async () => {
+    process.env.NODE_ENV = "development";
+    resourceOverrides = {};
+    metadataOverrides = {};
+    tokenOverrides = {};
     logs = ["log", "error", "warn"].map((name) =>
       jest.spyOn(console, name).mockImplementation(() => {})
     );
@@ -170,7 +181,10 @@ describe("MCP OAuth", () => {
     configs = [
       {
         name: "flowaccount",
-        server: { url: origin, anythingllm: { perWorkspaceAuth: true } },
+        server: {
+          url: `${origin}/${crypto.randomUUID()}`,
+          anythingllm: { perWorkspaceAuth: true },
+        },
       },
     ];
     stop = jest.fn();
@@ -222,10 +236,140 @@ describe("MCP OAuth", () => {
   afterAll(async () => {
     await new Promise((resolve) => server.close(resolve));
     await prisma.$disconnect();
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
     if (originalSecret === undefined) delete process.env.JWT_SECRET;
     else process.env.JWT_SECRET = originalSecret;
     if (originalServerUrl === undefined) delete process.env.SERVER_URL;
     else process.env.SERVER_URL = originalServerUrl;
+  });
+  it("rejects mismatched protected resource before registration", async () => {
+    resourceOverrides.resource = "https://other.example/resource";
+    expect((await start()).statusCode).toBe(400);
+    expect(registrations).toHaveLength(0);
+  });
+  it.each([
+    "authorization_endpoint",
+    "token_endpoint",
+    "registration_endpoint",
+  ])("rejects cross-origin %s without contacting it", async (endpoint) => {
+    const requests = [];
+    const other = http.createServer((req, res) => {
+      requests.push(req.method);
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ client_id: "pivot-client" }));
+    });
+    await new Promise((resolve) => other.listen(0, "127.0.0.1", resolve));
+    metadataOverrides[endpoint] =
+      `http://127.0.0.1:${other.address().port}/pivot`;
+    try {
+      expect((await start()).statusCode).toBe(400);
+      expect(registrations).toHaveLength(0);
+      expect(requests).toHaveLength(0);
+    } finally {
+      await new Promise((resolve) => other.close(resolve));
+    }
+  });
+  it.each([
+    "http://127.0.0.1",
+    "https://127.0.0.2",
+    "https://10.0.0.5",
+    "https://172.16.0.1",
+    "https://172.31.255.255",
+    "https://192.168.1.1",
+    "https://169.254.169.254",
+    "https://0.0.0.0",
+    "https://localhost",
+    "https://[::]",
+    "https://[::1]",
+    "https://[fc00::1]",
+    "https://[fdff::1]",
+    "https://[fe80::1]",
+    "https://[febf::1]",
+    "https://[::ffff:127.0.0.1]",
+    "https://[::ffff:10.0.0.5]",
+  ])("rejects production AS %s before contacting it", async (issuer) => {
+    process.env.NODE_ENV = "production";
+    const serverUrl = `https://resource.example/${crypto.randomUUID()}`;
+    const fetcher = jest
+      .spyOn(global, "fetch")
+      .mockImplementation(async () => ({
+        ok: true,
+        json: async () =>
+          fetcher.mock.calls.length === 1
+            ? { resource: serverUrl, authorization_servers: [issuer] }
+            : {
+                issuer,
+                authorization_endpoint: `${issuer}/authorize`,
+                token_endpoint: `${issuer}/token`,
+                registration_endpoint: `${issuer}/register`,
+                code_challenge_methods_supported: ["S256"],
+              },
+      }));
+    await expect(oauth.discover(serverUrl)).rejects.toThrow(
+      "invalid_oauth_url"
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("allows separate public resource and authorization origins", async () => {
+    process.env.NODE_ENV = "production";
+    const serverUrl = `https://resource.example/${crypto.randomUUID()}`;
+    const issuer = "https://auth.example";
+    const metadata = {
+      issuer,
+      authorization_endpoint: `${issuer}/authorize`,
+      token_endpoint: `${issuer}/token`,
+      registration_endpoint: `${issuer}/register`,
+      code_challenge_methods_supported: ["S256"],
+    };
+    jest
+      .spyOn(global, "fetch")
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          resource: serverUrl,
+          authorization_servers: [issuer],
+        }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => metadata });
+    await expect(oauth.discover(serverUrl)).resolves.toEqual(metadata);
+  });
+  it("accepts malformed scopes_supported with empty default scope", async () => {
+    metadataOverrides.scopes_supported = "openid";
+    const result = await start();
+    expect(result.statusCode).toBe(200);
+    expect(new URL(result.body.url).searchParams.get("scope")).toBe("");
+  });
+  it.each([1e30, 0, -1, "invalid"])(
+    "ignores unusable expires_in %s",
+    async (expiresIn) => {
+      tokenOverrides.expires_in = expiresIn;
+      const state = new URL((await start()).body.url).searchParams.get("state");
+      expect((await callback(state)).location).toContain("connected=1");
+      expect(
+        await WorkspaceMcpConnection.find(workspace.id, "flowaccount")
+      ).toMatchObject({
+        access_token: "private-access-token",
+        expires_at: null,
+      });
+    }
+  );
+  it("clears saved tokens if enabling connection fails", async () => {
+    const state = new URL((await start()).body.url).searchParams.get("state");
+    jest
+      .spyOn(WorkspaceMcpConnection, "setEnabled")
+      .mockRejectedValue(new Error("db failure"));
+    expect((await callback(state)).location).toContain(
+      "error=oauth_callback_failed"
+    );
+    expect(
+      await WorkspaceMcpConnection.find(workspace.id, "flowaccount")
+    ).toMatchObject({
+      access_token: null,
+      refresh_token: null,
+      expires_at: null,
+      enabled: false,
+    });
   });
   it("guards start without login", async () => {
     expect(

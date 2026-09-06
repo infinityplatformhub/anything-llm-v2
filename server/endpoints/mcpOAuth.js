@@ -159,11 +159,20 @@ function mcpOAuthEndpoints(app) {
         state.serverName,
         tokens
       );
-      await WorkspaceMcpConnection.setEnabled(
-        workspace.id,
-        state.serverName,
-        true
-      );
+      try {
+        await WorkspaceMcpConnection.setEnabled(
+          workspace.id,
+          state.serverName,
+          true
+        );
+      } catch (error) {
+        // Model methods do not accept a transaction client.
+        await WorkspaceMcpConnection.clearTokens(
+          workspace.id,
+          state.serverName
+        );
+        throw error;
+      }
       return response.redirect(`${destination}&connected=1`);
     } catch {
       return response.redirect(`${destination}&error=oauth_callback_failed`);

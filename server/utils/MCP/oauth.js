@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const { isIP } = require("net");
 const { SystemSettings } = require("../../models/systemSettings");
 
 const discoveryCache = new Map();
@@ -7,11 +8,35 @@ let registrationQueue = Promise.resolve();
 
 function httpUrl(value) {
   const url = new URL(value);
+  const development = process.env.NODE_ENV === "development";
   if (
-    !["https:", "http:"].includes(url.protocol) ||
+    !(url.protocol === "https:" || (development && url.protocol === "http:")) ||
     url.username ||
     url.password ||
     url.hash
+  )
+    throw new Error("invalid_oauth_url");
+  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (development && ["localhost", "127.0.0.1"].includes(host)) return url;
+  const family = isIP(host);
+  const [first, second] = host.split(".").map(Number);
+  const prefix = parseInt(host.split(":")[0], 16);
+  if (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    (family === 4 &&
+      (first === 0 ||
+        first === 10 ||
+        first === 127 ||
+        (first === 172 && second >= 16 && second <= 31) ||
+        (first === 192 && second === 168) ||
+        (first === 169 && second === 254))) ||
+    (family === 6 &&
+      (host === "::" ||
+        host === "::1" ||
+        host.startsWith("::ffff:") ||
+        (prefix & 0xfe00) === 0xfc00 ||
+        (prefix & 0xffc0) === 0xfe80))
   )
     throw new Error("invalid_oauth_url");
   return url;
@@ -53,6 +78,11 @@ async function discover(serverUrl) {
   const resource = await fetchJson(
     new URL("/.well-known/oauth-protected-resource", httpUrl(serverUrl))
   );
+  if (
+    typeof resource.resource !== "string" ||
+    httpUrl(resource.resource).origin !== httpUrl(serverUrl).origin
+  )
+    throw new Error("invalid_oauth_metadata");
   const issuer = resource.authorization_servers?.[0];
   if (typeof issuer !== "string") throw new Error("invalid_oauth_metadata");
   const issuerUrl = httpUrl(issuer);
@@ -72,7 +102,8 @@ async function discover(serverUrl) {
     "token_endpoint",
     "registration_endpoint",
   ])
-    httpUrl(metadata[key]);
+    if (httpUrl(metadata[key]).origin !== issuerUrl.origin)
+      throw new Error("invalid_oauth_metadata");
   discoveryCache.set(serverUrl, { metadata, exp: Date.now() + 5 * 60 * 1000 });
   return metadata;
 }
@@ -158,7 +189,10 @@ async function authorizeUrl({
       .digest("base64url"),
     state,
     resource: serverUrl,
-    scope: (metadata.scopes_supported || []).join(" "),
+    scope: (Array.isArray(metadata.scopes_supported)
+      ? metadata.scopes_supported
+      : []
+    ).join(" "),
   }).toString();
   return { url: url.toString(), state, codeVerifier, ...payload };
 }
@@ -202,20 +236,17 @@ async function requestTokens(serverUrl, params) {
   if (
     typeof data.access_token !== "string" ||
     !data.access_token ||
-    (data.refresh_token !== undefined &&
-      typeof data.refresh_token !== "string") ||
-    (data.expires_in !== undefined &&
-      (!Number.isFinite(Number(data.expires_in)) ||
-        Number(data.expires_in) < 0))
+    (data.refresh_token !== undefined && typeof data.refresh_token !== "string")
   )
     throw new Error("invalid_token_response");
+  const expiresIn = Number(data.expires_in);
   return {
     access_token: data.access_token,
     refresh_token: data.refresh_token,
     expires_at:
-      data.expires_in === undefined
-        ? null
-        : new Date(Date.now() + Number(data.expires_in) * 1000),
+      Number.isFinite(expiresIn) && expiresIn > 0 && expiresIn <= 34560000
+        ? new Date(Date.now() + expiresIn * 1000)
+        : null,
   };
 }
 
