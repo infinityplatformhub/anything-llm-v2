@@ -20,7 +20,7 @@ const { SystemSettings } = require("../../models/systemSettings");
 const { validatedRequest } = require("../../utils/middleware/validatedRequest");
 const { mcpServersEndpoints } = require("../../endpoints/mcpServers");
 
-let routes;
+let routes, stopWorkspaceServer;
 async function invoke(
   method = "get",
   body = {},
@@ -82,7 +82,9 @@ describe("workspace MCP status and toggle", () => {
     WorkspaceMcpConnection.setEnabled.mockImplementation(
       async (_id, serverName, enabled) => ({ server_name: serverName, enabled })
     );
+    stopWorkspaceServer = jest.fn().mockResolvedValue(undefined);
     MCPCompatibilityLayer.mockImplementation(() => ({
+      stopWorkspaceServer,
       mcpServerConfigs: [
         {
           name: "flowaccount",
@@ -225,6 +227,40 @@ describe("workspace MCP status and toggle", () => {
       (await invoke("post", { serverName: "flowaccount", enabled: false }))
         .statusCode
     ).toBe(200);
+    expect(WorkspaceMcpConnection.setEnabled).toHaveBeenCalledWith(
+      5,
+      "flowaccount",
+      false
+    );
+  });
+
+  it.each([false, true])(
+    "stops workspace client only when enabled is false: %s",
+    async (enabled) => {
+      WorkspaceMcpConnection.find.mockResolvedValue({ access_token: "token" });
+      const response = await invoke("post", {
+        serverName: "flowaccount",
+        enabled,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(WorkspaceMcpConnection.setEnabled).toHaveBeenCalledWith(
+        5,
+        "flowaccount",
+        enabled
+      );
+      if (enabled) expect(stopWorkspaceServer).not.toHaveBeenCalled();
+      else expect(stopWorkspaceServer).toHaveBeenCalledWith(5, "flowaccount");
+    }
+  );
+
+  it("returns failure when stopping disabled workspace client fails", async () => {
+    stopWorkspaceServer.mockRejectedValue(new Error("close failed"));
+    const response = await invoke("post", {
+      serverName: "flowaccount",
+      enabled: false,
+    });
+    expect(response.statusCode).toBe(500);
+    expect(response.body.success).toBe(false);
     expect(WorkspaceMcpConnection.setEnabled).toHaveBeenCalledWith(
       5,
       "flowaccount",

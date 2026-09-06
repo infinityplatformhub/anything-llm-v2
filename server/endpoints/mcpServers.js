@@ -78,7 +78,8 @@ function mcpServersEndpoints(app) {
           return response
             .status(400)
             .json({ success: false, error: "Invalid serverName or enabled" });
-        const config = new MCPCompatibilityLayer().mcpServerConfigs.find(
+        const hypervisor = new MCPCompatibilityLayer();
+        const config = hypervisor.mcpServerConfigs.find(
           ({ name }) => name === serverName
         );
         if (!config)
@@ -101,6 +102,8 @@ function mcpServersEndpoints(app) {
           serverName,
           enabled
         );
+        if (!enabled && typeof hypervisor.stopWorkspaceServer === "function")
+          await hypervisor.stopWorkspaceServer(workspace.id, serverName);
         return response.status(200).json({
           success: true,
           connection: connectionStatus(serverName, connection),
