@@ -17,11 +17,9 @@ jest.mock(
       }
     }
 );
-jest.mock(
-  "../../../models/workspaceMcpConnection",
-  () => ({ WorkspaceMcpConnection: { list: jest.fn() } }),
-  { virtual: true }
-);
+jest.mock("../../../models/workspaceMcpConnection", () => ({
+  WorkspaceMcpConnection: { list: jest.fn() },
+}));
 const {
   WorkspaceMcpConnection,
 } = require("../../../models/workspaceMcpConnection");
