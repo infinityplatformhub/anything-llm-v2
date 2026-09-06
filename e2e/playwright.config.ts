@@ -3,6 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: path.resolve(process.cwd(), "e2e/ui"),
+  testIgnore: "**/workspace-mcp-connectors.spec.ts",
   timeout: 60_000,
   workers: 1,
   retries: 0,

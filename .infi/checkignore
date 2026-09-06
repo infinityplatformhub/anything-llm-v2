@@ -35,3 +35,12 @@ e2e/suites/20-isolation.test.js
 # issue reference in its title that the commented-code gate reads as code.
 # The same SKIPS.md cross-check applies. Cost: as above.
 e2e/suites/30-security.test.js
+
+# Task 25 (#25) headed MCP E2E harness: fake FlowAccount provider, gateway,
+# Playwright spec and config. Test-only; loopback URLs are the fake provider
+# and local Vite/API ports. Cost: secrets/URL gates stop scanning these four
+# files; no credential is read there except a generated throwaway admin login.
+e2e/scripts/mcp-ui.cjs
+e2e/scripts/run-mcp-ui.sh
+e2e/ui/workspace-mcp-connectors.spec.ts
+e2e/mcp-ui.playwright.config.ts
