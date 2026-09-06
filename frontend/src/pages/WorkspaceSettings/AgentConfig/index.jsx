@@ -9,6 +9,7 @@ import * as Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import paths from "@/utils/paths";
 import useUser from "@/hooks/useUser";
+import McpConnectors from "./McpConnectors";
 
 export default function WorkspaceAgentConfiguration({ workspace }) {
   const { user } = useUser();
@@ -114,6 +115,11 @@ export default function WorkspaceAgentConfiguration({ workspace }) {
           </button>
         )}
       </form>
+      <McpConnectors
+        key={workspace.slug}
+        workspace={workspace}
+        canManage={!user || user?.role === "admin"}
+      />
     </div>
   );
 }
