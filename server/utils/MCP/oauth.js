@@ -26,8 +26,19 @@ async function fetchJson(url, options = {}) {
   if (!response.ok) {
     const error = new Error("oauth_request_failed");
     error.status = response.status;
-    const data = await response.json().catch(() => null);
-    if (data?.error === "invalid_grant") error.code = "invalid_grant";
+    error.code = "unknown";
+    // Never attach provider bodies or descriptions: they can contain credentials.
+    try {
+      const data = JSON.parse((await response.text()).slice(0, 4096));
+      const codes = new Set([
+        "invalid_grant",
+        "invalid_client",
+        "invalid_request",
+        "unauthorized_client",
+        "unsupported_grant_type",
+      ]);
+      if (codes.has(data?.error)) error.code = data.error;
+    } catch {}
     throw error;
   }
   const data = await response.json();

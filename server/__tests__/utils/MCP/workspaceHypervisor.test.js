@@ -97,31 +97,50 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 describe("OAuth refresh error contract", () => {
-  it.each(["invalid_grant", "secret-access", undefined])(
-    "exposes status and only whitelisted code: %s",
-    async (code) => {
-      jest.spyOn(global, "fetch").mockResolvedValue({
-        ok: false,
+  it.each(["not JSON", "x".repeat(5000)])(
+    "handles malformed or oversized provider body",
+    async (body) => {
+      jest
+        .spyOn(global, "fetch")
+        .mockResolvedValue({ ok: false, status: 400, text: async () => body });
+      await expect(discover("https://mcp.example/mcp")).rejects.toMatchObject({
+        message: "oauth_request_failed",
         status: 400,
-        json: async () => ({
+        code: "unknown",
+      });
+    }
+  );
+  it.each([
+    "invalid_grant",
+    "invalid_client",
+    "invalid_request",
+    "unauthorized_client",
+    "unsupported_grant_type",
+    "secret-access",
+    undefined,
+  ])("exposes status and only whitelisted code: %s", async (code) => {
+    jest.spyOn(global, "fetch").mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () =>
+        JSON.stringify({
           error: code,
           error_description: "secret-refresh",
         }),
-      });
-      let caught;
-      try {
-        await discover("https://mcp.example/mcp");
-      } catch (error) {
-        caught = error;
-      }
-      expect(caught.message).toBe("oauth_request_failed");
-      expect(caught.status).toBe(400);
-      expect(caught.code).toBe(code === "invalid_grant" ? code : undefined);
-      expect(JSON.stringify(caught)).not.toMatch(
-        /secret-access|secret-refresh/
-      );
+    });
+    let caught;
+    try {
+      await discover("https://mcp.example/mcp");
+    } catch (error) {
+      caught = error;
     }
-  );
+    expect(caught.message).toBe("oauth_request_failed");
+    expect(caught.status).toBe(400);
+    expect(caught.code).toBe(
+      !code || code === "secret-access" ? "unknown" : code
+    );
+    expect(JSON.stringify(caught)).not.toMatch(/secret-access|secret-refresh/);
+  });
 });
 describe("workspace MCP runtime", () => {
   it("isolates clients by workspace and injects latest bearer header", async () => {
