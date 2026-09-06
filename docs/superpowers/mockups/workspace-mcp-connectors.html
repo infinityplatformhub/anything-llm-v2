@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workspace MCP Connectors</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root {
+    --bg-primary: #0e0f0f;
+    --bg-secondary: #1b1b1e;
+    --bg-input: #27282a;
+    --text-primary: #ffffff;
+    --text-secondary: rgba(255, 255, 255, 0.6);
+    --border: rgba(255, 255, 255, 0.1);
+    --border-strong: #3f3f42;
+    --btn-primary: #46c8ff;
+    --btn-cta: #7cd4fd;
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --danger: #f87171;
+    --sky-dim: rgba(70, 200, 255, 0.12);
+  }
+  body {
+    font-family: "plus-jakarta-sans", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+    background: #101112;
+    color: var(--text-primary);
+    margin: 0;
+  }
+  .app-surface { background: var(--bg-primary); }
+  .panel { background: var(--bg-secondary); border: 1px solid var(--border); }
+  .btn-primary { background: var(--btn-primary); color: #0b1418; }
+  .btn-primary:hover { background: var(--btn-cta); }
+  .btn-ghost { border: 1px solid var(--border-strong); color: var(--text-primary); }
+  .btn-ghost:hover { background: rgba(255, 255, 255, 0.08); }
+  .btn-danger { border: 1px solid rgba(248, 113, 113, 0.4); color: var(--danger); }
+  .btn-danger:hover { background: rgba(248, 113, 113, 0.12); }
+  .chip { border: 1px solid var(--border-strong); color: var(--text-secondary); }
+  .chip[data-on="1"] { border-color: var(--btn-primary); color: var(--btn-primary); background: var(--sky-dim); }
+  .fn-chip { background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border); }
+  .fn-chip[data-off="1"] { opacity: 0.3; text-decoration: line-through; }
+  .toggle { width: 44px; height: 24px; border-radius: 999px; background: #3f3f42; position: relative; transition: background 0.2s; cursor: pointer; flex: none; }
+  .toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 999px; background: #fff; transition: transform 0.2s; }
+  .toggle[data-on="1"] { background: var(--btn-primary); }
+  .toggle[data-on="1"]::after { transform: translateX(20px); }
+  .demo-bar { background: #16181a; border-bottom: 1px solid var(--border-strong); }
+  .demo-bar button.active { background: var(--btn-primary); color: #0b1418; font-weight: 700; }
+  .modal-backdrop { background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(2px); }
+  .fa-logo { background: #14548c; color: #7cd4fd; }
+  .spin { animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .skeleton { background: linear-gradient(90deg, #1b1b1e 25%, #242527 50%, #1b1b1e 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { .spin, .skeleton { animation: none; } }
+  ::placeholder { color: rgba(255, 255, 255, 0.4); }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--btn-primary); outline-offset: 1px; }
+</style>
+</head>
+<body>
+
+<!-- demo control (ไม่ใช่ของจริงในแอป) -->
+<div class="demo-bar flex flex-wrap items-center gap-2 px-4 py-2 text-xs sticky top-0 z-30">
+  <span class="text-[color:var(--text-secondary)] font-semibold mr-1">สถานะตัวอย่าง (กดเล่นได้):</span>
+  <button data-demo="ready"   class="chip rounded-full px-3 py-1">พร้อมใช้</button>
+  <button data-demo="loading" class="chip rounded-full px-3 py-1">กำลังโหลด</button>
+  <button data-demo="empty"   class="chip rounded-full px-3 py-1">ไม่มี server</button>
+  <button data-demo="expired" class="chip rounded-full px-3 py-1">Token หมดอายุ</button>
+  <button data-demo="error"   class="chip rounded-full px-3 py-1">เชื่อมต่อพลาด</button>
+  <button data-demo="viewer"  class="chip rounded-full px-3 py-1">มุมมอง user ทั่วไป</button>
+  <span class="ml-auto text-[color:var(--text-secondary)]">workspace: <b class="text-[color:var(--text-primary)]">ทีมบัญชี</b> · mockup v1</span>
+</div>
+
+<div class="flex min-h-[calc(100vh-40px)]">
+
+  <!-- sidebar -->
+  <aside class="app-surface hidden md:flex flex-col w-60 shrink-0 border-r" style="border-color: var(--border)">
+    <div class="flex items-center gap-2 px-4 py-4 text-sm font-extrabold tracking-tight">
+      <span class="fa-logo w-7 h-7 rounded-lg grid place-items-center text-xs font-extrabold">AL</span>
+      AnythingLLM
+    </div>
+    <div class="px-4 pt-2 pb-1 text-[10px] font-bold uppercase tracking-widest" style="color: var(--text-secondary)">Workspaces</div>
+    <nav class="flex flex-col gap-0.5 px-2 text-sm">
+      <a class="rounded-lg px-3 py-2" style="color: var(--text-secondary)" href="#">ทีมขาย</a>
+      <a class="rounded-lg px-3 py-2 font-semibold" style="background: rgba(255,255,255,0.08); color: var(--text-primary)" href="#">ทีมบัญชี</a>
+      <a class="rounded-lg px-3 py-2" style="color: var(--text-secondary)" href="#">R&amp;D</a>
+      <a class="rounded-lg px-3 py-2" style="color: var(--text-secondary)" href="#">กองทุนรวมทดลอง</a>
+    </nav>
+    <div class="mt-auto px-4 py-4 text-xs" style="color: var(--text-secondary)">admin@infi.co</div>
+  </aside>
+
+  <!-- main -->
+  <main class="flex-1 min-w-0 px-5 md:px-10 py-6">
+    <div class="text-xs mb-3" style="color: var(--text-secondary)">Workspace Settings · ทีมบัญชี</div>
+    <h1 class="text-xl font-extrabold tracking-tight">Agent Configuration</h1>
+    <p class="mt-1 text-sm max-w-2xl" style="color: var(--text-secondary)">
+      เลือกว่า agent ของ workspace นี้ใช้อะไรได้บ้าง — MCP server แต่ละตัวเปิดให้ workspace นี้เอง และ OAuth ผูกกับ workspace นี้โดยเฉพาะ
+    </p>
+
+    <!-- state: loading -->
+    <section id="state-loading" class="mt-6 space-y-4" hidden>
+      <div class="panel rounded-xl p-5"><div class="skeleton h-6 w-56 rounded"></div><div class="skeleton h-4 w-80 rounded mt-3"></div></div>
+      <div class="panel rounded-xl p-5"><div class="skeleton h-10 w-full rounded"></div></div>
+      <div class="panel rounded-xl p-5"><div class="skeleton h-10 w-full rounded"></div></div>
+    </section>
+
+    <!-- state: empty -->
+    <section id="state-empty" class="mt-6" hidden>
+      <div class="panel rounded-xl p-8 text-center">
+        <div class="text-4xl">🔌</div>
+        <h2 class="mt-3 font-bold">ยังไม่มี MCP server ใน instance นี้</h2>
+        <p class="mt-1 text-sm" style="color: var(--text-secondary)">MCP server เพิ่มที่ระดับ Admin › Agents ก่อน แล้วจึงจะเปิดให้ workspace นี้ใช้ได้ที่หน้านี้</p>
+        <button class="btn-ghost rounded-lg px-4 py-2 text-sm mt-4 font-semibold">ไปที่ Admin › Agents</button>
+      </div>
+    </section>
+
+    <!-- state: ready / expired / error / viewer -->
+    <section id="state-main" class="mt-6 max-w-3xl">
+
+      <div id="banner" class="rounded-xl p-4 mb-5 text-sm border hidden" role="alert">
+        <div class="flex items-start gap-3">
+          <span id="banner-icon" class="text-lg leading-none">⚠️</span>
+          <div>
+            <div id="banner-title" class="font-bold"></div>
+            <div id="banner-body" class="mt-0.5" style="color: var(--text-secondary)"></div>
+          </div>
+          <button id="banner-action" class="btn-ghost rounded-lg px-3 py-1.5 text-xs font-semibold ml-auto shrink-0"></button>
+        </div>
+      </div>
+
+      <h2 class="text-sm font-bold uppercase tracking-widest mb-3" style="color: var(--text-secondary)">MCP Connectors</h2>
+
+      <!-- FlowAccount card -->
+      <article class="panel rounded-xl p-5 mb-4">
+        <div class="flex items-start gap-4">
+          <div class="fa-logo w-11 h-11 rounded-xl grid place-items-center font-extrabold text-lg shrink-0">FA</div>
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <h3 class="font-bold">FlowAccount AI Connector</h3>
+              <span class="chip rounded-full px-2 py-0.5 text-[10px] font-semibold">OAuth 2.1</span>
+              <span class="chip rounded-full px-2 py-0.5 text-[10px] font-semibold">auth ต่อ workspace</span>
+            </div>
+            <p class="text-xs mt-0.5" style="color: var(--text-secondary)">mcp.flowaccount.com/mcp · อ่านยอดขาย/ค่าใช้จ่าย/งบ + สร้างเอกสาร (JV, RV, ใบกำกับ) · 1 workspace = 1 บริษัท</p>
+
+            <!-- status area -->
+            <div id="fa-status" class="mt-4">
+              <!-- disconnected -->
+              <div data-fa="disconnected">
+                <div class="flex items-center gap-2 text-sm" style="color: var(--text-secondary)">
+                  <span class="w-2 h-2 rounded-full" style="background: #6b7280"></span> ยังไม่เชื่อมต่อ — ต้องล็อกอินบัญชี FlowAccount ก่อนใช้งาน
+                </div>
+                <button data-act="connect" class="btn-primary rounded-lg px-4 py-2 text-sm font-bold mt-3">Connect FlowAccount</button>
+              </div>
+              <!-- connected -->
+              <div data-fa="connected" hidden>
+                <div class="flex items-center gap-2 text-sm">
+                  <span class="w-2 h-2 rounded-full" style="background: var(--ok)"></span>
+                  เชื่อมต่อแล้ว · <b>บจก. ตัวอย่างการบัญชี จำกัด</b>
+                </div>
+                <div class="text-xs mt-1" style="color: var(--text-secondary)">access token หมดอายุใน <span id="fa-expiry" style="font-variant-numeric: tabular-nums">42:13</span> — ระบบ refresh อัตโนมัติ ไม่ต้องทำอะไร</div>
+                <div class="flex items-center gap-3 mt-3">
+                  <button data-act="disconnect" class="btn-danger rounded-lg px-3 py-1.5 text-xs font-semibold">Disconnect</button>
+                  <span class="text-xs" style="color: var(--text-secondary)">ผูกกับ workspace <b class="text-[color:var(--text-primary)]">ทีมบัญชี</b> เท่านั้น</span>
+                </div>
+              </div>
+              <!-- error body injected -->
+              <div data-fa="error" hidden>
+                <div class="text-sm" style="color: var(--danger)">เชื่อมต่อไม่สำเร็จ: ผู้ใช้ปฏิเสธสิทธิ์ (access_denied)</div>
+                <div class="text-xs mt-1" style="color: var(--text-secondary)">ต้องกด Connect ใหม่และกดอนุญาตในหน้า FlowAccount</div>
+                <button data-act="connect" class="btn-primary rounded-lg px-4 py-2 text-sm font-bold mt-3">ลองเชื่อมต่ออีกครั้ง</button>
+              </div>
+            </div>
+
+            <!-- enable row -->
+            <div class="flex items-center justify-between gap-4 border-t mt-4 pt-4" style="border-color: var(--border)">
+              <div>
+                <div class="text-sm font-semibold">เปิดใช้ใน workspace นี้</div>
+                <div class="text-xs" style="color: var(--text-secondary)">ต้องเชื่อมต่อก่อนจึงจะเปิดได้ · เมื่อเปิด agent ของห้องนี้เห็นทูลของ FlowAccount ทันที</div>
+              </div>
+              <div class="toggle" id="fa-toggle" role="switch" aria-checked="false" aria-label="เปิดใช้ FlowAccount ใน workspace นี้" tabindex="0"></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- generic global server card -->
+      <article class="panel rounded-xl p-5">
+        <div class="flex items-start gap-4">
+          <div class="w-11 h-11 rounded-xl grid place-items-center font-extrabold text-lg shrink-0" style="background: var(--bg-input); color: var(--text-secondary)">GH</div>
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <h3 class="font-bold">github-tools</h3>
+              <span class="chip rounded-full px-2 py-0.5 text-[10px] font-semibold">แชร์ global</span>
+            </div>
+            <p class="text-xs mt-0.5" style="color: var(--text-secondary)">ไม่มี credential ต่อ workspace — เปิดแล้วทุกคนใน workspace นี้ใช้ token กลางของ instance</p>
+            <div class="flex items-center justify-between gap-4 border-t mt-4 pt-4" style="border-color: var(--border)">
+              <div class="text-sm font-semibold">เปิดใช้ใน workspace นี้</div>
+              <div class="toggle" id="gh-toggle" role="switch" aria-checked="false" aria-label="เปิดใช้ github-tools ใน workspace นี้" tabindex="0"></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- functions preview -->
+      <div class="mt-6">
+        <div class="text-xs font-bold uppercase tracking-widest mb-2" style="color: var(--text-secondary)">functions ที่ agent ของ workspace นี้โหลดตอนนี้</div>
+        <div id="fn-list" class="flex flex-wrap gap-2 text-xs font-mono">
+          <span class="fn-chip rounded-md px-2 py-1" data-off="1">@@mcp_flowaccount-get-profit-report</span>
+          <span class="fn-chip rounded-md px-2 py-1" data-off="1">@@mcp_flowaccount-create-tax-invoice</span>
+          <span class="fn-chip rounded-md px-2 py-1" data-off="1">@@mcp_github-search-issues</span>
+          <span class="fn-chip rounded-md px-2 py-1">@@rag-full</span>
+          <span class="fn-chip rounded-md px-2 py-1">@@web-browsing</span>
+        </div>
+        <div id="fn-hint" class="text-xs mt-2" style="color: var(--text-secondary)">ปิด toggle ข้างบนแล้วดูรายชื่อทูลที่ agent เห็นเปลี่ยน — ตัดที่ตอนโหลด tools ไม่ใช่ตอนเรียก</div>
+      </div>
+
+      <div id="viewer-note" class="panel rounded-xl p-4 mt-6 text-sm" hidden>
+        <b>มุมมอง user ทั่วไป:</b> เห็นสถานะอย่างเดียว กด toggle / Connect / Disconnect ไม่ได้ (จัดการได้เฉพาะ admin ของ workspace)
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- OAuth simulation modal -->
+<div id="oauth-modal" class="modal-backdrop fixed inset-0 z-40 grid place-items-center p-4" hidden>
+  <div class="panel rounded-2xl w-full max-w-md p-0 overflow-hidden">
+    <!-- step 1: login -->
+    <div data-step="login" class="p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <span class="fa-logo w-8 h-8 rounded-lg grid place-items-center text-xs font-extrabold">FA</span>
+        <b>เข้าสู่ระบบ FlowAccount</b>
+      </div>
+      <p class="text-xs mb-4" style="color: var(--text-secondary)">AnythingLLM ขอสิทธิ์อ่านข้อมูลและสร้างเอกสารผ่าน flowaccount-api · หลังอนุญาต ระบบเก็บ token ไว้เฉพาะ workspace "ทีมบัญชี"</p>
+      <label class="text-xs font-semibold block mb-1">อีเมล</label>
+      <input class="w-full rounded-lg px-3 py-2 text-sm mb-3" style="background: var(--bg-input); border: 1px solid var(--border-strong); color: var(--text-primary)" value="admin@company.co" readonly>
+      <label class="text-xs font-semibold block mb-1">รหัสผ่าน</label>
+      <input type="password" class="w-full rounded-lg px-3 py-2 text-sm mb-4" style="background: var(--bg-input); border: 1px solid var(--border-strong); color: var(--text-primary)" value="••••••••••" readonly>
+      <button data-act="to-company" class="btn-primary w-full rounded-lg py-2.5 text-sm font-bold">เข้าสู่ระบบ</button>
+      <div class="text-[10px] text-center mt-3" style="color: var(--text-secondary)">OAuth 2.1 · PKCE · scope: openid, flowaccount-api, offline_access (จำลอง)</div>
+    </div>
+    <!-- step 2: company picker -->
+    <div data-step="company" class="p-6" hidden>
+      <b class="block mb-1">เลือกบริษัทที่ให้เข้าถึง</b>
+      <p class="text-xs mb-4" style="color: var(--text-secondary)">1 workspace เชื่อมได้ 1 บริษัท — เปลี่ยนภายหลังต้อง Disconnect ก่อน</p>
+      <label class="flex items-center gap-3 rounded-lg p-3 mb-2 cursor-pointer text-sm" style="background: var(--bg-input); border: 1px solid var(--border-strong)">
+        <input type="radio" name="fa-co" checked> บจก. ตัวอย่างการบัญชี จำกัด <span class="ml-auto text-[10px]" style="color: var(--text-secondary)">แพ็กเกจ Pro</span>
+      </label>
+      <label class="flex items-center gap-3 rounded-lg p-3 mb-4 cursor-pointer text-sm" style="background: var(--bg-input); border: 1px solid var(--border-strong)">
+        <input type="radio" name="fa-co"> หจก. ร้านค้าทดลอง <span class="ml-auto text-[10px]" style="color: var(--text-secondary)">แพ็กเกจ Starter</span>
+      </label>
+      <button data-act="to-auth" class="btn-primary w-full rounded-lg py-2.5 text-sm font-bold">อนุญาต</button>
+    </div>
+    <!-- step 3: connecting -->
+    <div data-step="authorizing" class="p-10 text-center" hidden>
+      <svg class="spin mx-auto" width="34" height="34" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#3f3f42" stroke-width="3"/><path d="M21 12a9 9 0 0 0-9-9" stroke="#46c8ff" stroke-width="3" stroke-linecap="round"/></svg>
+      <div class="mt-4 text-sm font-semibold">กำลังแลก authorization code เป็น token…</div>
+      <div class="text-xs mt-1" style="color: var(--text-secondary)">เก็บ access/refresh token ลง workspace_mcp_connections</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+  // ---- demo state chips ----
+  function setDemo(name) {
+    $$(".demo-bar button").forEach(b => b.classList.toggle("active", b.dataset.demo === name));
+    $("#state-loading").hidden = name !== "loading";
+    $("#state-empty").hidden = name !== "empty";
+    $("#state-main").hidden = !["ready", "expired", "error", "viewer"].includes(name);
+    const banner = $("#banner");
+    banner.classList.add("hidden");
+    setFa("disconnected", false);
+    if (name === "expired") {
+      banner.classList.remove("hidden");
+      banner.style.borderColor = "rgba(251,191,36,.4)"; banner.style.background = "rgba(251,191,36,.08)";
+      $("#banner-icon").textContent = "⚠️";
+      $("#banner-title").textContent = "Token ของ FlowAccount หมดอายุและ refresh ไม่สำเร็จ";
+      $("#banner-body").textContent = "refresh_token ถูกยกเลิกที่ฝั่ง FlowAccount (มีการเปลี่ยนรหัสผ่านหรือยกเลิกสิทธิ์) — ต้องเชื่อมต่อใหม่";
+      $("#banner-action").textContent = "Reconnect ตอนนี้";
+      setFa("connected", false);
+      $("#fa-expiry").textContent = "หมดอายุ";
+    }
+    if (name === "error") {
+      banner.classList.remove("hidden");
+      banner.style.borderColor = "rgba(248,113,113,.4)"; banner.style.background = "rgba(248,113,113,.08)";
+      $("#banner-icon").textContent = "🚫";
+      $("#banner-title").textContent = "เชื่อมต่อ FlowAccount ไม่สำเร็จ";
+      $("#banner-body").textContent = "ผู้ใช้ปฏิเสธสิทธิ์ (access_denied) — ไม่มี token ถูกเก็บลงระบบ";
+      $("#banner-action").textContent = "ลองอีกครั้ง";
+      setFa("error", false);
+    }
+    if (name === "ready") {
+      setFa("connected", true);
+      $("#fa-toggle").dataset.on = "1";
+    }
+    if (name === "viewer") {
+      setFa("connected", true);
+      $("#fa-toggle").dataset.on = "1";
+      $("#viewer-note").hidden = false;
+      $$("[data-act], .toggle, #banner-action").forEach(el => { el.style.pointerEvents = "none"; el.style.opacity = 0.5; });
+    } else {
+      $("#viewer-note").hidden = true;
+      $$("[data-act], .toggle, #banner-action").forEach(el => { el.style.pointerEvents = ""; el.style.opacity = ""; });
+    }
+    if (name !== "expired") $("#fa-expiry").textContent = "42:13";
+    updateFns();
+  }
+  $$(".demo-bar button").forEach(b => b.addEventListener("click", () => setDemo(b.dataset.demo)));
+
+  // ---- FlowAccount status area ----
+  function setFa(state, enabledHint) {
+    $$("#fa-status [data-fa]").forEach(d => d.hidden = d.dataset.fa !== state);
+    if (state === "disconnected") $("#fa-toggle").dataset.on = "0";
+  }
+
+  // ---- toggles + functions preview ----
+  function updateFns() {
+    const faOn = $("#fa-toggle").dataset.on === "1" && $$("#fa-status [data-fa]").find(d => !d.hidden).dataset.fa === "connected";
+    const ghOn = $("#gh-toggle").dataset.on === "1";
+    $("#fa-toggle").setAttribute("aria-checked", faOn);
+    $("#gh-toggle").setAttribute("aria-checked", ghOn);
+    $$("#fn-list .fn-chip").forEach(c => {
+      if (c.textContent.startsWith("@@mcp_flowaccount")) c.dataset.off = faOn ? "0" : "1";
+      if (c.textContent.startsWith("@@mcp_github")) c.dataset.off = ghOn ? "0" : "1";
+    });
+  }
+  for (const id of ["fa-toggle", "gh-toggle"]) {
+    const t = $("#" + id);
+    t.addEventListener("click", () => {
+      if (id === "fa-toggle" && t.dataset.on !== "1" && $$("#fa-status [data-fa]").find(d => !d.hidden).dataset.fa !== "connected") return;
+      t.dataset.on = t.dataset.on === "1" ? "0" : "1";
+      updateFns();
+    });
+    t.addEventListener("keydown", e => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); t.click(); } });
+  }
+
+  // ---- OAuth modal ----
+  const modal = $("#oauth-modal");
+  function showModalStep(step) {
+    modal.hidden = false;
+    $$("[data-step]", modal).forEach(d => d.hidden = d.dataset.step !== step);
+  }
+  $$("[data-act]").forEach(b => b.addEventListener("click", () => {
+    const act = b.dataset.act;
+    if (act === "connect") showModalStep("login");
+    if (act === "to-company") showModalStep("company");
+    if (act === "to-auth") { showModalStep("authorizing"); setTimeout(() => { modal.hidden = true; setFa("connected", true); $("#fa-toggle").dataset.on = "1"; updateFns(); }, 1600); }
+    if (act === "disconnect") { setFa("disconnected"); updateFns(); }
+  }));
+  modal.addEventListener("click", e => { if (e.target === modal) modal.hidden = true; });
+
+  setDemo("ready");
+</script>
+</body>
+</html>
