@@ -8,8 +8,108 @@ const {
 } = require("../utils/middleware/multiUserProtected");
 const { validatedRequest } = require("../utils/middleware/validatedRequest");
 
+function connectionStatus(serverName, connection) {
+  return {
+    serverName,
+    enabled: connection?.enabled === true,
+    connected: !!connection?.access_token,
+    companyLabel: connection?.company_label ?? null,
+    expiresAt: connection?.expires_at ?? null,
+  };
+}
+
 function mcpServersEndpoints(app) {
   if (!app) return;
+
+  app.get(
+    "/workspace/:slug/mcp",
+    [validatedRequest, flexUserRoleValid([ROLES.admin])],
+    async (request, response) => {
+      try {
+        const { slug } = request.params;
+        if (typeof slug !== "string" || !slug.trim())
+          return response
+            .status(400)
+            .json({ success: false, error: "Invalid workspace slug" });
+        const workspace = await Workspace.get({ slug });
+        if (!workspace)
+          return response
+            .status(404)
+            .json({ success: false, error: "Workspace not found" });
+        const catalog = new MCPCompatibilityLayer().mcpServerConfigs;
+        const rows = await WorkspaceMcpConnection.list(workspace.id);
+        const connections = new Map(rows.map((row) => [row.server_name, row]));
+        return response.status(200).json({
+          connections: catalog.map(({ name }) =>
+            connectionStatus(name, connections.get(name))
+          ),
+        });
+      } catch {
+        return response
+          .status(500)
+          .json({ success: false, error: "Unable to load MCP connections" });
+      }
+    }
+  );
+
+  app.post(
+    "/workspace/:slug/mcp/toggle",
+    [validatedRequest, flexUserRoleValid([ROLES.admin])],
+    async (request, response) => {
+      try {
+        const { slug } = request.params;
+        if (typeof slug !== "string" || !slug.trim())
+          return response
+            .status(400)
+            .json({ success: false, error: "Invalid workspace slug" });
+        const workspace = await Workspace.get({ slug });
+        if (!workspace)
+          return response
+            .status(404)
+            .json({ success: false, error: "Workspace not found" });
+        const { serverName, enabled } = reqBody(request) ?? {};
+        if (
+          typeof serverName !== "string" ||
+          !serverName.trim() ||
+          typeof enabled !== "boolean"
+        )
+          return response
+            .status(400)
+            .json({ success: false, error: "Invalid serverName or enabled" });
+        const config = new MCPCompatibilityLayer().mcpServerConfigs.find(
+          ({ name }) => name === serverName
+        );
+        if (!config)
+          return response
+            .status(404)
+            .json({ success: false, error: "MCP server not found" });
+        if (enabled && config.server?.anythingllm?.perWorkspaceAuth) {
+          const connection = await WorkspaceMcpConnection.find(
+            workspace.id,
+            serverName
+          );
+          if (!connection?.access_token)
+            return response.status(409).json({
+              success: false,
+              error: "Connect MCP server before enabling",
+            });
+        }
+        const connection = await WorkspaceMcpConnection.setEnabled(
+          workspace.id,
+          serverName,
+          enabled
+        );
+        return response.status(200).json({
+          success: true,
+          connection: connectionStatus(serverName, connection),
+        });
+      } catch {
+        return response
+          .status(500)
+          .json({ success: false, error: "Unable to toggle MCP connection" });
+      }
+    }
+  );
 
   app.get(
     "/mcp-servers/force-reload",
