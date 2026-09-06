@@ -151,6 +151,7 @@ model workspaces {
   workspace_parsed_files       workspace_parsed_files[]
   memories                     memories[]
   agent_settings               workspace_agent_settings?
+  mcp_connections              workspace_mcp_connections[]
 }
 
 model workspace_threads {
@@ -525,4 +526,20 @@ model workspace_agent_settings {
   createdAt      DateTime   @default(now())
   lastUpdatedAt  DateTime   @default(now()) @updatedAt
   workspace      workspaces @relation(fields: [workspace_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
+}
+
+model workspace_mcp_connections {
+  id            Int        @id @default(autoincrement())
+  workspace_id  Int
+  server_name   String
+  enabled       Boolean    @default(false)
+  access_token  String?
+  refresh_token String?
+  expires_at    DateTime?
+  company_label String?
+  createdAt     DateTime   @default(now())
+  lastUpdatedAt DateTime   @default(now())
+  workspace     workspaces @relation(fields: [workspace_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([workspace_id, server_name])
 }
