@@ -223,7 +223,15 @@ function mcpServersEndpoints(app) {
               );
         return response.status(200).json({
           success: true,
-          servers,
+          servers:
+            user?.role === ROLES.manager
+              ? servers.map((server) => ({
+                  ...server,
+                  config: {
+                    anythingllm: server.config?.anythingllm ?? null,
+                  },
+                }))
+              : servers,
         });
       } catch (error) {
         console.error("Error listing MCP servers:", error);

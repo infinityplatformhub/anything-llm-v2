@@ -232,6 +232,29 @@ describe("workspace MCP list", () => {
     );
   });
 
+  it("strips server config secrets for managers but preserves admin config", async () => {
+    const config = {
+      anythingllm: { custom: true },
+      headers: { Authorization: "Bearer plain-secret" },
+      env: { API_KEY: "envsecret" },
+    };
+    servers = [{ name: "other", config }];
+    WorkspaceMcpConnection.enabledNames.mockResolvedValue(["other"]);
+
+    const managerResponse = await invoke(
+      { workspaceSlug: "legal" },
+      { id: 7, role: "manager" }
+    );
+    expect(managerResponse.body.servers[0].config.anythingllm).toEqual(
+      config.anythingllm
+    );
+    expect(JSON.stringify(managerResponse.body)).not.toContain("plain-secret");
+    expect(JSON.stringify(managerResponse.body)).not.toContain("envsecret");
+
+    const adminResponse = await invoke({ workspaceSlug: "legal" });
+    expect(adminResponse.body.servers[0].config).toEqual(config);
+  });
+
   it("rejects manager non-members before reading allowlist", async () => {
     Workspace.get.mockImplementation(async ({ workspace_users }) =>
       workspace_users ? null : { id: 5, slug: "legal" }
