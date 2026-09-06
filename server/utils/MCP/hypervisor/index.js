@@ -132,7 +132,8 @@ class MCPHypervisor {
     const server = this.mcpServerConfigs.find((s) => s.name === name)?.server;
     if (!server?.anythingllm?.perWorkspaceAuth)
       throw new Error("MCP workspace authentication is not configured");
-    if (this.#parseServerType(server) !== "http")
+    const transport = this.#parseServerType(server);
+    if (transport !== "http")
       throw new Error(
         "MCP perWorkspaceAuth requires a remote transport; stdio is not supported"
       );
