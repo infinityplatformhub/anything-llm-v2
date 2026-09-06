@@ -192,18 +192,32 @@ describe("MCP OAuth", () => {
       .flatMap((spy) => spy.mock.calls)
       .flat()
       .join(" ");
-    expect(output).not.toMatch(
-      /access_token|private-access-token|private-refresh-token/
-    );
-    jest.restoreAllMocks();
-    const states = await prisma.lark_oauth_states.findMany({
-      where: { mode: "mcp" },
-    });
-    for (const row of states) {
-      if (oauth.verifyState(row.state).wsSlug === workspace.slug)
-        await prisma.lark_oauth_states.delete({ where: { state: row.state } });
+    try {
+      expect(output).not.toMatch(
+        /access_token|private-access-token|private-refresh-token/
+      );
+    } finally {
+      jest.restoreAllMocks();
+      try {
+        const states = await prisma.lark_oauth_states.findMany({
+          where: { mode: "mcp" },
+        });
+        for (const row of states) {
+          let payload;
+          try {
+            payload = oauth.verifyState(row.state);
+          } catch {
+            continue;
+          }
+          if (payload.wsSlug === workspace.slug)
+            await prisma.lark_oauth_states.delete({
+              where: { state: row.state },
+            });
+        }
+      } finally {
+        await prisma.workspaces.delete({ where: { id: workspace.id } });
+      }
     }
-    await prisma.workspaces.delete({ where: { id: workspace.id } });
   });
   afterAll(async () => {
     await new Promise((resolve) => server.close(resolve));
