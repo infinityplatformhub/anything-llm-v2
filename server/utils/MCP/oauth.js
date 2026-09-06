@@ -169,7 +169,9 @@ async function authorizeUrl({
   if (
     !Array.isArray(metadata.scopes_supported) ||
     !metadata.scopes_supported.length ||
-    !metadata.scopes_supported.every((scope) => typeof scope === "string")
+    !metadata.scopes_supported.every(
+      (scope) => typeof scope === "string" && scope.trim().length > 0
+    )
   )
     throw new Error("invalid_metadata");
   const client = await ensureClient(serverUrl, redirectUri);
@@ -195,7 +197,7 @@ async function authorizeUrl({
       .digest("base64url"),
     state,
     resource: serverUrl,
-    scope: metadata.scopes_supported.join(" "),
+    scope: metadata.scopes_supported.map((scope) => scope.trim()).join(" "),
   }).toString();
   return { url: url.toString(), state, codeVerifier, ...payload };
 }

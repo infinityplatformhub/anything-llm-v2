@@ -334,7 +334,19 @@ describe("MCP OAuth", () => {
       .mockResolvedValueOnce({ ok: true, json: async () => metadata });
     await expect(oauth.discover(serverUrl)).resolves.toEqual(metadata);
   });
-  it.each([undefined, null, "openid", [], ["openid", 1]])(
+  it("trims scopes_supported entries before authorization", async () => {
+    metadataOverrides.scopes_supported = [" openid ", "\tprofile\n"];
+    const response = await start();
+    expect(response.statusCode).toBe(200);
+    expect(new URL(response.body.url).searchParams.get("scope")).toBe(
+      "openid profile"
+    );
+  });
+  it.each(
+    [undefined, null, "openid", [], ["openid", 1], [""], [" "]].map((scopes) => [
+      scopes,
+    ])
+  )(
     "rejects unusable scopes_supported %j",
     async (scopes) => {
       // Ruling: fail closed; guessed scopes can authenticate without granting tool access.
