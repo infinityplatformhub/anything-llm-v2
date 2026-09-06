@@ -189,10 +189,9 @@ async function authorizeUrl({
       .digest("base64url"),
     state,
     resource: serverUrl,
-    scope: (Array.isArray(metadata.scopes_supported)
-      ? metadata.scopes_supported
-      : []
-    ).join(" "),
+    scope: Array.isArray(metadata.scopes_supported)
+      ? metadata.scopes_supported.join(" ")
+      : "openid offline_access",
   }).toString();
   return { url: url.toString(), state, codeVerifier, ...payload };
 }

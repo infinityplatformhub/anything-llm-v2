@@ -334,11 +334,13 @@ describe("MCP OAuth", () => {
       .mockResolvedValueOnce({ ok: true, json: async () => metadata });
     await expect(oauth.discover(serverUrl)).resolves.toEqual(metadata);
   });
-  it("accepts malformed scopes_supported with empty default scope", async () => {
+  it("preserves offline access with malformed scopes_supported", async () => {
     metadataOverrides.scopes_supported = "openid";
     const result = await start();
     expect(result.statusCode).toBe(200);
-    expect(new URL(result.body.url).searchParams.get("scope")).toBe("");
+    expect(new URL(result.body.url).searchParams.get("scope")).toBe(
+      "openid offline_access"
+    );
   });
   it.each([1e30, 0, -1, "invalid"])(
     "ignores unusable expires_in %s",
