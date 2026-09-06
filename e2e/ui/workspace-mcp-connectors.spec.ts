@@ -116,6 +116,21 @@ test("manager workspace member sees read-only connectors", async ({ page, reques
   const membership = await request.get("http://localhost:3021/api/workspaces", { headers: { Authorization: `Bearer ${auth.viewer.token}` } });
   expect(membership.ok()).toBe(true);
   expect((await membership.json()).workspaces.map((workspace: { slug: string }) => workspace.slug)).toContain("ws-alpha");
+
+  const adminHeaders = { Authorization: `Bearer ${auth.admin.token}` };
+  const start = await request.get("http://localhost:3021/api/mcp/oauth/start/ws-alpha/flowaccount", { headers: adminHeaders });
+  expect(start.ok()).toBe(true);
+  const authorizeUrl = new URL((await start.json()).url);
+  authorizeUrl.searchParams.set("company", "Alpha Company");
+  authorizeUrl.searchParams.set("allow", "1");
+  const consent = await request.get(authorizeUrl.href, { maxRedirects: 0 });
+  expect(consent.status()).toBe(302);
+  const callbackUrl = consent.headers().location;
+  if (!callbackUrl) throw new Error("Fake provider authorization did not redirect to OAuth callback");
+  const callback = await request.get(callbackUrl, { maxRedirects: 0 });
+  expect(callback.status()).toBe(302);
+  expect(callback.headers().location).toContain("connected=1");
+
   await authenticate(page, "viewer");
   const reads = Promise.all([
     page.waitForResponse((response) => response.request().method() === "GET" && response.url().includes("/mcp-servers/list")),
@@ -131,6 +146,6 @@ test("manager workspace member sees read-only connectors", async ({ page, reques
   await rendered(page);
   await expect(section(page).getByText(/Read-only view\. Only administrators/)).toBeVisible();
   await expect(toggle(page)).toBeDisabled();
-  await expect(section(page).getByRole("button", { name: "Connect flowaccount", exact: true })).toBeDisabled();
+  await expect(section(page).getByRole("button", { name: "Disconnect", exact: true })).toBeDisabled();
   await screenshot(page, info, "06-viewer");
 });
