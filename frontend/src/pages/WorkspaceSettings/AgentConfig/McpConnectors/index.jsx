@@ -23,6 +23,7 @@ export default function McpConnectors({ workspace, canManage }) {
 
   const refresh = useCallback(async () => {
     setError(null);
+    setOauthError(null);
     try {
       const [catalog, status] = await Promise.all([
         MCPServers.listServers(canManage ? undefined : slug),
@@ -39,26 +40,39 @@ export default function McpConnectors({ workspace, canManage }) {
     }
   }, [slug, canManage]);
 
+  const hasExpiry = connections.some((connection) => connection.expiresAt);
   useEffect(() => {
+    if (!hasExpiry) return;
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [hasExpiry]);
 
   useEffect(() => {
     setLoading(true);
     setServers([]);
     setConnections([]);
-    setOauthError(null);
-    refresh();
+    if (!searchParams.has("mcp")) refresh();
   }, [refresh]);
 
   useEffect(() => {
+    if (!searchParams.has("mcp")) return;
     const serverName = searchParams.get("mcp");
-    if (!serverName) return;
+    refresh();
     if (searchParams.has("error")) {
       setOauthError(serverName);
+      const messages = {
+        access_denied:
+          "Access was denied at the provider. Reconnect and grant access.",
+        authorization_failed:
+          "The provider rejected the authorization. Try again.",
+        oauth_callback_failed: "Token exchange failed. Reconnect to try again.",
+      };
+      const code = searchParams.get("error");
       showToast(
-        "MCP connection failed. Reconnect and grant access to try again.",
+        Object.hasOwn(messages, code)
+          ? messages[code]
+          : "MCP connection failed. Reconnect and grant access to try again.",
         "error",
         { clear: true }
       );
@@ -66,8 +80,7 @@ export default function McpConnectors({ workspace, canManage }) {
       showToast("MCP connector connected to this workspace.", "success", {
         clear: true,
       });
-    } else return;
-    refresh();
+    }
     const params = new URLSearchParams(searchParams);
     ["mcp", "connected", "error"].forEach((key) => params.delete(key));
     setSearchParams(params, { replace: true });
@@ -84,6 +97,7 @@ export default function McpConnectors({ workspace, canManage }) {
       showToast("Unable to start MCP connection. Please try again.", "error", {
         clear: true,
       });
+    } finally {
       setPending(null);
     }
   };
@@ -263,7 +277,7 @@ export default function McpConnectors({ workspace, canManage }) {
                     disabled={
                       !canManage ||
                       !!pending ||
-                      (oauth && (!connected || failed))
+                      (oauth && !connected && connection?.enabled !== true)
                     }
                     onChange={(enabled) => update(server.name, enabled)}
                   />
