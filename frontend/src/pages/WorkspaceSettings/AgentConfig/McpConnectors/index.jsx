@@ -17,6 +17,7 @@ export default function McpConnectors({ workspace, canManage }) {
   const [error, setError] = useState(null);
   const [pending, setPending] = useState(null);
   const [oauthError, setOauthError] = useState(null);
+  const [now, setNow] = useState(Date.now);
   const [searchParams, setSearchParams] = useSearchParams();
   const slug = workspace.slug;
 
@@ -37,6 +38,11 @@ export default function McpConnectors({ workspace, canManage }) {
       setLoading(false);
     }
   }, [slug, canManage]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -160,9 +166,12 @@ export default function McpConnectors({ workspace, canManage }) {
             const expiry = connection?.expiresAt
               ? new Date(connection.expiresAt)
               : null;
-            const expired = oauth && expiry && expiry.getTime() <= Date.now();
-            const failed = oauth && (expired || oauthError === server.name);
-            const connected = connection?.connected === true && !expired;
+            const needsReauth = connection?.needsReauth === true;
+            const failed = oauth && (needsReauth || oauthError === server.name);
+            const connected = connection?.connected === true;
+            const remaining = expiry
+              ? Math.max(0, Math.ceil((expiry.getTime() - now) / 1000))
+              : null;
             return (
               <article
                 key={server.name}
@@ -174,7 +183,7 @@ export default function McpConnectors({ workspace, canManage }) {
                     className="mb-4 rounded-lg border border-theme-modal-border p-3 text-sm"
                   >
                     <strong>
-                      {expired ? "Connection expired" : "Connection failed"}
+                      {needsReauth ? "Connection expired" : "Connection failed"}
                     </strong>
                     <p className="mt-1 text-theme-text-secondary">
                       Reconnect and grant access to restore this workspace's
@@ -199,14 +208,17 @@ export default function McpConnectors({ workspace, canManage }) {
                         </>
                       )}
                     </p>
-                    {connected && expiry && !Number.isNaN(expiry.getTime()) && (
-                      <p className="mt-1 text-xs text-theme-text-secondary">
-                        Access token expires {expiry.toLocaleString()} — refresh
-                        is automatic.
-                      </p>
-                    )}
+                    {connected &&
+                      !needsReauth &&
+                      Number.isFinite(remaining) && (
+                        <p className="mt-1 text-xs text-theme-text-secondary">
+                          {remaining > 0
+                            ? `Access token expires in ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")} — refresh is automatic.`
+                            : "Waiting for automatic token refresh."}
+                        </p>
+                      )}
                     <div className="mt-3 flex flex-wrap items-center gap-3">
-                      {connected && !failed ? (
+                      {connected && (
                         <button
                           type="button"
                           className={buttonClass}
@@ -215,7 +227,8 @@ export default function McpConnectors({ workspace, canManage }) {
                         >
                           {pending === server.name ? "Updating…" : "Disconnect"}
                         </button>
-                      ) : (
+                      )}
+                      {(!connected || failed) && (
                         <button
                           type="button"
                           className={`${buttonClass} bg-primary-button text-theme-button-text`}
