@@ -1,4 +1,7 @@
 const MCPHypervisor = require("./hypervisor");
+const {
+  WorkspaceMcpConnection,
+} = require("../../models/workspaceMcpConnection");
 
 class MCPCompatibilityLayer extends MCPHypervisor {
   static _instance;
@@ -14,9 +17,31 @@ class MCPCompatibilityLayer extends MCPHypervisor {
    * This will also boot all MCP servers if they have not been started yet.
    * @returns {Promise<string[]>} Array of flow names in @@mcp_{name} format
    */
-  async activeMCPServers() {
+  async activeMCPServers(workspace) {
+    if (workspace === undefined) {
+      await this.bootMCPServers();
+      return Object.keys(this.mcps).map((name) => `@@mcp_${name}`);
+    }
+    if (!Number.isInteger(workspace?.id) || workspace.id <= 0) return [];
+
+    const connections = await WorkspaceMcpConnection.list(workspace.id);
+    const configs = this.mcpServerConfigs;
+    const allowed = new Set(
+      connections
+        .filter((connection) => {
+          if (!connection.enabled) return false;
+          const config = configs.find((s) => s.name === connection.server_name);
+          return (
+            !config?.server?.anythingllm?.perWorkspaceAuth ||
+            !!connection.access_token
+          );
+        })
+        .map((connection) => connection.server_name)
+    );
     await this.bootMCPServers();
-    return Object.keys(this.mcps).flatMap((name) => `@@mcp_${name}`);
+    return Object.keys(this.mcps)
+      .filter((name) => allowed.has(name))
+      .map((name) => `@@mcp_${name}`);
   }
 
   /**
