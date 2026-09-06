@@ -23,8 +23,11 @@ const MCPServers = {
    * List all available MCP servers in the system
    * @returns {Promise<{success: boolean, error: string | null, servers: Array<{name: string, running: boolean, tools: Array<{name: string, description: string, inputSchema: Object}>, error: string | null, process: {pid: number, cmd: string} | null}>}>}
    */
-  listServers: async () => {
-    return await fetch(`${API_BASE}/mcp-servers/list`, {
+  listServers: async (workspaceSlug) => {
+    const query = workspaceSlug
+      ? `?workspaceSlug=${encodeURIComponent(workspaceSlug)}`
+      : "";
+    return await fetch(`${API_BASE}/mcp-servers/list${query}`, {
       method: "GET",
       headers: baseHeaders(),
     })

@@ -14,7 +14,8 @@
     "start": "cross-env NODE_ENV=production node index.js",
     "lint": "eslint --fix .",
     "lint:check": "eslint .",
-    "swagger": "node ./swagger/init.js"
+    "swagger": "node ./swagger/init.js",
+    "test:e2e:mcp": "node ../node_modules/jest/bin/jest.js __tests__/e2e/mcp/mcp.e2e.test.js --runInBand --config '{\"testEnvironment\":\"node\",\"testMatch\":[\"**/mcp.e2e.test.js\"]}'"
   },
   "prisma": {
     "seed": "node prisma/seed.js"

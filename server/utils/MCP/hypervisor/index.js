@@ -12,6 +12,10 @@ const {
   StreamableHTTPClientTransport,
 } = require("@modelcontextprotocol/sdk/client/streamableHttp.js");
 const { patchShellEnvironmentPath } = require("../../helpers/shell");
+const {
+  WorkspaceMcpConnection,
+} = require("../../../models/workspaceMcpConnection");
+const { refreshTokens } = require("../oauth");
 
 /**
  * @typedef {'stdio' | 'http'} MCPServerTypes
@@ -50,6 +54,189 @@ class MCPHypervisor {
    * @type { { [key: string]: {status: 'success' | 'failed', message: string} } }
    */
   mcpLoadingResults = {};
+  workspaceBoots = new Map();
+
+  workspaceServerKey(workspace, name) {
+    if (!Number.isInteger(workspace?.id) || workspace.id <= 0)
+      throw new Error("MCP workspace is required");
+    return `${workspace.id}:${name}`;
+  }
+
+  async stopWorkspaceServer(workspaceId, serverName) {
+    const key = this.workspaceServerKey({ id: workspaceId }, serverName);
+    const pending = this.workspaceBoots.get(key);
+    this.workspaceBoots.delete(key);
+    if (pending) await pending.catch(() => {});
+    const client = this.mcps[key];
+    delete this.mcps[key];
+    if (client) await client.close();
+  }
+
+  async markWorkspaceReauth(workspace, name) {
+    await this.stopWorkspaceServer(workspace.id, name);
+    await WorkspaceMcpConnection.saveTokens(workspace.id, name, {
+      refresh_token: null,
+      expires_at: new Date(0),
+    });
+  }
+
+  async refreshWorkspaceTokens(workspace, name, server, connection) {
+    if (!connection.refresh_token)
+      throw new Error("MCP authentication required");
+    let tokens;
+    try {
+      tokens = await refreshTokens(connection.refresh_token, server.url);
+    } catch (error) {
+      if (
+        error.status === 401 ||
+        (error.status === 400 && error.code === "invalid_grant")
+      ) {
+        await WorkspaceMcpConnection.saveTokens(workspace.id, name, {
+          refresh_token: null,
+          expires_at: new Date(0),
+        });
+        throw new Error("MCP authentication required");
+      }
+      throw new Error("MCP token refresh unavailable");
+    }
+    const current = await WorkspaceMcpConnection.find(workspace.id, name);
+    if (
+      !current?.enabled ||
+      current.access_token !== connection.access_token ||
+      current.refresh_token !== connection.refresh_token
+    )
+      throw new Error("MCP connection changed during refresh");
+    await WorkspaceMcpConnection.saveTokens(workspace.id, name, tokens);
+    return { ...connection, ...tokens };
+  }
+
+  async bootWorkspaceServer(workspace, serverName, retryAuth = true) {
+    const key = this.workspaceServerKey(workspace, serverName);
+    if (this.workspaceBoots.has(key)) return this.workspaceBoots.get(key);
+    const pending = this.connectWorkspaceServer(
+      workspace,
+      serverName,
+      retryAuth
+    );
+    this.workspaceBoots.set(key, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.workspaceBoots.get(key) === pending)
+        this.workspaceBoots.delete(key);
+    }
+  }
+
+  async connectWorkspaceServer(workspace, name, retryAuth) {
+    const key = this.workspaceServerKey(workspace, name);
+    const server = this.mcpServerConfigs.find((s) => s.name === name)?.server;
+    if (!server?.anythingllm?.perWorkspaceAuth)
+      throw new Error("MCP workspace authentication is not configured");
+    const transport = this.#parseServerType(server);
+    if (transport !== "http")
+      throw new Error(
+        "MCP perWorkspaceAuth requires a remote transport; stdio is not supported"
+      );
+    this.#validateServerDefinitionByType(name, server, "http");
+    let connection = await WorkspaceMcpConnection.find(workspace.id, name);
+    if (
+      !connection?.enabled ||
+      !connection.access_token ||
+      !connection.refresh_token
+    )
+      throw new Error("MCP authentication required");
+    const expiring =
+      connection.expires_at &&
+      new Date(connection.expires_at).getTime() < Date.now() + 60000;
+    const existing = this.mcps[key];
+    if (
+      existing &&
+      !expiring &&
+      existing.workspaceAccessToken === connection.access_token
+    )
+      return existing;
+    if (existing) {
+      delete this.mcps[key];
+      await existing.close();
+    }
+    if (expiring)
+      connection = await this.refreshWorkspaceTokens(
+        workspace,
+        name,
+        server,
+        connection
+      );
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const headers = new Headers(server.headers);
+      headers.set("Authorization", `Bearer ${connection.access_token}`);
+      const client = new Client({ name, version: "1.0.0" });
+      const transport = this.createHttpTransport({
+        ...server,
+        headers: Object.fromEntries(headers),
+      });
+      let timeout;
+      try {
+        await Promise.race([
+          client.connect(transport),
+          new Promise((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error("MCP connection timeout")),
+              30000
+            );
+          }),
+        ]);
+        client.workspaceAccessToken = connection.access_token;
+        this.mcps[key] = client;
+        return client;
+      } catch (error) {
+        await client.close().catch(() => {});
+        if (error.status !== 401 && error.code !== 401)
+          throw new Error("MCP connection failed");
+        if (attempt === 1 || !retryAuth) {
+          await WorkspaceMcpConnection.saveTokens(workspace.id, name, {
+            refresh_token: null,
+            expires_at: new Date(0),
+          });
+          throw new Error("MCP authentication required");
+        }
+        connection = await this.refreshWorkspaceTokens(
+          workspace,
+          name,
+          server,
+          connection
+        );
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+  }
+
+  async callWorkspaceTool(workspace, name, args) {
+    let client = await this.bootWorkspaceServer(workspace, name);
+    try {
+      return await client.callTool(args);
+    } catch (error) {
+      if (error.status !== 401 && error.code !== 401)
+        throw new Error("MCP tool call failed");
+    }
+    await this.stopWorkspaceServer(workspace.id, name);
+    const server = this.mcpServerConfigs.find((s) => s.name === name)?.server;
+    const connection = await WorkspaceMcpConnection.find(workspace.id, name);
+    if (!connection?.enabled || !connection.access_token)
+      throw new Error("MCP authentication required");
+    await this.refreshWorkspaceTokens(workspace, name, server, connection);
+    client = await this.bootWorkspaceServer(workspace, name, false);
+    try {
+      return await client.callTool(args);
+    } catch (error) {
+      if (error.status === 401 || error.code === 401) {
+        await this.markWorkspaceReauth(workspace, name);
+        throw new Error("MCP authentication required");
+      }
+      throw new Error("MCP tool call failed");
+    }
+  }
 
   constructor() {
     if (MCPHypervisor._instance) return MCPHypervisor._instance;
@@ -212,6 +399,12 @@ class MCPHypervisor {
       return {
         success: false,
         error: `MCP server ${name} not found in config file`,
+      };
+
+    if (config.server?.anythingllm?.perWorkspaceAuth)
+      return {
+        success: false,
+        error: "MCP server requires workspace authentication",
       };
 
     try {
@@ -491,13 +684,19 @@ class MCPHypervisor {
    * @returns { Promise<{ [key: string]: {status: string, message: string} }> } The results of the boot process.
    */
   async bootMCPServers() {
-    if (Object.keys(this.mcps).length > 0) {
+    const serverDefinitions = this.mcpServerConfigs;
+    if (
+      serverDefinitions.some(
+        ({ name, server }) =>
+          !server.anythingllm?.perWorkspaceAuth && this.mcps[name]
+      )
+    ) {
       this.log("MCP Servers already running, skipping boot.");
       return this.mcpLoadingResults;
     }
 
-    const serverDefinitions = this.mcpServerConfigs;
     for (const { name, server } of serverDefinitions) {
+      if (server.anythingllm?.perWorkspaceAuth) continue;
       if (
         server.anythingllm?.hasOwnProperty("autoStart") &&
         server.anythingllm.autoStart === false

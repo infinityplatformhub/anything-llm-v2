@@ -1,4 +1,7 @@
 const MCPHypervisor = require("./hypervisor");
+const {
+  WorkspaceMcpConnection,
+} = require("../../models/workspaceMcpConnection");
 
 class MCPCompatibilityLayer extends MCPHypervisor {
   static _instance;
@@ -14,9 +17,43 @@ class MCPCompatibilityLayer extends MCPHypervisor {
    * This will also boot all MCP servers if they have not been started yet.
    * @returns {Promise<string[]>} Array of flow names in @@mcp_{name} format
    */
-  async activeMCPServers() {
+  async activeMCPServers(workspace) {
+    if (workspace === undefined) {
+      await this.bootMCPServers();
+      return Object.keys(this.mcps)
+        .filter((name) => !/^\d+:/.test(name))
+        .map((name) => `@@mcp_${name}`);
+    }
+    if (!Number.isInteger(workspace?.id) || workspace.id <= 0) return [];
+
+    const connections = await WorkspaceMcpConnection.list(workspace.id);
+    const configs = this.mcpServerConfigs;
+    const allowed = new Set(
+      connections
+        .filter((connection) => {
+          if (!connection.enabled) return false;
+          const config = configs.find((s) => s.name === connection.server_name);
+          return (
+            !config?.server?.anythingllm?.perWorkspaceAuth ||
+            !!connection.access_token
+          );
+        })
+        .map((connection) => connection.server_name)
+    );
     await this.bootMCPServers();
-    return Object.keys(this.mcps).flatMap((name) => `@@mcp_${name}`);
+    const active = [];
+    for (const name of allowed) {
+      const config = configs.find((s) => s.name === name);
+      if (config?.server?.anythingllm?.perWorkspaceAuth) {
+        try {
+          await this.bootWorkspaceServer(workspace, name);
+          active.push(`@@mcp_${name}`);
+        } catch {
+          this.log(`MCP server ${name} is unavailable for this workspace`);
+        }
+      } else if (this.mcps[name]) active.push(`@@mcp_${name}`);
+    }
+    return active;
   }
 
   /**
@@ -26,7 +63,12 @@ class MCPCompatibilityLayer extends MCPHypervisor {
    * @returns {Promise<{name: string, description: string, plugin: Function}[]|null>} Array of plugin configurations or null if not found
    */
   async convertServerToolsToPlugins(name, _aibitat = null) {
-    const mcp = this.mcps[name];
+    const workspace = _aibitat?.handlerProps?.invocation?.workspace;
+    const perWorkspaceAuth = this.mcpServerConfigs.find((s) => s.name === name)
+      ?.server?.anythingllm?.perWorkspaceAuth;
+    const mcp = perWorkspaceAuth
+      ? this.mcps[this.workspaceServerKey(workspace, name)]
+      : this.mcps[name];
     if (!mcp) return null;
 
     let tools;
@@ -34,7 +76,10 @@ class MCPCompatibilityLayer extends MCPHypervisor {
       const response = await mcp.listTools();
       tools = response.tools;
     } catch (error) {
-      this.log(`Failed to list tools for MCP server ${name}:`, error);
+      this.log(
+        `Failed to list tools for MCP server ${name}:`,
+        perWorkspaceAuth ? "MCP tool listing failed" : error
+      );
       return null;
     }
     if (!tools || !tools.length) return null;
@@ -78,7 +123,25 @@ class MCPCompatibilityLayer extends MCPHypervisor {
                 handler: async function (args = {}) {
                   try {
                     const mcpLayer = new MCPCompatibilityLayer();
-                    const currentMcp = mcpLayer.mcps[name];
+                    const workspace =
+                      aibitat.handlerProps?.invocation?.workspace;
+                    if (
+                      !Number.isInteger(workspace?.id) ||
+                      workspace.id <= 0 ||
+                      !(await WorkspaceMcpConnection.isAllowed(
+                        workspace.id,
+                        name
+                      ))
+                    )
+                      throw new Error(
+                        `MCP server ${name} is not enabled for this workspace`
+                      );
+                    const perWorkspaceAuth = mcpLayer.mcpServerConfigs.find(
+                      (s) => s.name === name
+                    )?.server?.anythingllm?.perWorkspaceAuth;
+                    const currentMcp = perWorkspaceAuth
+                      ? await mcpLayer.bootWorkspaceServer(workspace, name)
+                      : mcpLayer.mcps[name];
                     if (!currentMcp)
                       throw new Error(
                         `MCP server ${name} is not currently running`
@@ -91,10 +154,14 @@ class MCPCompatibilityLayer extends MCPHypervisor {
                     aibitat.introspect(
                       `Executing MCP server: ${name} with ${JSON.stringify(args, null, 2)}`
                     );
-                    const result = await currentMcp.callTool({
-                      name: tool.name,
-                      arguments: args,
-                    });
+                    const request = { name: tool.name, arguments: args };
+                    const result = perWorkspaceAuth
+                      ? await mcpLayer.callWorkspaceTool(
+                          workspace,
+                          name,
+                          request
+                        )
+                      : await currentMcp.callTool(request);
                     aibitat.handlerProps.log(
                       `MCP server: ${name}:${tool.name} completed successfully`,
                       result
@@ -139,7 +206,16 @@ class MCPCompatibilityLayer extends MCPHypervisor {
    */
   async servers() {
     await this.bootMCPServers();
-    const servers = [];
+    const servers = this.mcpServerConfigs
+      .filter(({ server }) => server.anythingllm?.perWorkspaceAuth)
+      .map(({ name, server }) => ({
+        name,
+        config: server,
+        running: false,
+        tools: [],
+        error: null,
+        process: null,
+      }));
     for (const [name, result] of Object.entries(this.mcpLoadingResults)) {
       const config = this.mcpServerConfigs.find((s) => s.name === name);
 

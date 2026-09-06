@@ -328,6 +328,9 @@ class EphemeralAgentHandler extends AgentHandler {
       // Since to get to this point, the `activeMCPServers` method has already been called, we can
       // safely assume that the MCP server is running and the tools are available/loaded.
       if (name.startsWith("@@mcp_")) {
+        const activeServers =
+          await new MCPCompatibilityLayer().activeMCPServers(this.#workspace);
+        if (!activeServers.includes(name)) continue;
         const mcpPluginName = name.replace("@@mcp_", "");
         const plugins =
           await new MCPCompatibilityLayer().convertServerToolsToPlugins(
