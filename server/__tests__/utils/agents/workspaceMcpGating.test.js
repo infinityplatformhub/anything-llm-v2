@@ -1,3 +1,4 @@
+process.env.STORAGE_DIR = __dirname;
 /* global jest */
 const { describe, beforeEach, afterAll, it, expect } = require("@jest/globals");
 

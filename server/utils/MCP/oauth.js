@@ -166,6 +166,12 @@ async function authorizeUrl({
   userId,
 }) {
   const metadata = await discover(serverUrl);
+  if (
+    !Array.isArray(metadata.scopes_supported) ||
+    !metadata.scopes_supported.length ||
+    !metadata.scopes_supported.every((scope) => typeof scope === "string")
+  )
+    throw new Error("invalid_metadata");
   const client = await ensureClient(serverUrl, redirectUri);
   const codeVerifier = crypto.randomBytes(32).toString("base64url");
   const payload = {
@@ -189,9 +195,7 @@ async function authorizeUrl({
       .digest("base64url"),
     state,
     resource: serverUrl,
-    scope: Array.isArray(metadata.scopes_supported)
-      ? metadata.scopes_supported.join(" ")
-      : "openid offline_access",
+    scope: metadata.scopes_supported.join(" "),
   }).toString();
   return { url: url.toString(), state, codeVerifier, ...payload };
 }

@@ -334,14 +334,25 @@ describe("MCP OAuth", () => {
       .mockResolvedValueOnce({ ok: true, json: async () => metadata });
     await expect(oauth.discover(serverUrl)).resolves.toEqual(metadata);
   });
-  it("preserves offline access with malformed scopes_supported", async () => {
-    metadataOverrides.scopes_supported = "openid";
-    const result = await start();
-    expect(result.statusCode).toBe(200);
-    expect(new URL(result.body.url).searchParams.get("scope")).toBe(
-      "openid offline_access"
-    );
-  });
+  it.each([undefined, null, "openid", [], ["openid", 1]])(
+    "rejects unusable scopes_supported %j",
+    async (scopes) => {
+      // Ruling: fail closed; guessed scopes can authenticate without granting tool access.
+      metadataOverrides.scopes_supported = scopes;
+      await expect(
+        oauth.authorizeUrl({
+          serverUrl: configs[0].server.url,
+          redirectUri: "http://localhost:3001/api/mcp/oauth/callback",
+          wsSlug: workspace.slug,
+          serverName: "flowaccount",
+          userId: 7,
+        })
+      ).rejects.toThrow("invalid_metadata");
+      expect((await start()).statusCode).toBe(400);
+      expect(registrations).toHaveLength(0);
+      expect(tokenRequests).toHaveLength(0);
+    }
+  );
   it.each([1e30, 0, -1, "invalid"])(
     "ignores unusable expires_in %s",
     async (expiresIn) => {
@@ -392,6 +403,18 @@ describe("MCP OAuth", () => {
       serverName: "flowaccount",
       userId: 7,
     });
+  });
+  it("rejects a same-length wrong signature with an unchanged payload", async () => {
+    const state = new URL((await start()).body.url).searchParams.get("state");
+    const [payload, signature] = state.split(".");
+    const tampered = `${payload}.${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`;
+    expect((await callback(tampered)).statusCode).toBe(400);
+    expect(tokenRequests).toHaveLength(0);
+    expect(
+      await prisma.lark_oauth_states.findUnique({ where: { state } })
+    ).not.toBeNull();
+    // State rows use the full signed value, so only this assertion isolates HMAC validation.
+    expect(() => oauth.verifyState(tampered)).toThrow("invalid_state");
   });
   it("rejects forged, expired and unknown nonce states before token exchange", async () => {
     const state = new URL((await start()).body.url).searchParams.get("state");
