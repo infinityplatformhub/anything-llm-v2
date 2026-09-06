@@ -25,6 +25,27 @@ const {
 } = require("../../../models/workspaceMcpConnection");
 const MCPCompatibilityLayer = require("../../../utils/MCP");
 
+require("../lark/_polyfill");
+jest.mock("../../../models/systemSettings");
+jest.mock("../../../models/workspaceAgentSettings", () => ({
+  WorkspaceAgentSettings: { enabledSkills: jest.fn().mockResolvedValue([]) },
+}));
+jest.mock("../../../models/workspaceChats", () => ({
+  WorkspaceChats: { where: jest.fn().mockResolvedValue([]) },
+}));
+jest.mock("../../../models/systemPromptVariables");
+jest.mock("../../../utils/agents/imported", () => ({
+  activeImportedPlugins: jest.fn().mockReturnValue([]),
+  validateImportedPluginHandler: jest.fn().mockReturnValue(false),
+}));
+jest.mock("../../../utils/agentFlows", () => ({
+  AgentFlows: { activeFlowPlugins: jest.fn().mockReturnValue([]) },
+}));
+const { SystemSettings } = require("../../../models/systemSettings");
+const { WORKSPACE_AGENT } = require("../../../utils/agents/defaults");
+const { AgentHandler } = require("../../../utils/agents");
+const { EphemeralAgentHandler } = require("../../../utils/agents/ephemeral");
+
 describe("workspace MCP connection model", () => {
   const { randomUUID } = require("crypto");
   const prisma = require("../../../utils/prisma");
@@ -91,6 +112,86 @@ describe("workspace MCP gating", () => {
     MCPCompatibilityLayer._instance = undefined;
     layer = new MCPCompatibilityLayer();
     WorkspaceMcpConnection.list.mockReset().mockResolvedValue([]);
+  });
+
+  async function createHandler(ephemeral, workspace = { id: 1 }) {
+    const handler = ephemeral
+      ? new EphemeralAgentHandler({
+          uuid: "mcp-test",
+          workspace,
+          prompt: "test",
+        })
+      : new AgentHandler({ uuid: "mcp-test" });
+    handler.invocation = {
+      workspace,
+      workspace_id: workspace.id,
+      prompt: "test",
+    };
+    await handler.createAIbitat({
+      handler: { send: jest.fn() },
+      socket: { send: jest.fn() },
+    });
+    return handler;
+  }
+
+  beforeEach(() => {
+    SystemSettings.getValueOrFallback.mockResolvedValue("false");
+    layer.convertServerToolsToPlugins = jest.fn().mockResolvedValue([]);
+  });
+
+  it("defaults and ephemeral share the workspace-filtered function list", async () => {
+    WorkspaceMcpConnection.list.mockResolvedValue([
+      { server_name: "flowaccount", enabled: true },
+    ]);
+    const definition = await WORKSPACE_AGENT.getDefinition(null, { id: 1 });
+    expect(definition.functions).toEqual(["@@mcp_flowaccount"]);
+    const handler = await createHandler(true);
+    expect(handler.aibitat.agents.get("@agent").functions).toEqual(
+      definition.functions
+    );
+    expect(layer.convertServerToolsToPlugins).toHaveBeenCalledTimes(1);
+    expect(layer.convertServerToolsToPlugins).toHaveBeenCalledWith(
+      "flowaccount",
+      handler.aibitat
+    );
+  });
+
+  it.each([false, true])(
+    "blocks stale MCP attachment (ephemeral=%s)",
+    async (ephemeral) => {
+      const definition = jest
+        .spyOn(WORKSPACE_AGENT, "getDefinition")
+        .mockResolvedValue({
+          role: "Test",
+          functions: ["@@mcp_other"],
+        });
+      try {
+        await createHandler(ephemeral);
+        expect(layer.convertServerToolsToPlugins).not.toHaveBeenCalled();
+      } finally {
+        definition.mockRestore();
+      }
+    }
+  );
+
+  it("blocks toggle of disallowed and tokenless OAuth servers, permits ready servers", async () => {
+    const handler = await createHandler(false);
+    await handler.aibitat.toggleAgentTool({ skill: "@@mcp_other" });
+    expect(handler.aibitat.agents.get("@agent").functions).not.toContain(
+      "@@mcp_other"
+    );
+    expect(layer.convertServerToolsToPlugins).not.toHaveBeenCalled();
+    layer.mcpServerConfigs[0].server.anythingllm = { perWorkspaceAuth: true };
+    const connection = { server_name: "flowaccount", enabled: true };
+    WorkspaceMcpConnection.list.mockResolvedValue([connection]);
+    await handler.aibitat.toggleAgentTool({ skill: "@@mcp_flowaccount" });
+    expect(layer.convertServerToolsToPlugins).not.toHaveBeenCalled();
+    connection.access_token = "test-token";
+    await handler.aibitat.toggleAgentTool({ skill: "@@mcp_flowaccount" });
+    expect(layer.convertServerToolsToPlugins).toHaveBeenCalledWith(
+      "flowaccount",
+      handler.aibitat
+    );
   });
 
   it("denies all servers when workspace has no connections", async () => {

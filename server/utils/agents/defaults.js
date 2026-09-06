@@ -86,7 +86,7 @@ const WORKSPACE_AGENT = {
         ...clarifyingQuestionsSkills,
         ...ImportedPlugin.activeImportedPlugins(),
         ...AgentFlows.activeFlowPlugins(),
-        ...(await new MCPCompatibilityLayer().activeMCPServers()),
+        ...(await new MCPCompatibilityLayer().activeMCPServers(workspace)),
       ],
     };
   },

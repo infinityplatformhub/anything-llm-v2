@@ -1,5 +1,7 @@
 const { reqBody } = require("../utils/http");
 const MCPCompatibilityLayer = require("../utils/MCP");
+const { Workspace } = require("../models/workspace");
+const { WorkspaceMcpConnection } = require("../models/workspaceMcpConnection");
 const {
   flexUserRoleValid,
   ROLES,
@@ -35,9 +37,29 @@ function mcpServersEndpoints(app) {
   app.get(
     "/mcp-servers/list",
     [validatedRequest, flexUserRoleValid([ROLES.admin])],
-    async (_request, response) => {
+    async (request, response) => {
       try {
-        const servers = await new MCPCompatibilityLayer().servers();
+        const { workspaceSlug } = request.query;
+        let enabledNames = null;
+        if (workspaceSlug !== undefined) {
+          if (typeof workspaceSlug !== "string" || !workspaceSlug.trim())
+            return response
+              .status(400)
+              .json({ success: false, error: "Invalid workspaceSlug" });
+          const workspace = await Workspace.get({ slug: workspaceSlug });
+          if (!workspace)
+            return response
+              .status(404)
+              .json({ success: false, error: "Workspace not found" });
+          enabledNames = await WorkspaceMcpConnection.enabledNames(
+            workspace.id
+          );
+        }
+        const allServers = await new MCPCompatibilityLayer().servers();
+        const servers =
+          enabledNames === null
+            ? allServers
+            : allServers.filter((server) => enabledNames.includes(server.name));
         return response.status(200).json({
           success: true,
           servers,

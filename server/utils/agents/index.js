@@ -649,6 +649,10 @@ class AgentHandler {
     // Since to get to this point, the `activeMCPServers` method has already been called, we can
     // safely assume that the MCP server is running and the tools are available/loaded.
     if (name.startsWith("@@mcp_")) {
+      const activeServers = await new MCPCompatibilityLayer().activeMCPServers(
+        this.invocation?.workspace ?? null
+      );
+      if (!activeServers.includes(name)) return;
       const mcpPluginName = name.replace("@@mcp_", "");
       const plugins =
         await new MCPCompatibilityLayer().convertServerToolsToPlugins(
@@ -733,6 +737,13 @@ class AgentHandler {
 
     if (enabled) {
       for (const entry of loadable) {
+        if (entry.startsWith("@@mcp_")) {
+          const activeServers =
+            await new MCPCompatibilityLayer().activeMCPServers(
+              this.invocation?.workspace ?? null
+            );
+          if (!activeServers.includes(entry)) continue;
+        }
         if (!agent().functions.includes(entry)) agent().functions.push(entry);
         await this.#attachPluginByName(entry, this.#args);
       }
