@@ -1,7 +1,7 @@
 const fs = require("fs");
 const net = require("net");
 const path = require("path");
-const { spawn, fork } = require("child_process");
+const { spawn, fork, execFileSync } = require("child_process");
 const { SERVER_DIR, PRELOAD } = require("../../lark/helpers/env");
 const { TestServer } = require("../../lark/helpers/server");
 
@@ -43,11 +43,23 @@ async function startMcpServer(environment, config) {
       fs.cpSync(from, to, { recursive: true, dereference: true });
     else fs.symlinkSync(from, to);
   }
-  // Use the installed client without regenerating shared worktree dependencies.
-  fs.cpSync(
-    path.join(SERVER_DIR, "node_modules/.prisma"),
-    path.join(modules, ".prisma"),
-    { recursive: true, dereference: true }
+  const schemaPath = path.join(source, "schema.prisma");
+  fs.writeFileSync(
+    schemaPath,
+    fs
+      .readFileSync(environment.schemaPath, "utf8")
+      .replace(
+        'provider = "prisma-client-js"',
+        `provider = "prisma-client-js"\n  output = ${JSON.stringify(path.join(modules, ".prisma/client"))}`
+      )
+  );
+  const schema = fs.readFileSync(schemaPath, "utf8");
+  if (!schema.includes("output = "))
+    throw new Error("Missing isolated Prisma generator output");
+  execFileSync(
+    path.join(SERVER_DIR, "node_modules/.bin/prisma"),
+    ["generate", "--schema", schemaPath],
+    { cwd: source, stdio: "pipe" }
   );
   const preload = path.join(source, "e2e-preload.js");
   fs.copyFileSync(PRELOAD, preload);
