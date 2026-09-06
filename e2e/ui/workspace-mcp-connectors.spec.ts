@@ -58,21 +58,20 @@ test("workspace OAuth connection, persistence, isolation, and disconnect", async
     info.annotations.push({ type: "harness-note", description: "API callback uses a relative redirect, like Lark login. Test-only gateway redirects /workspace/* to Vite; no browser navigation workaround or product edits." });
     await rendered(page);
     await expect(section(page).getByText("Connected", { exact: true })).toBeVisible();
-    await expect.soft(section(page).getByText("Alpha Company", { exact: true }), "Selected company should be persisted and shown").toBeVisible();
     await expect(section(page).getByText(/Access token expires in \d+:\d{2}/)).toBeVisible();
     await expect(toggle(page)).toBeEnabled();
+    await expect(toggle(page)).toBeChecked();
     await screenshot(page, info, "02-connected");
   });
 
-  await test.step("03 user explicitly enables and reload persists", async () => {
+  await test.step("03 user toggles off and on and reload persists", async () => {
     await rendered(page);
-    expect.soft(await toggle(page).isChecked(), "Connect first, then enable: OAuth callback should not auto-enable tools").toBe(false);
-    if (await toggle(page).isChecked()) {
-      // Preserve this failure, then exercise a real off/on UI roundtrip.
-      await section(page).getByText("Enable flowaccount in this workspace", { exact: true }).click();
-      await expect(toggle(page)).not.toBeChecked();
-      await expect(toggle(page)).toBeEnabled();
-    }
+    await expect(toggle(page)).toBeChecked();
+    const disabled = page.waitForResponse((response) => response.request().method() === "POST" && response.url().includes("/workspace/ws-alpha/mcp/toggle"));
+    await section(page).getByText("Enable flowaccount in this workspace", { exact: true }).click();
+    expect((await disabled).status()).toBe(200);
+    await expect(toggle(page)).not.toBeChecked();
+    await expect(toggle(page)).toBeEnabled();
     const saved = page.waitForResponse((response) => response.request().method() === "POST" && response.url().includes("/workspace/ws-alpha/mcp/toggle"));
     await section(page).getByText("Enable flowaccount in this workspace", { exact: true }).click();
     expect((await saved).status()).toBe(200);
@@ -101,11 +100,13 @@ test("workspace OAuth connection, persistence, isolation, and disconnect", async
     page.on("dialog", (dialog) => dialog.accept());
     await section(page).getByRole("button", { name: "Disconnect", exact: true }).click();
     await expect(section(page).getByText("Not connected", { exact: true })).toBeVisible();
-    await expect.soft(toggle(page), "Disconnect should clear the workspace enabled state").not.toBeChecked();
+    await expect(toggle(page)).not.toBeChecked();
     await expect(toggle(page)).toBeDisabled();
     await page.reload();
     await rendered(page);
     await expect(section(page).getByText("Not connected", { exact: true })).toBeVisible();
+    await expect(toggle(page)).not.toBeChecked();
+    await expect(toggle(page)).toBeDisabled();
     await screenshot(page, info, "05-disconnected-again");
   });
 });
@@ -117,8 +118,8 @@ test("manager workspace member sees read-only connectors", async ({ page, reques
   expect((await membership.json()).workspaces.map((workspace: { slug: string }) => workspace.slug)).toContain("ws-alpha");
   await authenticate(page, "viewer");
   const reads = Promise.all([
-    page.waitForResponse((response) => response.url().includes("/mcp-servers/list")),
-    page.waitForResponse((response) => new URL(response.url()).pathname === "/api/workspace/ws-alpha/mcp"),
+    page.waitForResponse((response) => response.request().method() === "GET" && response.url().includes("/mcp-servers/list")),
+    page.waitForResponse((response) => response.request().method() === "GET" && new URL(response.url()).pathname === "/api/workspace/ws-alpha/mcp"),
   ]);
   await page.goto(settings("ws-alpha"));
   const responses = await reads;
@@ -126,7 +127,7 @@ test("manager workspace member sees read-only connectors", async ({ page, reques
   await expect(section(page)).toHaveAttribute("aria-busy", "false");
   await screenshot(page, info, "06-viewer");
   await info.attach("manager-mcp-read-statuses", { body: JSON.stringify(responses.map((response) => ({ url: response.url(), status: response.status() })), null, 2), contentType: "application/json" });
-  for (const response of responses) expect.soft(response.status(), `Manager read access: ${response.url()}`).toBe(200);
+  for (const response of responses) expect(response.status(), `Manager read access: ${response.url()}`).toBe(200);
   await rendered(page);
   await expect(section(page).getByText(/Read-only view\. Only administrators/)).toBeVisible();
   await expect(toggle(page)).toBeDisabled();

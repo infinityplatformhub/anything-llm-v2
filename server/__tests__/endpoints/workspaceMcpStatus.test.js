@@ -107,7 +107,7 @@ describe("workspace MCP status and toggle", () => {
   });
 
   it.each(["get", "post"])(
-    "retains authentication and admin guard for %s",
+    "retains authentication and default-user guard for %s",
     async (method) => {
       expect(routes[method].middlewares[0]).toBe(validatedRequest);
       expect((await invoke(method, {}, "legal", null)).statusCode).toBe(401);
@@ -117,6 +117,43 @@ describe("workspace MCP status and toggle", () => {
       expect(Workspace.get).not.toHaveBeenCalled();
     }
   );
+
+  it("allows manager members to read safe status", async () => {
+    const user = { id: 7, role: "manager" };
+    const response = await invoke("get", {}, "legal", user);
+    expect(response.statusCode).toBe(200);
+    expect(Workspace.get).toHaveBeenCalledWith({
+      slug: "legal",
+      workspace_users: { some: { user_id: user.id } },
+    });
+    expect(response.body.connections).toHaveLength(3);
+    expect(JSON.stringify(response.body)).not.toMatch(
+      /access_token|refresh_token|secret-/
+    );
+  });
+
+  it("rejects manager non-members before reading connections", async () => {
+    Workspace.get.mockImplementation(async ({ workspace_users }) =>
+      workspace_users ? null : { id: 5, slug: "legal" }
+    );
+    expect(
+      (await invoke("get", {}, "legal", { id: 7, role: "manager" }))
+        .statusCode
+    ).toBe(404);
+    expect(WorkspaceMcpConnection.list).not.toHaveBeenCalled();
+    expect(MCPCompatibilityLayer).not.toHaveBeenCalled();
+  });
+
+  it("keeps manager toggle forbidden", async () => {
+    const response = await invoke(
+      "post",
+      { serverName: "plain", enabled: true },
+      "legal",
+      { id: 7, role: "manager" }
+    );
+    expect(response.statusCode).toBe(401);
+    expect(WorkspaceMcpConnection.setEnabled).not.toHaveBeenCalled();
+  });
 
   it("returns complete catalog with safe connection status", async () => {
     const response = await invoke();

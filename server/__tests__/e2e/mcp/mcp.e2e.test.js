@@ -525,6 +525,7 @@ it("disconnect clears tokens, hides tools, and prevents stale runtime use", asyn
   expect(response.status).toBe(200);
   expect(response.json).toEqual({ success: true, remoteRevoked: false });
   expect(await connection(workspaceA)).toMatchObject({
+    enabled: false,
     access_token: null,
     refresh_token: null,
     expires_at: null,
@@ -536,8 +537,10 @@ it("disconnect clears tokens, hides tools, and prevents stale runtime use", asyn
   await expect(runtime.call("call", workspaceA)).rejects.toThrow(
     "MCP authentication required"
   );
-  // enabled stays true after disconnect; spec only mandates token clear + process stop
-  expect(await status(workspaceA)).toMatchObject({ connected: false });
+  expect(await status(workspaceA)).toMatchObject({
+    enabled: false,
+    connected: false,
+  });
   expect(
     (await list(workspaceA))
       .filter((entry) => entry.name === "flowaccount")
@@ -552,7 +555,24 @@ it("denies default user OAuth and toggle with admin positive control", async () 
   expect((await toggle(workspaceA, false)).status).toBe(200);
 });
 
-it("manager and default user are denied; admin allowed (spec: admin-only)", async () => {
+it("manager members can read MCP status and tools; only admins can write", async () => {
+  await connect(workspaceA);
+  for (const route of [
+    `/api/workspace/${workspaceA.slug}/mcp`,
+    `/api/mcp-servers/list?workspaceSlug=${workspaceA.slug}`,
+  ]) {
+    expect((await server.api(route, { token: managerToken })).status).toBe(200);
+    expect((await server.api(route, { token: defaultToken })).status).toBe(401);
+  }
+  for (const route of [
+    `/api/workspace/${workspaceB.slug}/mcp`,
+    `/api/mcp-servers/list?workspaceSlug=${workspaceB.slug}`,
+  ]) {
+    expect((await server.api(route, { token: managerToken })).status).toBe(404);
+  }
+  expect(
+    (await server.api("/api/mcp-servers/list", { token: managerToken })).status
+  ).toBe(401);
   for (const token of [managerToken, defaultToken]) {
     for (const workspace of [workspaceA, workspaceB]) {
       expect((await startOAuth(workspace, token)).status).toBe(401);

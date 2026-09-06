@@ -25,7 +25,7 @@ function mcpServersEndpoints(app) {
 
   app.get(
     "/workspace/:slug/mcp",
-    [validatedRequest, flexUserRoleValid([ROLES.admin])],
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
     async (request, response) => {
       try {
         const { slug } = request.params;
@@ -33,7 +33,13 @@ function mcpServersEndpoints(app) {
           return response
             .status(400)
             .json({ success: false, error: "Invalid workspace slug" });
-        const workspace = await Workspace.get({ slug });
+        const user = response.locals.user;
+        const workspace = await Workspace.get({
+          slug,
+          ...(user?.role === ROLES.manager && {
+            workspace_users: { some: { user_id: user.id ?? null } },
+          }),
+        });
         if (!workspace)
           return response
             .status(404)
@@ -141,10 +147,13 @@ function mcpServersEndpoints(app) {
 
   app.get(
     "/mcp-servers/list",
-    [validatedRequest, flexUserRoleValid([ROLES.admin])],
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
     async (request, response) => {
       try {
         const { workspaceSlug } = request.query;
+        const user = response.locals.user;
+        if (user?.role === ROLES.manager && workspaceSlug === undefined)
+          return response.sendStatus(401).end();
         let enabledNames = null;
         let workspace;
         if (workspaceSlug !== undefined) {
@@ -152,7 +161,12 @@ function mcpServersEndpoints(app) {
             return response
               .status(400)
               .json({ success: false, error: "Invalid workspaceSlug" });
-          workspace = await Workspace.get({ slug: workspaceSlug });
+          workspace = await Workspace.get({
+            slug: workspaceSlug,
+            ...(user?.role === ROLES.manager && {
+              workspace_users: { some: { user_id: user.id ?? null } },
+            }),
+          });
           if (!workspace)
             return response
               .status(404)

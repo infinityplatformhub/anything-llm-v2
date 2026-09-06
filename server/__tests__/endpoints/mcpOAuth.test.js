@@ -531,10 +531,12 @@ describe("MCP OAuth", () => {
     );
     expect(tokenRequests).toHaveLength(0);
   });
-  it("clears tokens and stops workspace server", async () => {
+  it("disables connector before clearing tokens and stopping workspace server", async () => {
     await WorkspaceMcpConnection.saveTokens(workspace.id, "flowaccount", {
       access_token: "private-access-token",
     });
+    await WorkspaceMcpConnection.setEnabled(workspace.id, "flowaccount", true);
+    const disable = jest.spyOn(WorkspaceMcpConnection, "setEnabled");
     const clear = jest.spyOn(WorkspaceMcpConnection, "clearTokens");
     const result = await invoke("/mcp/oauth/disconnect", {
       body: { workspaceSlug: workspace.slug, serverName: "flowaccount" },
@@ -544,8 +546,14 @@ describe("MCP OAuth", () => {
     expect(clear).toHaveBeenCalledWith(workspace.id, "flowaccount");
     expect(stop).toHaveBeenCalledWith(workspace.id, "flowaccount");
     expect(
-      (await WorkspaceMcpConnection.find(workspace.id, "flowaccount"))
-        .access_token
-    ).toBeNull();
+      await WorkspaceMcpConnection.find(workspace.id, "flowaccount")
+    ).toMatchObject({ enabled: false, access_token: null });
+    expect(disable).toHaveBeenCalledWith(workspace.id, "flowaccount", false);
+    expect(disable.mock.invocationCallOrder[0]).toBeLessThan(
+      clear.mock.invocationCallOrder[0]
+    );
+    expect(clear.mock.invocationCallOrder[0]).toBeLessThan(
+      stop.mock.invocationCallOrder[0]
+    );
   });
 });

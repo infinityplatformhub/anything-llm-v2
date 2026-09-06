@@ -9,7 +9,7 @@ jest.mock("../../../models/workspace", () => ({
   Workspace: { get: jest.fn().mockResolvedValue({ id: 7 }) },
 }));
 jest.mock("../../../models/workspaceMcpConnection", () => ({
-  WorkspaceMcpConnection: { clearTokens: jest.fn() },
+  WorkspaceMcpConnection: { setEnabled: jest.fn(), clearTokens: jest.fn() },
 }));
 jest.mock("../../../utils/prisma", () => ({
   lark_oauth_states: {

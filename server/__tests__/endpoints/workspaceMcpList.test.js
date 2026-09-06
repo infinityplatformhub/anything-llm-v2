@@ -217,8 +217,40 @@ describe("workspace MCP list", () => {
     }
   );
 
+  it("allows manager members to list workspace tools without tokens", async () => {
+    servers = [oauthPlaceholder];
+    const user = { id: 7, role: "manager" };
+    const response = await invoke({ workspaceSlug: "legal" }, user);
+    expect(response.statusCode).toBe(200);
+    expect(Workspace.get).toHaveBeenCalledWith({
+      slug: "legal",
+      workspace_users: { some: { user_id: user.id } },
+    });
+    expect(response.body.servers[0].tools[0].name).toBe("get_company_info");
+    expect(JSON.stringify(response.body)).not.toMatch(
+      /access_token|refresh_token|secret/
+    );
+  });
+
+  it("rejects manager non-members before reading allowlist", async () => {
+    Workspace.get.mockImplementation(async ({ workspace_users }) =>
+      workspace_users ? null : { id: 5, slug: "legal" }
+    );
+    expect(
+      (await invoke({ workspaceSlug: "legal" }, { id: 7, role: "manager" }))
+        .statusCode
+    ).toBe(404);
+    expect(WorkspaceMcpConnection.enabledNames).not.toHaveBeenCalled();
+    expect(MCPCompatibilityLayer).not.toHaveBeenCalled();
+  });
+
+  it("rejects manager global catalog without workspaceSlug", async () => {
+    expect((await invoke({}, { id: 7, role: "manager" })).statusCode).toBe(401);
+    expect(MCPCompatibilityLayer).not.toHaveBeenCalled();
+  });
+
   it.each([{}, { workspaceSlug: "legal" }])(
-    "preserves admin-only role guard for %p",
+    "rejects default users for %p",
     async (query) => {
       const response = await invoke(query, { role: "default" });
       expect(response.statusCode).toBe(401);

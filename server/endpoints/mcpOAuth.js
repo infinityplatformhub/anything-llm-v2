@@ -203,6 +203,7 @@ function mcpOAuthEndpoints(app) {
       await prisma.lark_oauth_states.deleteMany({
         where: { mode: "mcp", state: { in: matching } },
       });
+      await WorkspaceMcpConnection.setEnabled(workspace.id, serverName, false);
       await WorkspaceMcpConnection.clearTokens(workspace.id, serverName);
       if (typeof hypervisor.stopWorkspaceServer === "function")
         await hypervisor.stopWorkspaceServer(workspace.id, serverName);
