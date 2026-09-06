@@ -12,6 +12,8 @@ jest.mock(
           { name: "other", server: {} },
         ];
         this.bootMCPServers = jest.fn().mockResolvedValue(undefined);
+        this.bootWorkspaceServer = jest.fn().mockResolvedValue({});
+        this.stopWorkspaceServer = jest.fn().mockResolvedValue(undefined);
       }
     }
 );

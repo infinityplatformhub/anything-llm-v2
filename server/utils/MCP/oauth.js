@@ -23,7 +23,13 @@ async function fetchJson(url, options = {}) {
     redirect: "error",
     signal: AbortSignal.timeout(15000),
   });
-  if (!response.ok) throw new Error("oauth_request_failed");
+  if (!response.ok) {
+    const error = new Error("oauth_request_failed");
+    error.status = response.status;
+    const data = await response.json().catch(() => null);
+    if (data?.error === "invalid_grant") error.code = "invalid_grant";
+    throw error;
+  }
   const data = await response.json();
   if (!data || typeof data !== "object" || Array.isArray(data))
     throw new Error("invalid_oauth_response");
