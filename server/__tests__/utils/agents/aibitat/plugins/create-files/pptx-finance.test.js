@@ -32,6 +32,9 @@ const {
   getTheme,
 } = require("../../../../../../utils/agents/aibitat/plugins/create-files/pptx/themes.js");
 const {
+  RENDERERS,
+  assertStackedLabelPosition,
+  fixEmbeddedChartTables,
   formatNumber,
   formatPct,
 } = require("../../../../../../utils/agents/aibitat/plugins/create-files/pptx/finance-layouts.js");
@@ -227,7 +230,7 @@ describe("pptx-finance executive theme and layouts", () => {
       (slideNumber) => slideXml[slideNumber - 1]
     );
 
-    for (const renderedXml of [summaryXml, scorecardXml, risksXml, decisionsXml])
+    for (const renderedXml of slideXml.slice(1))
       expect(renderedXml).not.toContain("pending");
     expect(summaryXml).toContain("18,420,000");
     const titleShape = summaryXml
@@ -239,10 +242,140 @@ describe("pptx-finance executive theme and layouts", () => {
     expect((decisionsXml.match(/roundRect/g) || []).length).toBeGreaterThanOrEqual(
       3
     );
-    for (const pendingXml of slideXml.slice(3, 8)) {
-      expect(pendingXml).toContain("งวด");
-      expect(pendingXml).toContain("FlowAccount");
+  });
+
+  test("(l) renders at least nine native finance charts", async () => {
+    const tool = setupTool();
+    await tool.call(fixture);
+    const outputDirectory = path.join(storageDir, "generated-files");
+    const downloadCall = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
+    );
+    const chartFiles = Object.keys(zip.files).filter((name) =>
+      /^ppt\/charts\/chart\d+\.xml$/.test(name)
+    );
+
+    expect(chartFiles).toHaveLength(9);
+  });
+
+  test("(m) waterfall chart is stacked with inside-end labels", async () => {
+    const tool = setupTool();
+    await tool.call(fixture);
+    const outputDirectory = path.join(storageDir, "generated-files");
+    const downloadCall = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
+    );
+    const slideRelationships = await zip
+      .file("ppt/slides/_rels/slide6.xml.rels")
+      .async("string");
+    const chartTarget = slideRelationships.match(/charts\/(chart\d+\.xml)/)[1];
+    const chartXml = await zip.file(`ppt/charts/${chartTarget}`).async("string");
+
+    expect(chartXml).toContain('<c:grouping val="stacked"/>');
+    expect(chartXml).toContain('<c:dLblPos val="inEnd"/>');
+  });
+
+  test("(n) stacked chart guard rejects outEnd labels", () => {
+    expect(() =>
+      assertStackedLabelPosition({
+        barGrouping: "stacked",
+        dataLabelPosition: "outEnd",
+      })
+    ).toThrow(/outEnd/);
+    expect(RENDERERS.waterfall).toEqual(expect.any(Function));
+  });
+
+  test("(o) every chart color is a six-digit hex value", async () => {
+    const tool = setupTool();
+    await tool.call(fixture);
+    const outputDirectory = path.join(storageDir, "generated-files");
+    const downloadCall = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
+    );
+    const chartFiles = Object.keys(zip.files).filter((name) =>
+      /^ppt\/charts\/chart\d+\.xml$/.test(name)
+    );
+
+    for (const chartFile of chartFiles) {
+      const chartXml = await zip.file(chartFile).async("string");
+      const colors = Array.from(
+        chartXml.matchAll(/<c:srgbClr val="([^"]+)"/g),
+        (match) => match[1]
+      );
+      colors.forEach((color) => expect(color).toMatch(/^[0-9A-F]{6}$/i));
     }
+  });
+
+  test("(p) finance output fixes all embedded chart table refs", async () => {
+    const tool = setupTool();
+    await tool.call(fixture);
+    const outputDirectory = path.join(storageDir, "generated-files");
+    const downloadCall = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
+    );
+    const embeddingNames = Object.keys(zip.files).filter((name) =>
+      /^ppt\/embeddings\/.*\.xlsx$/.test(name)
+    );
+
+    expect(embeddingNames.length).toBeGreaterThanOrEqual(9);
+
+    for (const embeddingName of embeddingNames) {
+      const workbook = await JSZip.loadAsync(
+        await zip.file(embeddingName).async("nodebuffer")
+      );
+      const tableNames = Object.keys(workbook.files).filter((name) =>
+        /^xl\/tables\/.*\.xml$/.test(name)
+      );
+      for (const tableName of tableNames) {
+        const tableXml = await workbook.file(tableName).async("string");
+        expect(tableXml).not.toContain("'\"");
+      }
+    }
+  });
+
+  test("(q) raw pptxgenjs chart workbook contains the Keynote-breaking ref", async () => {
+    const PptxGenJS = require("pptxgenjs");
+    const pptx = new PptxGenJS();
+    const slide = pptx.addSlide();
+    slide.addChart(
+      pptx.ChartType.bar,
+      [{ name: "Series", labels: ["A", "B"], values: [1, 2] }],
+      { barDir: "col", showLegend: false }
+    );
+    const raw = await pptx.write({ outputType: "nodebuffer" });
+    const zip = await JSZip.loadAsync(raw);
+    const embeddingNames = Object.keys(zip.files).filter((name) =>
+      /^ppt\/embeddings\/.*\.xlsx$/.test(name)
+    );
+    const tableXml = [];
+
+    for (const embeddingName of embeddingNames) {
+      const workbook = await JSZip.loadAsync(
+        await zip.file(embeddingName).async("nodebuffer")
+      );
+      const tableNames = Object.keys(workbook.files).filter((name) =>
+        /^xl\/tables\/.*\.xml$/.test(name)
+      );
+      tableXml.push(
+        ...(await Promise.all(
+          tableNames.map((name) => workbook.file(name).async("string"))
+        ))
+      );
+    }
+
+    expect(tableXml.some((xml) => xml.includes("'\""))).toBe(true);
   });
 });
 

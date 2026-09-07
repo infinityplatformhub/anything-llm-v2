@@ -11,7 +11,7 @@ const {
   FINANCE_LAYOUTS,
   validateFinanceSections,
 } = require("./finance-schema.js");
-const { RENDERERS } = require("./finance-layouts.js");
+const { RENDERERS, fixEmbeddedChartTables } = require("./finance-layouts.js");
 
 /**
  * Extracts recent conversation history from the parent AIbitat's chat log
@@ -468,7 +468,11 @@ module.exports.CreatePptxPresentation = {
                 }
               });
 
-              const buffer = await pptx.write({ outputType: "nodebuffer" });
+              const rawBuffer = await pptx.write({ outputType: "nodebuffer" });
+              const buffer =
+                mode === "finance"
+                  ? await fixEmbeddedChartTables(rawBuffer)
+                  : rawBuffer;
               const bufferSizeKB = (buffer.length / 1024).toFixed(2);
               const bufferSizeMB = (buffer.length / (1024 * 1024)).toFixed(2);
               this.super.handlerProps.log(

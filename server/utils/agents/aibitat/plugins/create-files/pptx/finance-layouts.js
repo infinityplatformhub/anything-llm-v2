@@ -1,3 +1,4 @@
+const JSZip = require("jszip");
 const {
   addAccentUnderline,
   addBranding,
@@ -403,6 +404,372 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
   });
 }
 
+function commonChartOptions(theme) {
+  return {
+    catAxisLabelColor: theme.subtitleColor,
+    catAxisLabelFontFace: theme.fontBody,
+    catAxisLabelFontSize: 9,
+    catGridLine: { style: "none" },
+    chartArea: { border: { color: theme.background, pt: 0 } },
+    plotArea: { border: { color: theme.background, pt: 0 } },
+    showTitle: false,
+    valAxisLabelColor: theme.subtitleColor,
+    valAxisLabelFontFace: theme.fontBody,
+    valAxisLabelFontSize: 8,
+    valGridLine: { color: theme.chartGrid, size: 0.5 },
+  };
+}
+
+function renderTrendBar(slide, pptx, section, theme, ctx) {
+  const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
+  const chartX = MARGIN_X;
+  const chartY = contentStartY;
+  const chartW = CONTENT_W;
+  const chartH = 2.65;
+  const maxValue = Math.max(
+    ...section.data.values,
+    section.data.planBand?.high || 0
+  );
+  const axisMax = Math.ceil((maxValue * 1.18) / 100000) * 100000;
+
+  slide.addChart(
+    pptx.ChartType.bar,
+    [
+      {
+        name: section.data.unit || ctx.unit,
+        labels: [...section.data.categories],
+        values: [...section.data.values],
+      },
+    ],
+    {
+      ...commonChartOptions(theme),
+      x: chartX,
+      y: chartY,
+      w: chartW,
+      h: chartH,
+      barDir: "col",
+      chartColors: [theme.chartColors[0]],
+      dataLabelFormatCode: "#,##0",
+      dataLabelPosition: "outEnd",
+      showLegend: false,
+      showValue: true,
+      valAxisMaxVal: axisMax,
+      valAxisMinVal: 0,
+    }
+  );
+
+  if (section.data.planBand) {
+    const plotTop = chartY + 0.18;
+    const plotBottom = chartY + chartH - 0.48;
+    const plotHeight = plotBottom - plotTop;
+    [section.data.planBand.low, section.data.planBand.high].forEach((value) => {
+      const y = plotBottom - (value / axisMax) * plotHeight;
+      slide.addShape(pptx.ShapeType.line, {
+        x: chartX + 0.5,
+        y,
+        w: chartW - 0.72,
+        h: 0,
+        line: {
+          color: theme.chartNeutral,
+          width: 1,
+          dashType: "dash",
+          transparency: 25,
+        },
+      });
+    });
+  }
+
+  if (section.data.annotation) {
+    slide.addText(section.data.annotation, {
+      x: chartX + 0.1,
+      y: chartY + chartH + 0.03,
+      w: chartW - 0.2,
+      h: 0.28,
+      fontSize: 8.5,
+      color: theme.chartNeutral,
+      fontFace: theme.fontBody,
+      fit: "shrink",
+    });
+  }
+}
+
+function renderBarDonut(slide, pptx, section, theme, ctx) {
+  const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
+
+  slide.addChart(
+    pptx.ChartType.bar,
+    [
+      {
+        name: "ค่าใช้จ่ายรายเดือน",
+        labels: [...section.data.bar.categories],
+        values: [...section.data.bar.values],
+      },
+    ],
+    {
+      ...commonChartOptions(theme),
+      x: MARGIN_X,
+      y: contentStartY,
+      w: 4.35,
+      h: 2.92,
+      barDir: "col",
+      chartColors: [theme.chartColors[0]],
+      dataLabelFormatCode: "#,##0",
+      dataLabelPosition: "outEnd",
+      showLegend: false,
+      showValue: true,
+    }
+  );
+  slide.addChart(
+    pptx.ChartType.doughnut,
+    [
+      {
+        name: "โครงสร้างค่าใช้จ่าย",
+        labels: [...section.data.donut.labels],
+        values: [...section.data.donut.values],
+      },
+    ],
+    {
+      x: 5.2,
+      y: contentStartY,
+      w: 4.05,
+      h: 2.92,
+      chartArea: { border: { color: theme.background, pt: 0 } },
+      chartColors: [...theme.chartColors],
+      dataLabelColor: theme.bodyColor,
+      dataLabelFontFace: theme.fontBody,
+      dataLabelFontSize: 8,
+      holeSize: 55,
+      legendColor: theme.subtitleColor,
+      legendFontFace: theme.fontBody,
+      legendFontSize: 8,
+      legendPos: "r",
+      showLegend: true,
+      showPercent: true,
+      showTitle: false,
+    }
+  );
+}
+
+function assertStackedLabelPosition(options) {
+  if (
+    ["stacked", "percentStacked"].includes(options.barGrouping) &&
+    options.dataLabelPosition === "outEnd"
+  ) {
+    throw new Error(
+      'Stacked chart dataLabelPosition "outEnd" is invalid; use "inEnd".'
+    );
+  }
+}
+
+function renderWaterfall(slide, pptx, section, theme, ctx) {
+  const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
+  const labels = [
+    section.data.start.label,
+    ...section.data.steps.map((step) => step.label),
+    section.data.end.label,
+  ];
+  const base = [0];
+  const up = [section.data.start.value];
+  const down = [0];
+  let running = section.data.start.value;
+
+  section.data.steps.forEach((step) => {
+    if (step.value >= 0) {
+      base.push(running);
+      up.push(step.value);
+      down.push(0);
+    } else {
+      base.push(running + step.value);
+      up.push(0);
+      down.push(-step.value);
+    }
+    running += step.value;
+  });
+  base.push(0);
+  up.push(section.data.end.value);
+  down.push(0);
+
+  const options = {
+    ...commonChartOptions(theme),
+    x: MARGIN_X,
+    y: contentStartY,
+    w: CONTENT_W,
+    h: 2.62,
+    barDir: "col",
+    barGrouping: "stacked",
+    barOverlapPct: 100,
+    chartColors: [theme.background, theme.chartPositive, theme.chartNegative],
+    dataLabelFormatCode: "#,##0",
+    dataLabelPosition: "inEnd",
+    showLegend: false,
+    showValue: true,
+  };
+  assertStackedLabelPosition(options);
+  slide.addChart(
+    pptx.ChartType.bar,
+    [
+      { name: "ฐาน", labels: [...labels], values: base },
+      { name: "เพิ่ม", labels: [...labels], values: up },
+      { name: "ลด", labels: [...labels], values: down },
+    ],
+    options
+  );
+
+  const kindLabels = {
+    timing: "ชั่วคราว",
+    structural: "โครงสร้าง",
+    investment: "การลงทุน",
+  };
+  const cellW = CONTENT_W / labels.length;
+  section.data.steps.forEach((step, index) => {
+    slide.addText(kindLabels[step.kind], {
+      x: MARGIN_X + cellW * (index + 1),
+      y: contentStartY + 2.65,
+      w: cellW,
+      h: 0.22,
+      align: "center",
+      color: theme.chartNeutral,
+      fontFace: theme.fontBody,
+      fontSize: 7.5,
+      fit: "shrink",
+    });
+  });
+}
+
+function renderCash(slide, pptx, section, theme, ctx) {
+  const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
+
+  slide.addChart(
+    pptx.ChartType.line,
+    [
+      {
+        name: "เงินสดรับ",
+        labels: [...section.data.categories],
+        values: [...section.data.receipts],
+      },
+      {
+        name: "เงินสดจ่าย",
+        labels: [...section.data.categories],
+        values: [...section.data.payments],
+      },
+    ],
+    {
+      ...commonChartOptions(theme),
+      x: MARGIN_X,
+      y: contentStartY,
+      w: 5.3,
+      h: 2.9,
+      chartColors: [theme.chartPositive, theme.chartNegative],
+      legendColor: theme.subtitleColor,
+      legendFontFace: theme.fontBody,
+      legendFontSize: 8,
+      legendPos: "b",
+      lineDataSymbol: "none",
+      lineSize: 2,
+      showLegend: true,
+    }
+  );
+  slide.addChart(
+    pptx.ChartType.bar,
+    [
+      {
+        name: "ลูกหนี้คงค้าง",
+        labels: section.data.aging.map((item) => item.bucket),
+        values: section.data.aging.map((item) => item.value),
+      },
+    ],
+    {
+      ...commonChartOptions(theme),
+      x: 6.12,
+      y: contentStartY,
+      w: 3.08,
+      h: 1.96,
+      barDir: "bar",
+      chartColors: [theme.chartColors[0]],
+      dataLabelFormatCode: "#,##0",
+      dataLabelPosition: "outEnd",
+      showLegend: false,
+      showValue: true,
+    }
+  );
+  if (section.data.dso !== undefined) {
+    slide.addShape(pptx.ShapeType.roundRect, {
+      x: 6.15,
+      y: contentStartY + 2.18,
+      w: 3.0,
+      h: 0.68,
+      rectRadius: 0.04,
+      fill: { color: theme.tableAltRowBg },
+      line: { color: theme.tableBorderColor, pt: 0.7 },
+    });
+    slide.addText("DSO", {
+      x: 6.36,
+      y: contentStartY + 2.3,
+      w: 0.7,
+      h: 0.2,
+      bold: true,
+      color: theme.subtitleColor,
+      fontFace: theme.fontBody,
+      fontSize: 9,
+    });
+    slide.addText(`${formatNumber(section.data.dso)} วัน`, {
+      x: 7.05,
+      y: contentStartY + 2.22,
+      w: 1.85,
+      h: 0.34,
+      align: "right",
+      bold: true,
+      color: theme.titleColor,
+      fontFace: theme.fontTitle,
+      fontSize: 17,
+    });
+  }
+}
+
+function renderRankedPair(slide, pptx, section, theme, ctx) {
+  const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
+  [section.data.left, section.data.right].forEach((group, index) => {
+    const x = MARGIN_X + index * 4.48;
+    slide.addText(group.title, {
+      x,
+      y: contentStartY,
+      w: 4.12,
+      h: 0.28,
+      bold: true,
+      color: theme.bodyColor,
+      fontFace: theme.fontBody,
+      fontSize: 11,
+    });
+    slide.addChart(
+      pptx.ChartType.bar,
+      [
+        {
+          name: group.title,
+          labels: group.items.map(
+            (item) => `${item.label} (${formatNumber(item.sharePct)}%)`
+          ),
+          values: group.items.map((item) => item.value),
+        },
+      ],
+      {
+        ...commonChartOptions(theme),
+        x,
+        y: contentStartY + 0.3,
+        w: 4.12,
+        h: 2.6,
+        barDir: "bar",
+        catAxisLabelFontSize: 8,
+        catAxisOrientation: "maxMin",
+        chartColors: [theme.chartColors[index]],
+        dataLabelFormatCode: "#,##0",
+        dataLabelPosition: "outEnd",
+        showLegend: false,
+        showValue: true,
+      }
+    );
+  });
+}
+
 function renderRisksOutlook(slide, pptx, section, theme, ctx) {
   const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
   const headers = ["ความเสี่ยง", "เจ้าของ", "แนวทางรับมือ"];
@@ -448,6 +815,92 @@ function renderRisksOutlook(slide, pptx, section, theme, ctx) {
     rowH: 0.58,
     border: { type: "solid", pt: 0.5, color: theme.tableBorderColor },
   });
+
+  const forecast = section.data.forecast;
+  slide.addChart(
+    [
+      {
+        type: pptx.ChartType.line,
+        data: [
+          {
+            name: "ผลจริง",
+            labels: [...forecast.categories],
+            values: [...forecast.actual],
+          },
+        ],
+        options: {
+          chartColors: [theme.chartColors[0]],
+          lineDash: "solid",
+          lineDataSymbol: "none",
+          lineSize: 2,
+        },
+      },
+      {
+        type: pptx.ChartType.line,
+        data: [
+          {
+            name: "ประมาณการ",
+            labels: [...forecast.categories],
+            values: [...forecast.forecast],
+          },
+        ],
+        options: {
+          chartColors: [theme.chartColors[1]],
+          lineDash: "dash",
+          lineDataSymbol: "none",
+          lineSize: 2,
+        },
+      },
+    ],
+    {
+      ...commonChartOptions(theme),
+      x: 6.05,
+      y: contentStartY,
+      w: 3.25,
+      h: 2.9,
+      chartColors: [theme.chartColors[0], theme.chartColors[1]],
+      displayBlanksAs: "gap",
+      legendColor: theme.subtitleColor,
+      legendFontFace: theme.fontBody,
+      legendFontSize: 8,
+      legendPos: "b",
+      showLegend: true,
+    }
+  );
+}
+
+async function fixEmbeddedChartTables(buffer) {
+  const pptxZip = await JSZip.loadAsync(buffer);
+  const embeddingNames = Object.keys(pptxZip.files).filter((name) =>
+    /^ppt\/embeddings\/.*\.xlsx$/.test(name)
+  );
+
+  await Promise.all(
+    embeddingNames.map(async (embeddingName) => {
+      const workbookZip = await JSZip.loadAsync(
+        await pptxZip.file(embeddingName).async("nodebuffer")
+      );
+      const tableNames = Object.keys(workbookZip.files).filter((name) =>
+        /^xl\/tables\/.*\.xml$/.test(name)
+      );
+
+      await Promise.all(
+        tableNames.map(async (tableName) => {
+          const tableXml = await workbookZip.file(tableName).async("string");
+          workbookZip.file(
+            tableName,
+            tableXml.replace(/ref="([^"]*)'"/g, 'ref="$1"')
+          );
+        })
+      );
+      pptxZip.file(
+        embeddingName,
+        await workbookZip.generateAsync({ type: "nodebuffer" })
+      );
+    })
+  );
+
+  return pptxZip.generateAsync({ type: "nodebuffer" });
 }
 
 function renderPendingSlide(slide, pptx, section, theme, ctx) {
@@ -467,9 +920,21 @@ function renderPendingSlide(slide, pptx, section, theme, ctx) {
 const RENDERERS = {
   summary: renderSummary,
   scorecard: renderScorecard,
-  decisions: renderDecisions,
+  trend_bar: renderTrendBar,
+  bar_donut: renderBarDonut,
+  waterfall: renderWaterfall,
+  cash: renderCash,
+  ranked_pair: renderRankedPair,
   risks_outlook: renderRisksOutlook,
+  decisions: renderDecisions,
   __pending: renderPendingSlide,
 };
 
-module.exports = { RENDERERS, formatNumber, formatPct, addDeckFooter };
+module.exports = {
+  RENDERERS,
+  addDeckFooter,
+  assertStackedLabelPosition,
+  fixEmbeddedChartTables,
+  formatNumber,
+  formatPct,
+};
