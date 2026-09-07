@@ -7,6 +7,7 @@ const {
   renderBlankSlide,
 } = require("./utils.js");
 const { runSectionAgent } = require("./section-agent.js");
+const { validateFinanceSections } = require("./finance-schema.js");
 
 /**
  * Extracts recent conversation history from the parent AIbitat's chat log
@@ -126,6 +127,27 @@ module.exports.CreatePptxPresentation = {
                   "Color theme for the presentation. Options: " +
                   getAvailableThemes().join(", "),
               },
+              mode: {
+                type: "string",
+                enum: ["outline", "finance"],
+                default: "outline",
+                description:
+                  "outline builds sections with sub-agents; finance validates and renders structured section data directly.",
+              },
+              unit: {
+                type: "string",
+                description:
+                  "Default unit for finance values (for example, บาท).",
+              },
+              footer: {
+                type: "object",
+                properties: {
+                  period: { type: "string" },
+                  source: { type: "string" },
+                  preparedOn: { type: "string" },
+                },
+                additionalProperties: false,
+              },
               sections: {
                 type: "array",
                 description:
@@ -162,6 +184,9 @@ module.exports.CreatePptxPresentation = {
             title = "Untitled Presentation",
             author = "",
             theme: themeName = "default",
+            mode = "outline",
+            unit = "บาท",
+            footer = {},
             sections = [],
           }) {
             try {
@@ -180,6 +205,12 @@ module.exports.CreatePptxPresentation = {
               const theme = getTheme(themeName);
               const totalSections = sections.length;
 
+              if (mode === "finance") {
+                const validation = validateFinanceSections(sections);
+                if (!validation.ok)
+                  return `Cannot build finance deck: ${validation.errors.join("; ")}`;
+              }
+
               this.super.introspect(
                 `${this.caller}: Planning presentation "${title}" — ${totalSections} section${totalSections !== 1 ? "s" : ""}, ${theme.name} theme`
               );
@@ -191,6 +222,7 @@ module.exports.CreatePptxPresentation = {
                   payload: {
                     filename,
                     title,
+                    mode,
                     sectionCount: totalSections,
                     sectionTitles: sections.map((s) => s.title),
                   },
@@ -204,42 +236,61 @@ module.exports.CreatePptxPresentation = {
                 }
               }
 
-              const conversationContext = extractConversationContext(
-                this.super._chats
-              );
-
-              // Run a focused sub-agent for each section sequentially.
-              // Sequential execution is intentional — local models typically serve
-              // one request at a time, and it keeps introspection events ordered.
-              const allSlides = [];
-              const allCitations = [];
-              for (let i = 0; i < sections.length; i++) {
-                const section = sections[i];
-                this.super.introspect(
-                  `${this.caller}: [${i + 1}/${totalSections}] Building section "${section.title}"…`
-                );
-
-                const sectionResult = await runSectionAgent({
-                  parentAibitat: this.super,
-                  section,
-                  presentationTitle: title,
-                  conversationContext,
-                  sectionPrefix: `${i + 1}/${totalSections}`,
+              let allSlides;
+              if (mode === "finance") {
+                allSlides = sections.map((section) => {
+                  if (["content", "section", "blank"].includes(section.layout))
+                    return {
+                      ...section,
+                      unit: section.unit || unit,
+                      footer: section.footer || footer,
+                    };
+                  return {
+                    ...section,
+                    content: [`layout ${section.layout} pending`],
+                    unit: section.unit || unit,
+                    footer: section.footer || footer,
+                  };
                 });
-
-                const slideCount = sectionResult.slides?.length || 0;
-                allSlides.push(...(sectionResult.slides || []));
-                if (sectionResult.citations?.length > 0)
-                  allCitations.push(...sectionResult.citations);
-
-                this.super.introspect(
-                  `${this.caller}: [${i + 1}/${totalSections}] Section "${section.title}" complete — ${slideCount} slide${slideCount !== 1 ? "s" : ""}`
+              } else {
+                const conversationContext = extractConversationContext(
+                  this.super._chats
                 );
-              }
 
-              // Roll up all citations from sub-agents to the parent so they
-              // appear as sources on the final assistant message.
-              if (allCitations.length > 0) this.super.addCitation(allCitations);
+                // Run a focused sub-agent for each section sequentially.
+                // Sequential execution is intentional — local models typically serve
+                // one request at a time, and it keeps introspection events ordered.
+                allSlides = [];
+                const allCitations = [];
+                for (let i = 0; i < sections.length; i++) {
+                  const section = sections[i];
+                  this.super.introspect(
+                    `${this.caller}: [${i + 1}/${totalSections}] Building section "${section.title}"…`
+                  );
+
+                  const sectionResult = await runSectionAgent({
+                    parentAibitat: this.super,
+                    section,
+                    presentationTitle: title,
+                    conversationContext,
+                    sectionPrefix: `${i + 1}/${totalSections}`,
+                  });
+
+                  const slideCount = sectionResult.slides?.length || 0;
+                  allSlides.push(...(sectionResult.slides || []));
+                  if (sectionResult.citations?.length > 0)
+                    allCitations.push(...sectionResult.citations);
+
+                  this.super.introspect(
+                    `${this.caller}: [${i + 1}/${totalSections}] Section "${section.title}" complete — ${slideCount} slide${slideCount !== 1 ? "s" : ""}`
+                  );
+                }
+
+                // Roll up all citations from sub-agents to the parent so they
+                // appear as sources on the final assistant message.
+                if (allCitations.length > 0)
+                  this.super.addCitation(allCitations);
+              }
 
               // Assemble the final PPTX from all section outputs
               this.super.introspect(
