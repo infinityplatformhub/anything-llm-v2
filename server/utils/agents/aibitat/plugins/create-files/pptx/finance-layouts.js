@@ -913,13 +913,17 @@ async function fixEmbeddedChartTables(buffer) {
           chartXml.replace(/<c:dLbl>([\s\S]*?)<\/c:dLbl>/g, (label, content) =>
             label.includes("<c:dLblPos")
               ? label
-              : `<c:dLbl>${content}<c:dLblPos val="ctr"/></c:dLbl>`
+              : `<c:dLbl>${content.replace(
+                  /(?=<c:(?:showLegendKey|showVal|showCatName|showSerName|showPercent|showBubbleSize))/,
+                  '<c:dLblPos val="ctr"/>'
+                )}</c:dLbl>`
           )
         );
         return;
       }
-      if (!chartXml.includes("<c:v>ประมาณการ</c:v>")) return;
-      const series = chartXml.match(/<c:ser>[\s\S]*?<\/c:ser>/g) || [];
+      const lineChart = chartXml.match(/<c:lineChart>[\s\S]*?<\/c:lineChart>/);
+      if (!lineChart) return;
+      const series = lineChart[0].match(/<c:ser>[\s\S]*?<\/c:ser>/g) || [];
       if (series.length !== 2) return;
       series[1] = series[1].replace(
         '<a:prstDash val="solid"/>',

@@ -332,8 +332,17 @@ describe("pptx-finance executive theme and layouts", () => {
     expect(donutXml).toContain('<c:showCatName val="0"/>');
     const doughnutLabels = donutXml.match(/<c:dLbl>[\s\S]*?<\/c:dLbl>/g) || [];
     expect(doughnutLabels).toHaveLength(fixture.sections[3].data.donut.values.length);
-    doughnutLabels.forEach((label) =>
-      expect(label).toContain('<c:dLblPos val="ctr"/>')
+    doughnutLabels.forEach((label) => {
+      expect(label).toContain('<c:dLblPos val="ctr"/>');
+      expect(label.indexOf("<c:dLblPos")).toBeLessThan(
+        label.indexOf("<c:showLegendKey")
+      );
+    });
+    const oldAppendBehavior =
+      '<c:dLbl><c:idx val="0"/><c:showLegendKey val="0"/>' +
+      '<c:showVal val="0"/><c:dLblPos val="ctr"/></c:dLbl>';
+    expect(oldAppendBehavior.indexOf("<c:dLblPos")).not.toBeLessThan(
+      oldAppendBehavior.indexOf("<c:showLegendKey")
     );
   });
 
@@ -371,14 +380,47 @@ describe("pptx-finance executive theme and layouts", () => {
     const downloadCall = tool.aibitat.socket.send.mock.calls.find(
       ([type]) => type === "fileDownloadCard"
     );
-    const zip = await JSZip.loadAsync(
-      fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
+    const generatedBuffer = fs.readFileSync(
+      path.join(outputDirectory, downloadCall[1].storageFilename)
     );
+    const zip = await JSZip.loadAsync(generatedBuffer);
     const [chartXml] = await getSlideChartXml(zip, 9);
 
     expect((chartXml.match(/<c:lineChart>/g) || [])).toHaveLength(1);
     expect((chartXml.match(/<c:ser>/g) || [])).toHaveLength(2);
     expect(chartXml).toContain('<a:prstDash val="dash"/>');
+
+    const renamedZip = await JSZip.loadAsync(generatedBuffer);
+    const relationships = await renamedZip
+      .file("ppt/slides/_rels/slide9.xml.rels")
+      .async("string");
+    const chartName = relationships.match(/charts\/(chart\d+\.xml)/)[1];
+    const renamedChart = (
+      await renamedZip.file(`ppt/charts/${chartName}`).async("string")
+    ).replace(/<c:v>ประมาณการ<\/c:v>/g, "<c:v>Renamed series</c:v>");
+    const renamedChartSeries = renamedChart.match(/<c:ser>[\s\S]*?<\/c:ser>/g);
+    renamedChartSeries[1] = renamedChartSeries[1].replace(
+      '<a:prstDash val="dash"/>',
+      '<a:prstDash val="solid"/>'
+    );
+    renamedZip.file(
+      `ppt/charts/${chartName}`,
+      renamedChart.replace(/<c:ser>[\s\S]*?<\/c:ser>/g, () =>
+        renamedChartSeries.shift()
+      )
+    );
+    const renamedFixed = await JSZip.loadAsync(
+      await fixEmbeddedChartTables(
+        await renamedZip.generateAsync({ type: "nodebuffer" })
+      )
+    );
+    const renamedChartXml = await renamedFixed
+      .file(`ppt/charts/${chartName}`)
+      .async("string");
+    const renamedSeries =
+      renamedChartXml.match(/<c:ser>[\s\S]*?<\/c:ser>/g) || [];
+
+    expect(renamedSeries[1]).toContain('<a:prstDash val="dash"/>');
   });
 
   test("(n) stacked chart guard rejects outEnd labels", () => {
