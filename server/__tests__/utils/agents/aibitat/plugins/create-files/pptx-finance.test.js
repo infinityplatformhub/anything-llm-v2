@@ -156,6 +156,18 @@ describe("pptx-finance schema", () => {
       /sections\[8\]\.data\.items\[0\]\.killCondition/i
     );
   });
+
+  test("rejects a formatted-string decision cost", () => {
+    const sections = copy(fixture.sections);
+    sections[8].data.items[0].cost = "1,000 บาท";
+
+    const result = validateFinanceSections(sections);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toMatch(
+      /sections\[8\]\.data\.items\[0\]\.cost.*numeric/i
+    );
+  });
 });
 
 describe("pptx-finance mode switch", () => {

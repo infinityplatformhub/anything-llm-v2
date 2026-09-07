@@ -287,7 +287,7 @@ function validateDecisions(data, path, errors) {
     const itemPath = `${path}.items[${index}]`;
     if (!requireObject(item, itemPath, errors)) return;
     requireString(item.title, `${itemPath}.title`, errors);
-    requireNumberOrString(item.cost, `${itemPath}.cost`, errors);
+    requireNumber(item.cost, `${itemPath}.cost`, errors);
     requireNumberOrString(
       item.expectedReturn,
       `${itemPath}.expectedReturn`,
