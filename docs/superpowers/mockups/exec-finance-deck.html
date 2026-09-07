@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exec Finance Deck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root{
+    --paper:#f4f2ec; --card:#ffffff; --ink:#15171c; --ink-2:#4b4f58; --ink-3:#8a8e99;
+    --line:#dad6cc; --navy:#142035; --navy-2:#1f3252; --graphite:#2b2d33;
+    --accent:#c8860b; --accent-ink:#7a5000; --accent-bg:#fbf1dc;
+    --pos:#2e7d5b; --pos-bg:#e3f2ea; --neg:#b4392e; --neg-bg:#f8e4e1; --amb:#b6790f; --amb-bg:#fbf0d6;
+    --slide-bg:#ffffff; --slide-ink:#15171c; --slide-muted:#5d616b; --slide-line:#e3e0d8; --grid:#ece9e1;
+    --chart-1:#142035; --chart-2:#c8860b; --chart-3:#6b7a99; --chart-4:#a9b3c7; --chart-5:#d9c9a3;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#101215; --card:#181b21; --ink:#eceef2; --ink-2:#b4b8c2; --ink-3:#7d818c;
+      --line:#2a2e37; --navy:#dfe5f2; --navy-2:#c5cee0; --graphite:#d0d3da;
+      --accent:#e2a33a; --accent-ink:#f2c979; --accent-bg:#2c2415;
+      --pos:#5cc196; --pos-bg:#173125; --neg:#ef8a7e; --neg-bg:#3a1f1b; --amb:#e0a842; --amb-bg:#332913;
+      --slide-bg:#1c1f26; --slide-ink:#eef0f4; --slide-muted:#a6abb7; --slide-line:#30343d; --grid:#2a2e37;
+      --chart-1:#8fa6d6; --chart-2:#e2a33a; --chart-3:#6b7a99; --chart-4:#4a5468; --chart-5:#8b7d5a;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#101215; --card:#181b21; --ink:#eceef2; --ink-2:#b4b8c2; --ink-3:#7d818c;
+    --line:#2a2e37; --navy:#dfe5f2; --navy-2:#c5cee0; --graphite:#d0d3da;
+    --accent:#e2a33a; --accent-ink:#f2c979; --accent-bg:#2c2415;
+    --pos:#5cc196; --pos-bg:#173125; --neg:#ef8a7e; --neg-bg:#3a1f1b; --amb:#e0a842; --amb-bg:#332913;
+    --slide-bg:#1c1f26; --slide-ink:#eef0f4; --slide-muted:#a6abb7; --slide-line:#30343d; --grid:#2a2e37;
+    --chart-1:#8fa6d6; --chart-2:#e2a33a; --chart-3:#6b7a99; --chart-4:#4a5468; --chart-5:#8b7d5a;
+  }
+  html,body{margin:0;background:var(--paper);color:var(--ink);font-family:"IBM Plex Sans Thai",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-variant-numeric:tabular-nums;}
+  .mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;}
+  .card{background:var(--card);border:1px solid var(--line);}
+  .muted{color:var(--ink-2);} .faint{color:var(--ink-3);}
+  .eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);}
+  .btn{border:1px solid var(--line);background:var(--card);color:var(--ink);padding:.45rem .9rem;border-radius:.375rem;font-size:14px;cursor:pointer;}
+  .btn:hover{border-color:var(--ink-3);} .btn:disabled{opacity:.4;cursor:default;}
+  .btn:focus-visible,.tab:focus-visible,.thumb:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  .tab{padding:.5rem .9rem;border-bottom:2px solid transparent;color:var(--ink-2);font-size:14px;cursor:pointer;background:none;border-top:0;border-left:0;border-right:0;}
+  .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent);font-weight:600;}
+  .chip{display:inline-flex;align-items:center;gap:.4rem;padding:.2rem .6rem;border-radius:999px;font-size:12px;font-weight:600;}
+  .chip.pos{background:var(--pos-bg);color:var(--pos);} .chip.neg{background:var(--neg-bg);color:var(--neg);} .chip.amb{background:var(--amb-bg);color:var(--amb);}
+  .dot{width:.55rem;height:.55rem;border-radius:999px;display:inline-block;}
+  .dot.g{background:var(--pos);} .dot.a{background:var(--amb);} .dot.r{background:var(--neg);}
+  /* slide canvas: 16:9, all sizes in cqw so it scales with width */
+  .stage{container-type:inline-size;width:100%;aspect-ratio:16/9;background:var(--slide-bg);color:var(--slide-ink);border:1px solid var(--line);position:relative;overflow:hidden;}
+  .slide{position:absolute;inset:0;display:none;padding:4.2cqw 5cqw 3.2cqw;box-sizing:border-box;}
+  .slide.on{display:flex;flex-direction:column;}
+  .slide h2{font-size:2.9cqw;line-height:1.2;font-weight:600;margin:0 0 .5cqw;letter-spacing:-.01em;text-wrap:balance;color:var(--slide-ink);}
+  .slide .sub{font-size:1.35cqw;color:var(--slide-muted);margin:0 0 2cqw;}
+  .slide .body{flex:1;min-height:0;display:flex;gap:3cqw;font-size:1.45cqw;}
+  .slide .foot{display:flex;justify-content:space-between;font-size:1.05cqw;color:var(--slide-muted);border-top:1px solid var(--slide-line);padding-top:1cqw;margin-top:1.5cqw;}
+  .slide .badge{position:absolute;top:1.2cqw;right:1.4cqw;font-size:.95cqw;padding:.25cqw .8cqw;border:1px solid var(--slide-line);border-radius:999px;color:var(--slide-muted);background:var(--slide-bg);}
+  .slide table{width:100%;border-collapse:collapse;font-size:1.45cqw;}
+  .slide th{text-align:left;font-weight:600;font-size:1.1cqw;letter-spacing:.06em;text-transform:uppercase;color:var(--slide-muted);padding:.4cqw .8cqw;border-bottom:1px solid var(--slide-ink);}
+  .slide td{padding:.62cqw .8cqw;border-bottom:1px solid var(--slide-line);}
+  .slide th.n,.slide td.n{text-align:right;}
+  .big{font-size:4.6cqw;font-weight:600;line-height:1;letter-spacing:-.02em;}
+  .kpi-label{font-size:1.2cqw;letter-spacing:.1em;text-transform:uppercase;color:var(--slide-muted);}
+  .pos-t{color:var(--pos);} .neg-t{color:var(--neg);} .amb-t{color:var(--amb);}
+  .slide ol,.slide ul{margin:0;padding-left:1.8cqw;} .slide li{margin:.5cqw 0;}
+  .tag{display:inline-block;font-size:1cqw;padding:.15cqw .6cqw;border-radius:.3cqw;border:1px solid var(--slide-line);color:var(--slide-muted);margin-left:.6cqw;vertical-align:middle;}
+  .tag.inv{border-color:var(--accent);color:var(--accent-ink);}
+  svg text{font-family:inherit;}
+  .thumb{border:1px solid var(--line);background:var(--card);color:var(--ink-2);font-size:11px;padding:.35rem .5rem;border-radius:.3rem;cursor:pointer;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .thumb[aria-current="true"]{border-color:var(--accent);color:var(--ink);background:var(--accent-bg);}
+  pre{margin:0;font-size:12px;line-height:1.5;white-space:pre;overflow:auto;}
+  .decision{border:1px solid var(--slide-line);border-left:.5cqw solid var(--accent);padding:1.2cqw 1.6cqw;flex:1;display:flex;flex-direction:column;gap:.6cqw;}
+  .decision .num{font-size:2.2cqw;font-weight:600;color:var(--accent);line-height:1;}
+  .decision dt{font-size:1cqw;letter-spacing:.08em;text-transform:uppercase;color:var(--slide-muted);margin-top:.6cqw;} .decision dd{margin:0;}
+  @media (prefers-reduced-motion:no-preference){ .slide.on{animation:fade .18s ease-out;} @keyframes fade{from{opacity:.4}to{opacity:1}} }
+</style>
+</head>
+<body>
+<div class="max-w-6xl mx-auto px-5 py-6">
+  <header class="flex items-start justify-between gap-6 mb-5">
+    <div>
+      <div class="eyebrow">Mockup · infi-dev step 1.5 · Option A</div>
+      <h1 class="text-2xl font-semibold mt-1" style="color:var(--ink)">Exec Finance Deck</h1>
+      <p class="muted text-sm mt-1 max-w-2xl">โหมด <span class="mono">finance</span> ของ tool <span class="mono">create-pptx-presentation</span>: agent ดึงตัวเลขจาก FlowAccount แล้วส่ง data เข้า tool ตรง ๆ ไม่ผ่าน sub-agent ค้นเว็บ ผลลัพธ์คือ PPTX 9 สไลด์ chart แบบ native ทั้งหมด</p>
+    </div>
+    <div class="text-right text-xs faint">
+      <div>workspace <span class="mono">infi</span> · บัญชี-INFI</div>
+      <div>งวด ม.ค.–ส.ค. 2569 เทียบ ม.ค.–ส.ค. 2568</div>
+    </div>
+  </header>
+
+  <!-- Tool input -->
+  <section class="card rounded-md mb-4">
+    <div class="flex items-center justify-between px-4 py-2.5">
+      <div class="flex items-center gap-3">
+        <span class="eyebrow">Tool input</span>
+        <span class="mono text-xs muted">create-pptx-presentation · mode: finance · theme: executive</span>
+      </div>
+      <button id="jsonToggle" class="btn" aria-expanded="false" aria-controls="jsonPanel">แสดง JSON</button>
+    </div>
+    <div id="jsonPanel" hidden class="border-t px-4 py-3" style="border-color:var(--line)">
+      <pre class="mono muted" id="jsonPre"></pre>
+    </div>
+  </section>
+
+  <!-- State tabs -->
+  <section class="card rounded-md mb-4">
+    <div role="tablist" aria-label="สถานะ" class="flex gap-1 px-2 border-b" style="border-color:var(--line)">
+      <button class="tab" role="tab" id="tab-run" aria-selected="false" aria-controls="panel-run">กำลังสร้าง</button>
+      <button class="tab" role="tab" id="tab-ok" aria-selected="true" aria-controls="panel-ok">สำเร็จ</button>
+      <button class="tab" role="tab" id="tab-err" aria-selected="false" aria-controls="panel-err">ผิดพลาด</button>
+    </div>
+    <div id="panel-run" role="tabpanel" aria-labelledby="tab-run" hidden class="px-4 py-4">
+      <ol class="text-sm space-y-2">
+        <li class="flex items-center gap-3"><span class="dot g"></span><span>ดึงข้อมูล FlowAccount</span><span class="faint mono text-xs">get_profit_loss · list_cash_receipts · list_cash_payments · get_ar_aging · 6 เครื่องมือ · 4.2 s</span></li>
+        <li class="flex items-center gap-3"><span class="dot a"></span><span>สร้างสไลด์</span><span class="faint mono text-xs">6 / 9 · waterfall · pptxgenjs addChart</span></li>
+        <li class="flex items-center gap-3"><span class="dot" style="background:var(--line)"></span><span class="muted">ตรวจไฟล์</span><span class="faint mono text-xs">validate.py · รอ</span></li>
+      </ol>
+    </div>
+    <div id="panel-ok" role="tabpanel" aria-labelledby="tab-ok" class="px-4 py-4">
+      <div class="flex flex-wrap gap-4 items-start">
+        <div class="card rounded-md px-4 py-3 flex items-center gap-4" style="border-color:var(--accent)">
+          <div>
+            <div class="eyebrow">ไฟล์พร้อมดาวน์โหลด</div>
+            <div class="mono text-sm mt-1">finance-review-2569-01-08.pptx</div>
+            <div class="faint text-xs">9 สไลด์ · 412 KB · ตรวจไฟล์ผ่าน</div>
+          </div>
+          <a href="#" class="btn" style="background:var(--navy);color:var(--paper);border-color:var(--navy)" onclick="return false">ดาวน์โหลด</a>
+        </div>
+        <div class="text-sm max-w-xl">
+          <p><span class="chip amb">ผสม / Mixed</span></p>
+          <p class="mt-2">รายได้ 8 เดือนแรก 18,420,000 บาท สูงกว่างวดเทียบ 12.4% แต่กำไรสุทธิลดลง 6.8% เพราะค่าใช้จ่ายโต 16.2%</p>
+          <p class="muted">ส่วนต่างใหญ่สุด: ค่าจ้างพนักงาน +1,210,000 บาท (การลงทุน ทีมขายใหม่ 4 คน ตั้งแต่ มี.ค.)</p>
+        </div>
+      </div>
+    </div>
+    <div id="panel-err" role="tabpanel" aria-labelledby="tab-err" hidden class="px-4 py-4">
+      <div class="rounded-md px-4 py-3 text-sm" style="background:var(--neg-bg);color:var(--neg)">
+        <div class="font-semibold">สร้างไฟล์ไม่สำเร็จ: ดึงข้อมูลไม่ครบ</div>
+        <div class="mt-1">flowaccount-accounting__get_ar_aging ตอบ <span class="mono">UND_ERR_CONNECT_TIMEOUT</span> หลัง retry 1 ครั้ง สไลด์ 6 (เงินสดและลูกหนี้) ขาดข้อมูล AR aging</div>
+      </div>
+      <p class="text-sm muted mt-3">ทำต่อได้ 2 ทาง: สั่ง "ลองใหม่" เพื่อดึงเฉพาะเครื่องมือที่พลาด หรือสั่ง "สร้างโดยข้ามสไลด์ที่ขาด" ไฟล์จะระบุว่าสไลด์ไหนไม่มีข้อมูล ไม่เติมตัวเลขแทน</p>
+    </div>
+  </section>
+
+  <!-- Viewer -->
+  <section>
+    <div class="flex items-center justify-between mb-2">
+      <div class="flex items-center gap-2">
+        <button class="btn" id="prev" aria-label="สไลด์ก่อนหน้า">←</button>
+        <button class="btn" id="next" aria-label="สไลด์ถัดไป">→</button>
+        <span class="text-sm muted ml-2" id="counter">1 / 9</span>
+      </div>
+      <div class="text-xs faint">ปุ่มลูกศรซ้าย/ขวา เปลี่ยนสไลด์</div>
+    </div>
+    <div class="stage" id="stage" tabindex="0" aria-live="polite"></div>
+    <div class="grid grid-cols-3 md:grid-cols-9 gap-1.5 mt-3" id="thumbs"></div>
+  </section>
+
+  <footer class="mt-8 text-xs faint">mockup เป็นของทิ้ง ไม่ใช่โค้ดจริง · ตัวเลขทั้งหมดเป็นตัวอย่าง · docs/superpowers/mockups/exec-finance-deck.html</footer>
+</div>
+
+<script>
+const fmt = n => n.toLocaleString("en-US");
+const baht = n => fmt(n) + " บาท";
+const pct = (a,b) => ((a-b)/b*100);
+const pctS = v => (v>0?"+":"") + v.toFixed(1) + "%";
+const months = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค."];
+const FOOT = "งวด ม.ค.–ส.ค. 2569 · แหล่งข้อมูล FlowAccount · จัดทำ 7 ก.ย. 2569";
+
+// ---------- sample data (ตัวอย่าง) ----------
+const D = {
+  revenue: [1980000,2050000,2260000,2310000,2390000,2480000,2420000,2530000],
+  revenuePlan: [2100000,2350000],
+  expense: [1650000,1720000,1980000,2010000,2080000,2140000,2120000,2190000],
+  revPrev: 16390000, expPrev: 13676000,
+  expenseMix: [["ค่าจ้างพนักงาน",6210000],["ต้นทุนสินค้า",4870000],["ค่าเช่าและสาธารณูปโภค",1620000],["การตลาด",1310000],["อื่น ๆ",1880000]],
+  receipts: [1900000,2010000,2150000,2230000,2300000,2370000,2350000,2440000],
+  payments: [1700000,1690000,2020000,1980000,2090000,2110000,2150000,2160000],
+  aging: [["0–30 วัน",1640000],["31–60 วัน",720000],["61–90 วัน",310000],["> 90 วัน",190000]],
+  customers: [["บจก. สยามเทรด",3120000],["บมจ. นอร์ทฟู้ดส์",2480000],["หจก. ชัยพัฒนา",1910000],["บจก. เอ็มพี โลจิสติกส์",1420000],["บจก. บลูริเวอร์",1180000]],
+  forecast: [2530000,2480000,2600000,2720000],
+};
+D.revTotal = D.revenue.reduce((a,b)=>a+b); D.expTotal = D.expense.reduce((a,b)=>a+b);
+D.profit = D.revTotal - D.expTotal; D.profitPrev = D.revPrev - D.expPrev;
+
+// ---------- svg helpers ----------
+const C = getComputedStyle(document.documentElement);
+const cv = n => C.getPropertyValue(n).trim();
+const short = n => (n/1e6).toFixed(1) + " ล้าน";
+function barChart(vals, {plan, annot, w=600, h=300, color="--chart-1"}={}){
+  const pad={l:52,r:12,t:24,b:32}, W=w-pad.l-pad.r, H=h-pad.t-pad.b;
+  const max=Math.max(...vals,(plan?plan[1]:0))*1.12;
+  const y=v=>pad.t+H-(v/max)*H, bw=W/vals.length;
+  let s=`<svg viewBox="0 0 ${w} ${h}" width="100%" height="100%" role="img" aria-label="bar chart">`;
+  for(let i=0;i<=4;i++){const v=max*i/4; s+=`<line x1="${pad.l}" x2="${w-pad.r}" y1="${y(v)}" y2="${y(v)}" stroke="${cv('--grid')}"/><text x="${pad.l-6}" y="${y(v)+4}" font-size="11" text-anchor="end" fill="${cv('--slide-muted')}">${short(v)}</text>`;}
+  if(plan){ s+=`<rect x="${pad.l}" y="${y(plan[1])}" width="${W}" height="${y(plan[0])-y(plan[1])}" fill="${cv('--chart-2')}" opacity=".16"/><text x="${pad.l+6}" y="${y(plan[1])+13}" font-size="11" fill="${cv('--accent-ink')}">ช่วงแผน (Plan band)</text>`; }
+  vals.forEach((v,i)=>{const x=pad.l+i*bw+bw*.18; s+=`<rect x="${x}" y="${y(v)}" width="${bw*.64}" height="${H+pad.t-y(v)}" fill="${cv(color)}"/><text x="${x+bw*.32}" y="${h-pad.b+16}" font-size="12" text-anchor="middle" fill="${cv('--slide-muted')}">${months[i]}</text>`;});
+  if(annot){const i=annot.i,x=pad.l+i*bw+bw*.5,left=i<vals.length/2; s+=`<line x1="${x}" x2="${x}" y1="${y(vals[i])-6}" y2="${pad.t+8}" stroke="${cv('--accent')}"/><text x="${x+(left?6:-6)}" y="${pad.t+6}" font-size="12" text-anchor="${left?'start':'end'}" fill="${cv('--accent-ink')}">${annot.t}</text>`;}
+  return s+"</svg>";
+}
+function donut(items,{w=260,h=260}={}){
+  const total=items.reduce((a,[,v])=>a+v,0), cx=w/2, cy=h/2, r=100, ri=62; let a=-Math.PI/2, s=`<svg viewBox="0 0 ${w} ${h}" width="100%" height="100%" role="img" aria-label="donut">`;
+  const cols=["--chart-1","--chart-2","--chart-3","--chart-4","--chart-5"];
+  items.forEach(([n,v],i)=>{const b=a+v/total*2*Math.PI, L=b-a>Math.PI?1:0;
+    const p=(rr,ang)=>[cx+rr*Math.cos(ang),cy+rr*Math.sin(ang)];
+    const [x1,y1]=p(r,a),[x2,y2]=p(r,b),[x3,y3]=p(ri,b),[x4,y4]=p(ri,a);
+    s+=`<path d="M${x1},${y1} A${r},${r} 0 ${L} 1 ${x2},${y2} L${x3},${y3} A${ri},${ri} 0 ${L} 0 ${x4},${y4} Z" fill="${cv(cols[i])}" stroke="${cv('--slide-bg')}" stroke-width="2"/>`;
+    a=b;});
+  s+=`<text x="${cx}" y="${cy-4}" font-size="11" text-anchor="middle" fill="${cv('--slide-muted')}">รวม</text><text x="${cx}" y="${cy+14}" font-size="14" font-weight="600" text-anchor="middle" fill="${cv('--slide-ink')}">${short(total)}</text>`;
+  return s+"</svg>";
+}
+function waterfall(start,drivers,{w=640,h=320}={}){
+  const pad={l:56,r:12,t:20,b:46}, W=w-pad.l-pad.r, H=h-pad.t-pad.b;
+  const steps=[{l:"งวดเทียบ 2568",v:start,type:"total"}]; let run=start;
+  drivers.forEach(d=>{steps.push({...d,from:run}); run+=d.v;}); steps.push({l:"งวดนี้ 2569",v:run,type:"total"});
+  const allv=steps.map(s=>s.type==="total"?s.v:s.from+s.v); const max=Math.max(...allv)*1.1, min=Math.min(0,...allv);
+  const y=v=>pad.t+H-((v-min)/(max-min))*H, bw=W/steps.length;
+  let s=`<svg viewBox="0 0 ${w} ${h}" width="100%" height="100%" role="img" aria-label="waterfall">`;
+  for(let i=0;i<=4;i++){const v=min+(max-min)*i/4; s+=`<line x1="${pad.l}" x2="${w-pad.r}" y1="${y(v)}" y2="${y(v)}" stroke="${cv('--grid')}"/><text x="${pad.l-6}" y="${y(v)+4}" font-size="11" text-anchor="end" fill="${cv('--slide-muted')}">${short(v)}</text>`;}
+  steps.forEach((st,i)=>{const x=pad.l+i*bw+bw*.15, ww=bw*.7; let top,bot,fill;
+    if(st.type==="total"){top=y(st.v);bot=y(0);fill=cv('--chart-1');}
+    else{const a=st.from,b=st.from+st.v;top=y(Math.max(a,b));bot=y(Math.min(a,b));fill=st.v>=0?cv('--pos'):cv('--neg');}
+    s+=`<rect x="${x}" y="${top}" width="${ww}" height="${Math.max(bot-top,1)}" fill="${fill}"/>`;
+    if(i<steps.length-1){const nx=pad.l+(i+1)*bw+bw*.15; const lv=st.type==="total"?st.v:st.from+st.v; s+=`<line x1="${x+ww}" x2="${nx}" y1="${y(lv)}" y2="${y(lv)}" stroke="${cv('--slide-muted')}" stroke-dasharray="3 3"/>`;}
+    const lab=st.type==="total"?short(st.v):(st.v>0?"+":"−")+short(Math.abs(st.v));
+    s+=`<text x="${x+ww/2}" y="${top-6}" font-size="11" text-anchor="middle" fill="${cv('--slide-ink')}">${lab}</text>`;
+    s+=`<text x="${x+ww/2}" y="${h-pad.b+16}" font-size="11" text-anchor="middle" fill="${cv('--slide-muted')}">${st.l}</text>`;
+    if(st.tag) s+=`<text x="${x+ww/2}" y="${h-pad.b+31}" font-size="10" text-anchor="middle" fill="${cv('--accent-ink')}">${st.tag}</text>`;
+  });
+  return s+"</svg>";
+}
+function lineChart(series,{w=600,h=260,labels=months,band}={}){
+  const pad={l:52,r:12,t:20,b:30}, W=w-pad.l-pad.r, H=h-pad.t-pad.b;
+  const all=series.flatMap(s=>s.v); const max=Math.max(...all)*1.08, min=Math.min(...all)*.92;
+  const x=i=>pad.l+i/(labels.length-1)*W, y=v=>pad.t+H-((v-min)/(max-min))*H;
+  let s=`<svg viewBox="0 0 ${w} ${h}" width="100%" height="100%" role="img" aria-label="line chart">`;
+  for(let i=0;i<=3;i++){const v=min+(max-min)*i/3; s+=`<line x1="${pad.l}" x2="${w-pad.r}" y1="${y(v)}" y2="${y(v)}" stroke="${cv('--grid')}"/><text x="${pad.l-6}" y="${y(v)+4}" font-size="11" text-anchor="end" fill="${cv('--slide-muted')}">${short(v)}</text>`;}
+  if(band!==undefined){s+=`<rect x="${x(band)}" y="${pad.t}" width="${x(labels.length-1)-x(band)}" height="${H}" fill="${cv('--chart-2')}" opacity=".12"/><text x="${x(band)+6}" y="${h-pad.b-8}" font-size="11" fill="${cv('--accent-ink')}">ประมาณการ (Forecast)</text>`;}
+  labels.forEach((l,i)=>s+=`<text x="${x(i)}" y="${h-pad.b+16}" font-size="11" text-anchor="middle" fill="${cv('--slide-muted')}">${l}</text>`);
+  series.forEach(se=>{const d=se.v.map((v,i)=>(i?"L":"M")+x(i)+","+y(v)).join(" "); s+=`<path d="${d}" fill="none" stroke="${cv(se.c)}" stroke-width="2.5" ${se.dash?'stroke-dasharray="5 4"':''}/>`; const li=se.v.length-1; s+=`<circle cx="${x(li)}" cy="${y(se.v[li])}" r="4" fill="${cv(se.c)}"/><text x="${x(li)-8}" y="${y(se.v[li])-8}" font-size="11" text-anchor="end" fill="${cv(se.c)}">${se.n} ${short(se.v[li])}</text>`;});
+  return s+"</svg>";
+}
+function hbars(items,{w=520,rowH=34,labelW=190,share=true,color="--chart-1"}={}){
+  const total=items.reduce((a,[,v])=>a+v,0), max=Math.max(...items.map(i=>i[1])), h=items.length*rowH;
+  const W=w-labelW-90; let s=`<svg viewBox="0 0 ${w} ${h}" width="100%" role="img" aria-label="ranked bars">`;
+  items.forEach(([n,v],i)=>{const y=i*rowH; s+=`<text x="${labelW-10}" y="${y+rowH*.62}" font-size="12" text-anchor="end" fill="${cv('--slide-ink')}">${n}</text><rect x="${labelW}" y="${y+rowH*.25}" width="${v/max*W}" height="${rowH*.5}" fill="${cv(i===0?'--chart-2':color)}"/><text x="${labelW+v/max*W+8}" y="${y+rowH*.62}" font-size="12" fill="${cv('--slide-ink')}">${share?(v/total*100).toFixed(0)+"%":short(v)}</text>`;});
+  return s+"</svg>";
+}
+
+// ---------- slides ----------
+const chg = (a,b)=>{const p=pct(a,b);return `<span class="${p>=0?'pos-t':'neg-t'}">${pctS(p)}</span>`;};
+const stat=(v,t)=>`<span class="dot ${t}"></span>`;
+const slides=[
+{ short:"1 สรุปผู้บริหาร", render:()=>`
+  <h2>รายได้โต 12.4% แต่กำไรสุทธิลด 6.8% เพราะค่าจ้างทีมขายใหม่ (Revenue up, profit down on sales hiring)</h2>
+  <p class="sub">สรุปผู้บริหาร (Executive Summary) · ม.ค.–ส.ค. 2569 เทียบ ม.ค.–ส.ค. 2568</p>
+  <div class="body" style="flex-direction:column;gap:2.4cqw">
+    <p style="max-width:72cqw;font-size:1.7cqw;line-height:1.5">แปดเดือนแรกของปี 2569 รายได้รวม ${baht(D.revTotal)} สูงกว่างวดเทียบ ${pctS(pct(D.revTotal,D.revPrev))} จากลูกค้ารายใหญ่ 2 รายที่เพิ่มคำสั่งซื้อ แต่ค่าใช้จ่ายโตเร็วกว่ารายได้ที่ ${pctS(pct(D.expTotal,D.expPrev))} ทำให้กำไรสุทธิลดลง ${pctS(pct(D.profit,D.profitPrev))} เหลือ ${baht(D.profit)} <span class="chip amb" style="font-size:1.2cqw">ผสม / Mixed</span></p>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:3cqw">
+      ${[["รายได้ (Revenue)",D.revTotal,D.revPrev,true],["ค่าใช้จ่าย (Expenses)",D.expTotal,D.expPrev,false],["กำไรสุทธิ (Net Profit)",D.profit,D.profitPrev,true]].map(([l,a,b,up])=>{const p=pct(a,b);const good=up?p>=0:p<=0;return `<div style="border-top:.35cqw solid var(--accent);padding-top:1cqw"><div class="kpi-label">${l}</div><div class="big" style="margin:.6cqw 0">${fmt(a)}</div><div style="font-size:1.3cqw" class="${good?'pos-t':'neg-t'}">${pctS(p)} <span style="color:var(--slide-muted)">เทียบ ${short(b)} บาท ปีก่อน</span></div></div>`;}).join("")}
+    </div>
+  </div>`},
+{ short:"2 ตัวชี้วัดหลัก", render:()=>{
+  const rows=[["รายได้ (Revenue)",D.revTotal,D.revPrev,"g",true],["อัตรากำไรขั้นต้น (Gross margin %)",73.6,76.1,"a",true],["ค่าใช้จ่ายรวม (Total expenses)",D.expTotal,D.expPrev,"r",false],["กำไรสุทธิ (Net profit)",D.profit,D.profitPrev,"r",true],["เงินสดรับ (Cash receipts)",D.receipts.reduce((a,b)=>a+b),15910000,"g",true],["ลูกหนี้คงค้าง (AR outstanding)",2860000,2410000,"a",false],["DSO (วัน)",42,36,"a",false],["จำนวนใบกำกับ (Invoices)",914,812,"g",true]];
+  return `<h2>ปริมาณธุรกิจโต แต่ 5 จาก 8 ตัวชี้วัดแย่ลง: ต้นทุน กำไร และลูกหนี้ (Volume up, 5 of 8 KPIs worse)</h2><p class="sub">ตัวชี้วัดหลัก (KPI Scorecard)</p>
+  <div class="body"><table><thead><tr><th>ตัวชี้วัด</th><th class="n">งวดนี้</th><th class="n">งวดเทียบ</th><th class="n">เปลี่ยนแปลง %</th><th style="text-align:center">สถานะ</th></tr></thead><tbody>
+  ${rows.map(([n,a,b,st,up])=>{const p=pct(a,b);const good=up?p>=0:p<=0;const f=v=>Number.isInteger(v)?fmt(v):v.toFixed(1);return `<tr><td>${n}</td><td class="n">${f(a)}</td><td class="n" style="color:var(--slide-muted)">${f(b)}</td><td class="n ${good?'pos-t':'neg-t'}">${good?'▲':'▼'} ${pctS(Math.abs(p)).replace('+','')}</td><td style="text-align:center">${stat(0,st)}</td></tr>`;}).join("")}
+  </tbody></table></div>`;}},
+{ short:"3 รายได้รายเดือน", render:()=>`
+  <h2>รายได้อยู่ในช่วงแผน 6 จาก 8 เดือน ส.ค. สูงสุด ${short(D.revenue[7])} บาท (Revenue within plan 6 of 8 months)</h2><p class="sub">รายได้รายเดือน (Monthly Revenue) · แถบสีคือช่วงแผน 2.10–2.35 ล้านบาท</p>
+  <div class="body"><div style="flex:1;min-width:0">${barChart(D.revenue,{plan:D.revenuePlan,annot:{i:1,t:"ก.พ. ต่ำกว่าแผน: สยามเทรด เลื่อนรับสินค้าไป มี.ค."}})}</div>
+  <div style="width:24cqw;display:flex;flex-direction:column;gap:1.4cqw"><div><div class="kpi-label">เดือนสูงสุด</div><div style="font-size:2.2cqw;font-weight:600">ส.ค. ${short(D.revenue[7])}</div></div><div><div class="kpi-label">เดือนต่ำสุด</div><div style="font-size:2.2cqw;font-weight:600">ม.ค. ${short(D.revenue[0])}</div></div><div><div class="kpi-label">เฉลี่ยต่อเดือน</div><div style="font-size:2.2cqw;font-weight:600">${short(D.revTotal/8)}</div></div></div></div>`},
+{ short:"4 ค่าใช้จ่าย", render:()=>`
+  <h2>ค่าจ้างพนักงานคือ 39% ของค่าใช้จ่ายและเป็นตัวดันต้นทุนตั้งแต่ มี.ค. (Payroll is 39% of spend)</h2><p class="sub">ค่าใช้จ่ายรายเดือนและโครงสร้าง (Monthly Expenses and Mix)</p>
+  <div class="body"><div style="flex:1.3;min-width:0">${barChart(D.expense,{color:"--chart-3",annot:{i:2,t:"มี.ค. +260,000: ทีมขายใหม่ 4 คน"}})}</div>
+  <div style="flex:1;display:flex;gap:1.5cqw;align-items:center"><div style="width:18cqw">${donut(D.expenseMix)}</div><ul style="list-style:none;padding:0;font-size:1.25cqw">${D.expenseMix.map(([n,v],i)=>`<li style="display:flex;justify-content:space-between;gap:1cqw;margin:.35cqw 0"><span><span class="dot" style="background:${cv(["--chart-1","--chart-2","--chart-3","--chart-4","--chart-5"][i])}"></span> ${n}</span><span>${(v/D.expTotal*100).toFixed(0)}%</span></li>`).join("")}</ul></div></div>`},
+{ short:"5 สาเหตุ", render:()=>`
+  <h2>กำไรลด ${baht(D.profitPrev-D.profit)}: การลงทุนทีมขายกินกำไรที่ลูกค้าใหญ่ทำได้ (Sales hiring absorbed customer gains)</h2><p class="sub">สาเหตุความแตกต่าง (Variance Drivers) · กำไรสุทธิ งวดเทียบ → งวดนี้ · ผลรวม 4 ตัวขับ = ${fmt(D.profit-D.profitPrev)} บาท</p>
+  <div class="body"><div style="flex:1.4;min-width:0">${waterfall(D.profitPrev,[{l:"ลูกค้าใหญ่ 2 ราย",v:1640000,tag:"โครงสร้าง"},{l:"เลื่อนรับสินค้า ก.พ.",v:-210000,tag:"ชั่วคราว"},{l:"ทีมขายใหม่ 4 คน",v:-1210000,tag:"การลงทุน"},{l:"ต้นทุนสินค้า +6%",v:-404000,tag:"โครงสร้าง"}])}</div>
+  <ol style="flex:1;font-size:1.3cqw"><li>บมจ. นอร์ทฟู้ดส์ และ บจก. สยามเทรด เพิ่มคำสั่งซื้อ +1,640,000 บาท <span class="tag">โครงสร้าง</span></li><li>สยามเทรด เลื่อนรับสินค้า ก.พ. → มี.ค. −210,000 บาท กลับมาแล้ว <span class="tag">ชั่วคราว</span></li><li>ค่าจ้างทีมขายใหม่ 4 คน ตั้งแต่ มี.ค. −1,210,000 บาท อนุมัติ ก.พ. <span class="tag inv">การลงทุน</span></li><li>ต้นทุนสินค้าขึ้น 6% ยังไม่ส่งผ่านราคา −404,000 บาท <span class="tag">โครงสร้าง</span></li></ol></div>`},
+{ short:"6 เงินสด", render:()=>`
+  <h2>เงินสดรับมากกว่าจ่ายทุกเดือน แต่ลูกหนี้เกิน 60 วันโตเป็น 500,000 บาท (Cash positive, AR over 60 days rising)</h2><p class="sub">เงินสดและลูกหนี้ (Cash and Receivables)</p>
+  <div class="body"><div style="flex:1.3;min-width:0">${lineChart([{n:"รับ",v:D.receipts,c:"--chart-1"},{n:"จ่าย",v:D.payments,c:"--chart-2"}])}</div>
+  <div style="flex:1;display:flex;flex-direction:column;gap:1.2cqw"><div style="display:flex;gap:3cqw"><div><div class="kpi-label">DSO</div><div style="font-size:3cqw;font-weight:600;line-height:1">42 <span style="font-size:1.2cqw;font-weight:400">วัน</span></div><div class="neg-t" style="font-size:1.1cqw">+6 วัน จากปีก่อน</div></div><div><div class="kpi-label">ลูกหนี้คงค้าง</div><div style="font-size:3cqw;font-weight:600;line-height:1">${short(2860000)}</div><div style="font-size:1.1cqw;color:var(--slide-muted)">บาท ณ 31 ส.ค.</div></div></div><div class="kpi-label">อายุลูกหนี้ (AR aging)</div><div>${hbars(D.aging,{w:420,rowH:30,labelW:110,share:false,color:"--chart-3"})}</div></div></div>`},
+{ short:"7 กระจุกตัว", render:()=>`
+  <h2>ลูกค้า 2 รายแรกคิดเป็น 30% ของรายได้ ความเสี่ยงกระจุกตัวสูงขึ้น (Top 2 customers are 30% of revenue)</h2><p class="sub">กระจุกตัว (Concentration) · ส่วนแบ่งจากยอดรวมของงวด</p>
+  <div class="body"><div style="flex:1"><div class="kpi-label" style="margin-bottom:.8cqw">ลูกค้า 5 อันดับแรก (Top 5 customers)</div>${hbars(D.customers.concat([["ลูกค้าอื่น ๆ",D.revTotal-D.customers.reduce((a,[,v])=>a+v,0)]]),{w:520,rowH:30,labelW:170})}</div>
+  <div style="flex:1"><div class="kpi-label" style="margin-bottom:.8cqw">ค่าใช้จ่าย 5 หมวดแรก (Top 5 expense heads)</div>${hbars(D.expenseMix,{w:520,rowH:30,labelW:170,color:"--chart-3"})}</div></div>`},
+{ short:"8 ความเสี่ยง", render:()=>`
+  <h2>ประมาณการทั้งปี 28.7 ล้านบาท ถ้าส่งผ่านราคาได้ใน ต.ค. (Full-year 28.7M if price pass-through lands in Oct)</h2><p class="sub">ความเสี่ยงและแนวโน้ม (Risks and Outlook)</p>
+  <div class="body"><table style="flex:1.4"><thead><tr><th>ความเสี่ยง</th><th>เจ้าของ</th><th>แผนรับมือ</th></tr></thead><tbody>
+  <tr><td>ลูกหนี้นอร์ทฟู้ดส์ 480,000 บาท เกิน 60 วัน</td><td>ฝ่ายบัญชี</td><td>นัดชำระภายใน 30 ก.ย. หยุดส่งของถ้าเลย</td></tr>
+  <tr><td>ต้นทุนสินค้ายังไม่ส่งผ่านราคา</td><td>ฝ่ายขาย</td><td>ปรับราคา 4% รอบ ต.ค. แจ้งลูกค้า 15 ก.ย.</td></tr>
+  <tr><td>ทีมขายใหม่ยังไม่ถึงเป้า 2 ใน 4 คน</td><td>ผู้จัดการขาย</td><td>ทบทวน 31 ต.ค. เป้า 600,000 บาท/คน/เดือน</td></tr>
+  <tr><td>รายได้กระจุก 2 ลูกค้า 30%</td><td>กรรมการผู้จัดการ</td><td>เปิดลูกค้าใหม่ 3 ราย Q4 ผ่านทีมขายใหม่</td></tr>
+  </tbody></table><div style="flex:1;min-width:0">${lineChart([{n:"รายได้",v:D.revenue.concat(D.forecast),c:"--chart-1"}],{labels:months.concat(["ก.ย.","ต.ค.","พ.ย.","ธ.ค."]),band:8,h:300})}</div></div>`},
+{ short:"9 ตัดสินใจ", render:()=>`
+  <h2>ขออนุมัติ 3 เรื่อง รวม 1,150,000 บาท เพื่อรักษากำไรทั้งปีให้ไม่ต่ำกว่าปีก่อน (Three approvals, 1.15M total)</h2><p class="sub">ข้อเสนอเพื่อตัดสินใจ (Decisions Requested)</p>
+  <div class="body">
+  ${[["1","อนุมัติปรับราคาขาย 4% ทุกกลุ่มสินค้า มีผล 1 ต.ค.","0 บาท","+780,000 บาท Q4 (ชดเชยต้นทุนสินค้าเต็มจำนวน)","ลูกค้า 5 อันดับแรกรายใดปฏิเสธ → ยกเว้นรายนั้น ทบทวน ม.ค."],["2","อนุมัติงบเก็บหนี้ภายนอกสำหรับลูกหนี้เกิน 90 วัน","150,000 บาท","เก็บคืน 190,000 บาท ภายใน 60 วัน DSO กลับสู่ 36 วัน","เก็บได้ต่ำกว่า 100,000 บาท ภายใน 60 วัน → หยุดสัญญา"],["3","อนุมัติงบการตลาดเปิดลูกค้าใหม่ Q4","1,000,000 บาท","ลูกค้าใหม่ 3 ราย รายได้ 2,400,000 บาท/ปี ลดกระจุกตัวเหลือ 25%","ลูกค้าใหม่ 0 ราย ภายใน 30 พ.ย. → หยุดใช้งบส่วนที่เหลือ"]].map(([n,t,c,r,k])=>`<div class="decision"><div class="num">${n}</div><div style="font-weight:600;font-size:1.4cqw;line-height:1.35">${t}</div><dl style="margin:0;font-size:1.2cqw"><dt>ต้นทุน (Cost)</dt><dd>${c}</dd><dt>ผลตอบแทนที่คาด (Expected return)</dt><dd>${r}</dd><dt>เงื่อนไขยกเลิก (Kill condition)</dt><dd>${k}</dd></dl></div>`).join("")}
+  </div>`},
+];
+
+// ---------- mount ----------
+const stage=document.getElementById("stage"), thumbs=document.getElementById("thumbs"), counter=document.getElementById("counter");
+slides.forEach((s,i)=>{const el=document.createElement("section");el.className="slide";el.setAttribute("aria-label",`สไลด์ ${i+1}`);el.innerHTML=`<span class="badge">ตัวอย่างข้อมูล / sample data</span>${s.render()}<div class="foot"><span>${FOOT}</span><span>${i+1} / ${slides.length}</span></div>`;stage.appendChild(el);
+  const b=document.createElement("button");b.className="thumb";b.textContent=s.short;b.addEventListener("click",()=>go(i));thumbs.appendChild(b);});
+let cur=0; try{cur=Math.min(slides.length-1,Math.max(0,parseInt(localStorage.getItem("efd-slide")||"0",10)||0));}catch{}
+function go(i){cur=(i+slides.length)%slides.length;[...stage.children].forEach((el,k)=>el.classList.toggle("on",k===cur));[...thumbs.children].forEach((el,k)=>el.setAttribute("aria-current",k===cur?"true":"false"));counter.textContent=`${cur+1} / ${slides.length}`;try{localStorage.setItem("efd-slide",String(cur));}catch{}}
+document.getElementById("prev").addEventListener("click",()=>go(cur-1));
+document.getElementById("next").addEventListener("click",()=>go(cur+1));
+document.addEventListener("keydown",e=>{if(e.target.closest("pre,input,textarea"))return;if(e.key==="ArrowRight")go(cur+1);if(e.key==="ArrowLeft")go(cur-1);});
+go(cur);
+
+// tabs
+const tabs=[...document.querySelectorAll('[role="tab"]')];
+tabs.forEach(t=>t.addEventListener("click",()=>{tabs.forEach(o=>{o.setAttribute("aria-selected",o===t?"true":"false");document.getElementById(o.getAttribute("aria-controls")).hidden=o!==t;});}));
+
+// tool input JSON
+const input={
+  filename:"finance-review-2569-01-08.pptx", mode:"finance", theme:"executive", language:"th-en", currency:"THB",
+  period:{label:"ม.ค.–ส.ค. 2569",from:"2026-01-01",to:"2026-08-31"}, compare:{label:"ม.ค.–ส.ค. 2568",from:"2025-01-01",to:"2025-08-31"},
+  source:{tool:"flowaccount", calls:["accounting__get_profit_loss","accounting__list_cash_receipts","accounting__list_cash_payments","accounting__get_ar_aging","sales__list_tax_invoices","expense__list_expenses"]},
+  sections:[
+    {layout:"summary", verdict:"mixed", sentences:["รายได้รวม 18,420,000 บาท สูงกว่างวดเทียบ 12.4% …","ค่าใช้จ่ายโต 14.8% กำไรสุทธิลด 6.8% …"], kpis:[{label:"รายได้",value:D.revTotal,compare:D.revPrev},{label:"ค่าใช้จ่าย",value:D.expTotal,compare:D.expPrev},{label:"กำไรสุทธิ",value:D.profit,compare:D.profitPrev}]},
+    {layout:"scorecard", rows:[{label:"รายได้",value:D.revTotal,compare:D.revPrev,goodIfUp:true},"… 7 more"]},
+    {layout:"trend_bar", series:{labels:months,values:D.revenue}, planBand:D.revenuePlan, annotation:{index:1,text:"ก.พ. ต่ำกว่าแผน …"}},
+    {layout:"bar_donut", bar:{labels:months,values:D.expense}, donut:D.expenseMix.map(([label,value])=>({label,value}))},
+    {layout:"waterfall", start:{label:"งวดเทียบ",value:D.profitPrev}, drivers:[{label:"ลูกค้าใหญ่ 2 ราย",value:1640000,kind:"structural"},{label:"เลื่อนรับสินค้า ก.พ.",value:-210000,kind:"timing"},{label:"ทีมขายใหม่ 4 คน",value:-1210000,kind:"investment"},{label:"ต้นทุนสินค้า +6%",value:-404000,kind:"structural"}]},
+    {layout:"cash", receipts:D.receipts, payments:D.payments, aging:D.aging.map(([label,value])=>({label,value})), dso:42, dsoCompare:36},
+    {layout:"ranked_pair", left:{title:"ลูกค้า 5 อันดับแรก",items:D.customers.map(([label,value])=>({label,value}))}, right:{title:"ค่าใช้จ่าย 5 หมวดแรก",items:D.expenseMix.map(([label,value])=>({label,value}))}},
+    {layout:"risks_outlook", risks:[{risk:"ลูกหนี้นอร์ทฟู้ดส์ 480,000 บาท เกิน 60 วัน",owner:"ฝ่ายบัญชี",mitigation:"นัดชำระภายใน 30 ก.ย."},"… 3 more"], forecast:{labels:["ก.ย.","ต.ค.","พ.ย.","ธ.ค."],values:D.forecast}},
+    {layout:"decisions", items:[{title:"ปรับราคาขาย 4% มีผล 1 ต.ค.",cost:0,expectedReturn:"+780,000 บาท Q4",killCondition:"ลูกค้า top 5 ปฏิเสธ → ยกเว้นรายนั้น"},"… 2 more"]}
+  ],
+  footer:{period:"ม.ค.–ส.ค. 2569",source:"FlowAccount",preparedOn:"2026-09-07"}
+};
+document.getElementById("jsonPre").textContent=JSON.stringify(input,null,2);
+const jt=document.getElementById("jsonToggle"), jp=document.getElementById("jsonPanel");
+jt.addEventListener("click",()=>{const open=jp.hidden;jp.hidden=!open;jt.setAttribute("aria-expanded",String(open));jt.textContent=open?"ซ่อน JSON":"แสดง JSON";});
+</script>
+</body>
+</html>

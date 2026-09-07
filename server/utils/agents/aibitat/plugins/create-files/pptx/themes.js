@@ -8,6 +8,17 @@
  * Themes: default · corporate · dark · minimal · creative
  */
 
+const FINANCE_THEME_DEFAULTS = {
+  chartColors: ["1A5276", "C9943E", "5A6D82", "7B96B5", "B8C4D0"],
+  chartPositive: "2E7D5B",
+  chartNegative: "B4392E",
+  chartNeutral: "5A6D82",
+  chartGrid: "ECE9E1",
+  statusGreen: "2E7D5B",
+  statusAmber: "B6790F",
+  statusRed: "B4392E",
+};
+
 const THEMES = {
   default: {
     name: "Professional",
@@ -148,6 +159,43 @@ const THEMES = {
     fontTitle: "Calibri",
     fontBody: "Calibri",
   },
+
+  executive: {
+    name: "Executive",
+    description: "Board-ready financial reporting with restrained accents",
+
+    titleSlideBackground: "0C1929",
+    titleSlideTitleColor: "FFFFFF",
+    titleSlideSubtitleColor: "5A6D82",
+    titleSlideAccentColor: "C9943E",
+
+    background: "FFFFFF",
+    titleColor: "0C1929",
+    subtitleColor: "5A6D82",
+    bodyColor: "2C3E50",
+    accentColor: "C8860B",
+    bulletColor: "C8860B",
+
+    tableHeaderBg: "0C1929",
+    tableHeaderColor: "FFFFFF",
+    tableAltRowBg: "F7F6F2",
+    tableBorderColor: "DAD6CC",
+
+    footerColor: "5A6D82",
+    footerLineColor: "DAD6CC",
+
+    fontTitle: "Calibri",
+    fontBody: "Calibri",
+
+    chartColors: ["1A5276", "C9943E", "5A6D82", "7B96B5", "B8C4D0"],
+    chartPositive: "2E7D5B",
+    chartNegative: "B4392E",
+    chartNeutral: "5A6D82",
+    chartGrid: "ECE9E1",
+    statusGreen: "2E7D5B",
+    statusAmber: "B6790F",
+    statusRed: "B4392E",
+  },
 };
 
 /**
@@ -157,7 +205,7 @@ const THEMES = {
  */
 function getTheme(themeName) {
   const key = (themeName || "default").toLowerCase().trim();
-  return THEMES[key] || THEMES.default;
+  return { ...FINANCE_THEME_DEFAULTS, ...(THEMES[key] || THEMES.default) };
 }
 
 /**
