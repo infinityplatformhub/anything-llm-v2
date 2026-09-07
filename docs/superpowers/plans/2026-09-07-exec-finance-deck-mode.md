@@ -19,7 +19,7 @@
 - ใน worktree session ใช้ `/usr/bin/git` และ `node node_modules/eslint/bin/eslint.js`
 - ห้าม `require` อะไรที่ดึง `@prisma/client` หรือ `jsonwebtoken` เข้าเทสนี้ (ไม่จำเป็น และ Node 26 ไม่มี SlowBuffer)
 - เทสที่สร้างไฟล์จริงต้องตั้ง `process.env.STORAGE_DIR` เป็น `fs.mkdtempSync` ก่อน `require` lib (lib อ่าน env ตอน init) และลบทิ้งใน `afterAll`
-- pptxgenjs: สี 6 หลักไม่มี `#`; options object ใหม่ทุก `add*`; stacked bar `dataLabelPosition` ∈ `ctr|inEnd|inBase`; `showLegend:false` เมื่อ series เดียว; ห้าม gradient fill
+- pptxgenjs: สี 6 หลักไม่มี `#`; options object ใหม่ทุก `add*`; stacked bar `dataLabelPosition` ∈ `ctr|inEnd|inBase`; `showLegend:false` เมื่อ series เดียว; ห้าม gradient fill; **ห้าม combo chart (array ของ {type,data,options}) ใน 4.0.1** — lineChart ใน combo อ้าง axId `2094734556` ที่ไม่ถูกประกาศ ไฟล์ corrupt (พิสูจน์ 2026-09-07); data label เป็น chart-wide ปิดต่อ series ไม่ได้; per-point สีของ bar ใช้ `chartColors` ยาวเท่าจำนวน category ได้ (`<c:dPt>`)
 - Tool handler ต้อง return string เสมอ
 
 ---
