@@ -2,6 +2,7 @@ const prisma = require("../utils/prisma");
 const slugifyModule = require("slugify");
 const { Document } = require("./documents");
 const { WorkspaceUser } = require("./workspaceUsers");
+const { WorkspaceAgentSettings } = require("./workspaceAgentSettings");
 const { ROLES } = require("../utils/middleware/multiUserProtected");
 const { v4: uuidv4 } = require("uuid");
 const { User } = require("./user");
@@ -229,6 +230,14 @@ const Workspace = {
           slug,
         },
       });
+
+      const seeded = await WorkspaceAgentSettings.seedDefaults(workspace.id);
+      if (seeded.error)
+        console.error(
+          "Workspace.new: could not seed default agent skills",
+          workspace.id,
+          seeded.error
+        );
 
       // If created with a user then we need to create the relationship as well.
       // If creating with an admin User it wont change anything because admins can
