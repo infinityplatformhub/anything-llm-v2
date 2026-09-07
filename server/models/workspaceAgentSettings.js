@@ -1,5 +1,19 @@
 const prisma = require("../utils/prisma");
 
+// Skills a new workspace starts with (#48). Mirrors the multi-user toggles in frontend/src/pages/Admin/Agents/skills.jsx; single-user-only skills and internal plugins are excluded. Users turn these off per workspace in the Agent Skills tab.
+const DEFAULT_ENABLED_SKILLS = [
+  "rag-memory",
+  "document-summarizer",
+  "web-scraping",
+  "filesystem-agent",
+  "create-files-agent",
+  "create-chart",
+  "generate-image",
+  "web-browsing",
+  "sql-agent",
+  "lark-cli",
+];
+
 function parseSkillIds(value) {
   try {
     const parsed = JSON.parse(value);
@@ -43,6 +57,15 @@ const WorkspaceAgentSettings = {
   },
 
   /**
+   * Seed a new workspace with the default enabled skills.
+   * @param {number|string} workspaceId
+   * @returns {Promise<{enabledSkills: string[]|null, error: string|null}>}
+   */
+  seedDefaults: async function (workspaceId) {
+    return this.setEnabledSkills(workspaceId, DEFAULT_ENABLED_SKILLS);
+  },
+
+  /**
    * Replace enabled skills with canonical, known skill ids.
    * @param {number|string} workspaceId
    * @param {string[]} skills
@@ -66,4 +89,4 @@ const WorkspaceAgentSettings = {
   },
 };
 
-module.exports = { WorkspaceAgentSettings };
+module.exports = { WorkspaceAgentSettings, DEFAULT_ENABLED_SKILLS };

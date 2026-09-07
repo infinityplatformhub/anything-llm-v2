@@ -1,3 +1,6 @@
+require("../utils/lark/_polyfill");
+/* global jest */
+const { describe, beforeEach, it, expect } = require("@jest/globals");
 process.env.NODE_ENV = "test";
 jest.mock("../../utils/prisma", () => ({
   workspace_agent_settings: {
@@ -6,7 +9,10 @@ jest.mock("../../utils/prisma", () => ({
   },
 }));
 const prisma = require("../../utils/prisma");
-const { WorkspaceAgentSettings } = require("../../models/workspaceAgentSettings");
+const {
+  WorkspaceAgentSettings,
+  DEFAULT_ENABLED_SKILLS,
+} = require("../../models/workspaceAgentSettings");
 
 describe("WorkspaceAgentSettings", () => {
   beforeEach(() => jest.clearAllMocks());
@@ -110,6 +116,38 @@ describe("WorkspaceAgentSettings", () => {
       create: { workspace_id: 7, enabled_skills: '["rag-memory"]' },
       update: { enabled_skills: '["rag-memory"]' },
     });
+  });
+
+  it("seedDefaults upserts the default enabled skills", async () => {
+    const result = await WorkspaceAgentSettings.seedDefaults(7);
+
+    expect(prisma.workspace_agent_settings.upsert).toHaveBeenCalledWith({
+      where: { workspace_id: 7 },
+      create: {
+        workspace_id: 7,
+        enabled_skills: JSON.stringify(DEFAULT_ENABLED_SKILLS),
+      },
+      update: { enabled_skills: JSON.stringify(DEFAULT_ENABLED_SKILLS) },
+    });
+    expect(result).toEqual({
+      enabledSkills: DEFAULT_ENABLED_SKILLS,
+      error: null,
+    });
+  });
+
+  it("exports exactly the default enabled skills in order", () => {
+    expect(DEFAULT_ENABLED_SKILLS).toEqual([
+      "rag-memory",
+      "document-summarizer",
+      "web-scraping",
+      "filesystem-agent",
+      "create-files-agent",
+      "create-chart",
+      "generate-image",
+      "web-browsing",
+      "sql-agent",
+      "lark-cli",
+    ]);
   });
 
   it("returns null skills and error when writing fails", async () => {
