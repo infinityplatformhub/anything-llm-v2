@@ -448,7 +448,12 @@ function renderTrendBar(slide, pptx, section, theme, ctx) {
       w: chartW,
       h: chartH,
       barDir: "col",
-      chartColors: [theme.chartColors[0]],
+      chartColors: section.data.values.map((value) => {
+        if (!section.data.planBand) return theme.chartColors[0];
+        if (value < section.data.planBand.low) return theme.chartNegative;
+        if (value > section.data.planBand.high) return theme.chartPositive;
+        return theme.chartColors[0];
+      }),
       dataLabelFormatCode: "#,##0",
       dataLabelPosition: "outEnd",
       showLegend: false,
@@ -459,32 +464,35 @@ function renderTrendBar(slide, pptx, section, theme, ctx) {
   );
 
   if (section.data.planBand) {
-    const plotTop = chartY + 0.18;
-    const plotBottom = chartY + chartH - 0.48;
-    const plotHeight = plotBottom - plotTop;
-    [section.data.planBand.low, section.data.planBand.high].forEach((value) => {
-      const y = plotBottom - (value / axisMax) * plotHeight;
-      slide.addShape(pptx.ShapeType.line, {
-        x: chartX + 0.5,
-        y,
-        w: chartW - 0.72,
-        h: 0,
-        line: {
-          color: theme.chartNeutral,
-          width: 1,
-          dashType: "dash",
-          transparency: 25,
-        },
-      });
-    });
+    const inBandCount = section.data.values.filter(
+      (value) =>
+        value >= section.data.planBand.low &&
+        value <= section.data.planBand.high
+    ).length;
+    slide.addText(
+      `ช่วงแผน ${formatNumber(section.data.planBand.low)}–${formatNumber(
+        section.data.planBand.high
+      )} ${section.data.unit || ctx.unit} · ${inBandCount} จาก ${section.data.values.length} เดือนอยู่ในช่วง`,
+      {
+        x: chartX + 0.1,
+        y: chartY + chartH + 0.03,
+        w: chartW - 0.2,
+        h: 0.2,
+        fontSize: 8,
+        bold: true,
+        color: theme.chartNeutral,
+        fontFace: theme.fontBody,
+        fit: "shrink",
+      }
+    );
   }
 
   if (section.data.annotation) {
     slide.addText(section.data.annotation, {
       x: chartX + 0.1,
-      y: chartY + chartH + 0.03,
+      y: chartY + chartH + (section.data.planBand ? 0.23 : 0.03),
       w: chartW - 0.2,
-      h: 0.28,
+      h: 0.22,
       fontSize: 8.5,
       color: theme.chartNeutral,
       fontFace: theme.fontBody,
@@ -513,6 +521,7 @@ function renderBarDonut(slide, pptx, section, theme, ctx) {
       h: 2.92,
       barDir: "col",
       chartColors: [theme.chartColors[0]],
+      dataLabelFontSize: 8,
       dataLabelFormatCode: "#,##0",
       dataLabelPosition: "outEnd",
       showLegend: false,
@@ -539,10 +548,12 @@ function renderBarDonut(slide, pptx, section, theme, ctx) {
       dataLabelFontFace: theme.fontBody,
       dataLabelFontSize: 8,
       holeSize: 55,
+      dataLabelPosition: "ctr",
       legendColor: theme.subtitleColor,
       legendFontFace: theme.fontBody,
       legendFontSize: 8,
       legendPos: "r",
+      showLabel: false,
       showLegend: true,
       showPercent: true,
       showTitle: false,
@@ -589,12 +600,24 @@ function renderWaterfall(slide, pptx, section, theme, ctx) {
   up.push(section.data.end.value);
   down.push(0);
 
+  const chartY = contentStartY;
+  const chartH = 2.62;
+  const cumulativeValues = [section.data.start.value];
+  let cumulative = section.data.start.value;
+  section.data.steps.forEach((step) => {
+    cumulative += step.value;
+    cumulativeValues.push(cumulative);
+  });
+  const axisMax =
+    Math.ceil(
+      (Math.max(...cumulativeValues, section.data.end.value) * 1.18) / 100000
+    ) * 100000;
   const options = {
     ...commonChartOptions(theme),
     x: MARGIN_X,
-    y: contentStartY,
+    y: chartY,
     w: CONTENT_W,
-    h: 2.62,
+    h: chartH,
     barDir: "col",
     barGrouping: "stacked",
     barOverlapPct: 100,
@@ -602,7 +625,9 @@ function renderWaterfall(slide, pptx, section, theme, ctx) {
     dataLabelFormatCode: "#,##0",
     dataLabelPosition: "inEnd",
     showLegend: false,
-    showValue: true,
+    showValue: false,
+    valAxisMaxVal: axisMax,
+    valAxisMinVal: 0,
   };
   assertStackedLabelPosition(options);
   slide.addChart(
@@ -621,6 +646,32 @@ function renderWaterfall(slide, pptx, section, theme, ctx) {
     investment: "การลงทุน",
   };
   const cellW = CONTENT_W / labels.length;
+  const plotTop = chartY + 0.18;
+  const plotBottom = chartY + chartH - 0.48;
+  const plotHeight = plotBottom - plotTop;
+  const valueLabels = [
+    { value: section.data.start.value, top: section.data.start.value },
+    ...section.data.steps.map((step, index) => ({
+      value: Math.abs(step.value),
+      top: Math.max(cumulativeValues[index], cumulativeValues[index + 1]),
+    })),
+    { value: section.data.end.value, top: section.data.end.value },
+  ];
+  valueLabels.forEach((label, index) => {
+    const y = plotBottom - (label.top / axisMax) * plotHeight - 0.22;
+    slide.addText(formatNumber(label.value), {
+      x: MARGIN_X + cellW * index,
+      y,
+      w: cellW,
+      h: 0.2,
+      align: "center",
+      color: theme.bodyColor,
+      fontFace: theme.fontBody,
+      fontSize: 7.5,
+      fit: "shrink",
+      margin: 0,
+    });
+  });
   section.data.steps.forEach((step, index) => {
     slide.addText(kindLabels[step.kind], {
       x: MARGIN_X + cellW * (index + 1),
@@ -818,38 +869,17 @@ function renderRisksOutlook(slide, pptx, section, theme, ctx) {
 
   const forecast = section.data.forecast;
   slide.addChart(
+    pptx.ChartType.line,
     [
       {
-        type: pptx.ChartType.line,
-        data: [
-          {
-            name: "ผลจริง",
-            labels: [...forecast.categories],
-            values: [...forecast.actual],
-          },
-        ],
-        options: {
-          chartColors: [theme.chartColors[0]],
-          lineDash: "solid",
-          lineDataSymbol: "none",
-          lineSize: 2,
-        },
+        name: "ผลจริง",
+        labels: [...forecast.categories],
+        values: [...forecast.actual],
       },
       {
-        type: pptx.ChartType.line,
-        data: [
-          {
-            name: "ประมาณการ",
-            labels: [...forecast.categories],
-            values: [...forecast.forecast],
-          },
-        ],
-        options: {
-          chartColors: [theme.chartColors[1]],
-          lineDash: "dash",
-          lineDataSymbol: "none",
-          lineSize: 2,
-        },
+        name: "ประมาณการ",
+        labels: [...forecast.categories],
+        values: [...forecast.forecast],
       },
     ],
     {
@@ -871,6 +901,36 @@ function renderRisksOutlook(slide, pptx, section, theme, ctx) {
 
 async function fixEmbeddedChartTables(buffer) {
   const pptxZip = await JSZip.loadAsync(buffer);
+  const chartNames = Object.keys(pptxZip.files).filter((name) =>
+    /^ppt\/charts\/chart\d+\.xml$/.test(name)
+  );
+  await Promise.all(
+    chartNames.map(async (chartName) => {
+      const chartXml = await pptxZip.file(chartName).async("string");
+      if (chartXml.includes("<c:doughnutChart>")) {
+        pptxZip.file(
+          chartName,
+          chartXml.replace(/<c:dLbl>([\s\S]*?)<\/c:dLbl>/g, (label, content) =>
+            label.includes("<c:dLblPos")
+              ? label
+              : `<c:dLbl>${content}<c:dLblPos val="ctr"/></c:dLbl>`
+          )
+        );
+        return;
+      }
+      if (!chartXml.includes("<c:v>ประมาณการ</c:v>")) return;
+      const series = chartXml.match(/<c:ser>[\s\S]*?<\/c:ser>/g) || [];
+      if (series.length !== 2) return;
+      series[1] = series[1].replace(
+        '<a:prstDash val="solid"/>',
+        '<a:prstDash val="dash"/>'
+      );
+      pptxZip.file(
+        chartName,
+        chartXml.replace(/<c:ser>[\s\S]*?<\/c:ser>/g, () => series.shift())
+      );
+    })
+  );
   const embeddingNames = Object.keys(pptxZip.files).filter((name) =>
     /^ppt\/embeddings\/.*\.xlsx$/.test(name)
   );

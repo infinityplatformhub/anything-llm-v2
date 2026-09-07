@@ -43,6 +43,19 @@ function copy(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+async function getSlideChartXml(zip, slideNumber) {
+  const relationships = await zip
+    .file(`ppt/slides/_rels/slide${slideNumber}.xml.rels`)
+    .async("string");
+  const targets = Array.from(
+    relationships.matchAll(/charts\/(chart\d+\.xml)/g),
+    (match) => match[1]
+  );
+  return Promise.all(
+    targets.map((target) => zip.file(`ppt/charts/${target}`).async("string"))
+  );
+}
+
 function setupTool() {
   let captured;
   const aibitat = {
@@ -279,6 +292,93 @@ describe("pptx-finance executive theme and layouts", () => {
 
     expect(chartXml).toContain('<c:grouping val="stacked"/>');
     expect(chartXml).toContain('<c:dLblPos val="inEnd"/>');
+  });
+
+  test("waterfall hides chart labels and draws visible values as slide text", async () => {
+    const tool = setupTool();
+    await tool.call(fixture);
+    const outputDirectory = path.join(storageDir, "generated-files");
+    const downloadCall = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
+    );
+    const [chartXml] = await getSlideChartXml(zip, 6);
+    const slideXml = await zip.file("ppt/slides/slide6.xml").async("string");
+
+    expect(chartXml).not.toContain('<c:showVal val="1"/>');
+    expect(chartXml).toContain('<c:showVal val="0"/>');
+    expect(slideXml).toContain("1,640,000");
+    expect(slideXml).toContain("2,530,000");
+  });
+
+  test("bar and doughnut charts render compact complete data labels", async () => {
+    const tool = setupTool();
+    await tool.call(fixture);
+    const outputDirectory = path.join(storageDir, "generated-files");
+    const downloadCall = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
+    );
+    const [barXml, donutXml] = await getSlideChartXml(zip, 5);
+
+    expect(barXml).toMatch(
+      /<c:dLbls>(?:(?!<\/c:dLbls>)[\s\S])*?<a:defRPr[^>]*sz="800"/
+    );
+    expect(donutXml).toContain('<c:showPercent val="1"/>');
+    expect(donutXml).toContain('<c:showCatName val="0"/>');
+    const doughnutLabels = donutXml.match(/<c:dLbl>[\s\S]*?<\/c:dLbl>/g) || [];
+    expect(doughnutLabels).toHaveLength(fixture.sections[3].data.donut.values.length);
+    doughnutLabels.forEach((label) =>
+      expect(label).toContain('<c:dLblPos val="ctr"/>')
+    );
+  });
+
+  test("trend plan band pins its axis and encodes exact range without shapes", async () => {
+    const tool = setupTool();
+    await tool.call(fixture);
+    const outputDirectory = path.join(storageDir, "generated-files");
+    const downloadCall = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
+    );
+    const [chartXml] = await getSlideChartXml(zip, 4);
+    const slideXml = await zip.file("ppt/slides/slide4.xml").async("string");
+    const planLines = (slideXml.match(/<p:sp>[\s\S]*?<\/p:sp>/g) || []).filter(
+      (shape) =>
+        shape.includes('prst="line"') && shape.includes('prstDash val="dash"')
+    );
+
+    expect(chartXml).toContain('<c:max val="3000000"/>');
+    expect((chartXml.match(/<c:ser>/g) || [])).toHaveLength(1);
+    expect((chartXml.match(/<c:dPt>/g) || [])).toHaveLength(8);
+    expect(chartXml).not.toContain("<c:lineChart>");
+    expect(slideXml).toContain(
+      "ช่วงแผน 2,100,000–2,350,000 บาท · 2 จาก 8 เดือนอยู่ในช่วง"
+    );
+    expect(planLines).toHaveLength(0);
+  });
+
+  test("forecast uses one valid chart with dashed forecast series", async () => {
+    const tool = setupTool();
+    await tool.call(fixture);
+    const outputDirectory = path.join(storageDir, "generated-files");
+    const downloadCall = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
+    );
+    const [chartXml] = await getSlideChartXml(zip, 9);
+
+    expect((chartXml.match(/<c:lineChart>/g) || [])).toHaveLength(1);
+    expect((chartXml.match(/<c:ser>/g) || [])).toHaveLength(2);
+    expect(chartXml).toContain('<a:prstDash val="dash"/>');
   });
 
   test("(n) stacked chart guard rejects outEnd labels", () => {
