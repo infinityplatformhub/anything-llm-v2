@@ -250,8 +250,10 @@ const Workspace = {
     const none = { workspace: null, created: false };
     if (!user?.id || user.role !== ROLES.default) return none;
     try {
-      const existing = await this.whereWithUser(user, {}, 1);
-      if (existing.length > 0) return none;
+      const count = await prisma.workspaces.count({
+        where: { workspace_users: { some: { user_id: user.id } } },
+      });
+      if (count > 0) return none;
       // Name template is product copy, not environment config; a true constant.
       const name = `${user.username}'s workspace`;
       const { workspace, message } = await this.new(name, user.id);
