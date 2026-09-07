@@ -48,43 +48,54 @@ function addFinanceChrome(slide, pptx, section, theme, ctx) {
   addTopAccentBar(slide, pptx, theme);
   slide.addText(section.title, {
     x: MARGIN_X,
-    y: 0.3,
+    y: 0.25,
     w: CONTENT_W,
-    h: 0.65,
-    fontSize: 24,
+    h: 1.0,
+    fontSize: 22,
     bold: true,
     color: theme.titleColor,
     fontFace: theme.fontTitle,
     valign: "bottom",
+    fit: "shrink",
   });
 
+  let contentStartY = 1.35;
   if (section.subtitle) {
     slide.addText(section.subtitle, {
       x: MARGIN_X,
-      y: 1.0,
+      y: 1.3,
       w: CONTENT_W,
       h: 0.3,
       fontSize: 13,
       color: theme.subtitleColor,
       fontFace: theme.fontBody,
     });
+    contentStartY = 1.65;
   }
 
-  addAccentUnderline(slide, pptx, MARGIN_X, 1.38, theme.accentColor);
+  addAccentUnderline(
+    slide,
+    pptx,
+    MARGIN_X,
+    contentStartY + 0.05,
+    theme.accentColor
+  );
   addSlideFooter(slide, pptx, theme, ctx.slideNumber, ctx.totalSlides);
   addBranding(slide, theme.background);
   addDeckFooter(slide, theme, ctx.footer);
   if (section.notes) slide.addNotes(section.notes);
+  return contentStartY + 0.25;
 }
 
 function renderSummary(slide, pptx, section, theme, ctx) {
-  addFinanceChrome(slide, pptx, section, theme, ctx);
+  const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
+  const narrativeHeight = 0.72;
 
   slide.addText(section.data.narrative, {
     x: MARGIN_X,
-    y: 1.62,
+    y: contentStartY,
     w: CONTENT_W,
-    h: 0.72,
+    h: narrativeHeight,
     fontSize: 15,
     color: theme.bodyColor,
     fontFace: theme.fontBody,
@@ -98,19 +109,20 @@ function renderSummary(slide, pptx, section, theme, ctx) {
     mixed: { text: "ผสม", color: theme.statusAmber },
   };
   const verdict = verdicts[section.data.verdict];
+  const verdictY = contentStartY + narrativeHeight + 0.1;
   slide.addShape(pptx.ShapeType.roundRect, {
-    x: 7.75,
-    y: 2.23,
-    w: 1.35,
+    x: MARGIN_X,
+    y: verdictY,
+    w: 1.6,
     h: 0.34,
     rectRadius: 0.05,
     fill: { color: verdict.color, transparency: 86 },
     line: { color: verdict.color, pt: 0.8 },
   });
   slide.addText(verdict.text, {
-    x: 7.75,
-    y: 2.27,
-    w: 1.35,
+    x: MARGIN_X,
+    y: verdictY + 0.04,
+    w: 1.6,
     h: 0.2,
     fontSize: 10,
     bold: true,
@@ -121,13 +133,14 @@ function renderSummary(slide, pptx, section, theme, ctx) {
   });
 
   const tileW = 2.7;
+  const tilesY = verdictY + 0.58;
   section.data.metrics.slice(0, 3).forEach((metric, index) => {
     const x = MARGIN_X + index * 2.95;
     const deltaColor =
       metric.delta >= 0 ? theme.chartPositive : theme.chartNegative;
     slide.addShape(pptx.ShapeType.rect, {
       x,
-      y: 2.72,
+      y: tilesY,
       w: tileW,
       h: 0.06,
       fill: { color: theme.accentColor },
@@ -135,7 +148,7 @@ function renderSummary(slide, pptx, section, theme, ctx) {
     });
     slide.addText(metric.label, {
       x,
-      y: 2.92,
+      y: tilesY + 0.2,
       w: tileW,
       h: 0.28,
       fontSize: 10,
@@ -146,7 +159,7 @@ function renderSummary(slide, pptx, section, theme, ctx) {
     });
     slide.addText(formatNumber(metric.value, ctx.unit), {
       x,
-      y: 3.28,
+      y: tilesY + 0.56,
       w: tileW,
       h: 0.55,
       fontSize: 23,
@@ -157,7 +170,7 @@ function renderSummary(slide, pptx, section, theme, ctx) {
     });
     slide.addText(formatPct(metric.delta), {
       x,
-      y: 3.95,
+      y: tilesY + 1.23,
       w: 0.75,
       h: 0.28,
       fontSize: 12,
@@ -167,7 +180,7 @@ function renderSummary(slide, pptx, section, theme, ctx) {
     });
     slide.addText(metric.deltaLabel, {
       x: x + 0.78,
-      y: 3.95,
+      y: tilesY + 1.23,
       w: tileW - 0.78,
       h: 0.42,
       fontSize: 9,
@@ -179,7 +192,7 @@ function renderSummary(slide, pptx, section, theme, ctx) {
 }
 
 function renderScorecard(slide, pptx, section, theme, ctx) {
-  addFinanceChrome(slide, pptx, section, theme, ctx);
+  const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
   const headers = [...section.data.columns, "สถานะ"];
   const tableRows = [
     headers.map((header, index) => ({
@@ -266,7 +279,7 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
 
   slide.addTable(tableRows, {
     x: MARGIN_X,
-    y: 1.65,
+    y: contentStartY,
     w: CONTENT_W,
     colW: [3.05, 1.45, 1.45, 1.45, 0.7],
     rowH: 0.34,
@@ -275,16 +288,17 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
 }
 
 function renderDecisions(slide, pptx, section, theme, ctx) {
-  addFinanceChrome(slide, pptx, section, theme, ctx);
+  const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
   const items = section.data.items.slice(0, 3);
   const gap = 0.22;
   const cardW = (CONTENT_W - gap * 2) / 3;
+  const cardY = contentStartY;
 
   items.forEach((item, index) => {
     const x = MARGIN_X + index * (cardW + gap);
     slide.addShape(pptx.ShapeType.roundRect, {
       x,
-      y: 1.72,
+      y: cardY,
       w: cardW,
       h: 2.92,
       rectRadius: 0.05,
@@ -293,7 +307,7 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
     });
     slide.addShape(pptx.ShapeType.rect, {
       x,
-      y: 1.72,
+      y: cardY,
       w: 0.08,
       h: 2.92,
       fill: { color: theme.accentColor },
@@ -301,7 +315,7 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
     });
     slide.addText(String(index + 1), {
       x: x + 0.22,
-      y: 1.9,
+      y: cardY + 0.18,
       w: 0.35,
       h: 0.34,
       fontSize: 17,
@@ -311,7 +325,7 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
     });
     slide.addText(item.title, {
       x: x + 0.22,
-      y: 2.3,
+      y: cardY + 0.58,
       w: cardW - 0.42,
       h: 0.62,
       fontSize: 11.5,
@@ -323,7 +337,7 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
     });
     slide.addText("ต้นทุน", {
       x: x + 0.22,
-      y: 3.0,
+      y: cardY + 1.28,
       w: cardW - 0.42,
       h: 0.18,
       fontSize: 8,
@@ -333,7 +347,7 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
     });
     slide.addText(formatNumber(item.cost, ctx.unit), {
       x: x + 0.22,
-      y: 3.2,
+      y: cardY + 1.48,
       w: cardW - 0.42,
       h: 0.28,
       fontSize: 12,
@@ -343,7 +357,7 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
     });
     slide.addText("ผลตอบแทนที่คาด", {
       x: x + 0.22,
-      y: 3.55,
+      y: cardY + 1.83,
       w: cardW - 0.42,
       h: 0.18,
       fontSize: 8,
@@ -357,7 +371,7 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
         : item.expectedReturn,
       {
         x: x + 0.22,
-        y: 3.76,
+        y: cardY + 2.04,
         w: cardW - 0.42,
         h: 0.32,
         fontSize: 9.5,
@@ -368,7 +382,7 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
     );
     slide.addText("เงื่อนไขยกเลิก", {
       x: x + 0.22,
-      y: 4.12,
+      y: cardY + 2.4,
       w: cardW - 0.42,
       h: 0.18,
       fontSize: 8,
@@ -378,7 +392,7 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
     });
     slide.addText(item.killCondition, {
       x: x + 0.22,
-      y: 4.32,
+      y: cardY + 2.6,
       w: cardW - 0.42,
       h: 0.24,
       fontSize: 8.5,
@@ -390,7 +404,7 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
 }
 
 function renderRisksOutlook(slide, pptx, section, theme, ctx) {
-  addFinanceChrome(slide, pptx, section, theme, ctx);
+  const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
   const headers = ["ความเสี่ยง", "เจ้าของ", "แนวทางรับมือ"];
   const tableRows = [
     headers.map((header) => ({
@@ -428,11 +442,25 @@ function renderRisksOutlook(slide, pptx, section, theme, ctx) {
 
   slide.addTable(tableRows, {
     x: MARGIN_X,
-    y: 1.7,
+    y: contentStartY,
     w: 5.2,
     colW: [2.05, 1.05, 2.1],
     rowH: 0.58,
     border: { type: "solid", pt: 0.5, color: theme.tableBorderColor },
+  });
+}
+
+function renderPendingSlide(slide, pptx, section, theme, ctx) {
+  const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
+  slide.addText(`layout ${section.layout} pending`, {
+    x: MARGIN_X,
+    y: contentStartY,
+    w: CONTENT_W,
+    h: 0.5,
+    fontSize: 15,
+    color: theme.bodyColor,
+    fontFace: theme.fontBody,
+    bullet: { code: "25AA", color: theme.bulletColor },
   });
 }
 
@@ -441,6 +469,7 @@ const RENDERERS = {
   scorecard: renderScorecard,
   decisions: renderDecisions,
   risks_outlook: renderRisksOutlook,
+  __pending: renderPendingSlide,
 };
 
 module.exports = { RENDERERS, formatNumber, formatPct, addDeckFooter };

@@ -342,22 +342,11 @@ module.exports.CreatePptxPresentation = {
 
               let allSlides;
               if (mode === "finance") {
-                allSlides = sections.map((section) => {
-                  const financeContext = {
-                    unit: section.unit || unit,
-                    footer: section.footer || footer,
-                  };
-                  if (
-                    RENDERERS[section.layout] ||
-                    ["content", "section", "blank"].includes(section.layout)
-                  )
-                    return { ...section, ...financeContext };
-                  return {
-                    ...section,
-                    content: [`layout ${section.layout} pending`],
-                    ...financeContext,
-                  };
-                });
+                allSlides = sections.map((section) => ({
+                  ...section,
+                  unit: section.unit || unit,
+                  footer: section.footer || footer,
+                }));
               } else {
                 const conversationContext = extractConversationContext(
                   this.super._chats
@@ -428,7 +417,12 @@ module.exports.CreatePptxPresentation = {
                 const slideNumber = index + 1;
                 const layout = slideData.layout || "content";
                 const financeRenderer =
-                  mode === "finance" ? RENDERERS[layout] : null;
+                  mode === "finance"
+                    ? RENDERERS[layout] ||
+                      (!["content", "section", "blank"].includes(layout)
+                        ? RENDERERS.__pending
+                        : null)
+                    : null;
 
                 if (financeRenderer) {
                   financeRenderer(slide, pptx, slideData, theme, {

@@ -218,20 +218,31 @@ describe("pptx-finance executive theme and layouts", () => {
     const zip = await JSZip.loadAsync(
       fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
     );
-    const [summaryXml, scorecardXml, risksXml, decisionsXml] = await Promise.all(
-      [2, 3, 9, 10].map((slideNumber) =>
+    const slideXml = await Promise.all(
+      Array.from({ length: 10 }, (_, index) => index + 1).map((slideNumber) =>
         zip.file(`ppt/slides/slide${slideNumber}.xml`).async("string")
       )
     );
+    const [summaryXml, scorecardXml, risksXml, decisionsXml] = [2, 3, 9, 10].map(
+      (slideNumber) => slideXml[slideNumber - 1]
+    );
 
+    for (const renderedXml of [summaryXml, scorecardXml, risksXml, decisionsXml])
+      expect(renderedXml).not.toContain("pending");
     expect(summaryXml).toContain("18,420,000");
+    const titleShape = summaryXml
+      .match(/<p:sp>[\s\S]*?<\/p:sp>/g)
+      .find((shape) => shape.includes(fixture.sections[0].title));
+    expect(titleShape).toContain("<a:normAutofit");
     expect(scorecardXml).toContain("<a:tbl>");
     expect(risksXml).toContain("<a:tbl>");
     expect((decisionsXml.match(/roundRect/g) || []).length).toBeGreaterThanOrEqual(
       3
     );
-    for (const slideXml of [summaryXml, scorecardXml, risksXml, decisionsXml])
-      expect(slideXml).not.toContain("pending");
+    for (const pendingXml of slideXml.slice(3, 8)) {
+      expect(pendingXml).toContain("งวด");
+      expect(pendingXml).toContain("FlowAccount");
+    }
   });
 });
 
