@@ -379,7 +379,9 @@ function workspaceEndpoints(app) {
     async (request, response) => {
       try {
         const user = await userFromSession(request, response);
-        const workspaces = multiUserMode(response)
+        const isMultiUser = multiUserMode(response);
+        if (isMultiUser) await Workspace.ensurePersonal(user);
+        const workspaces = isMultiUser
           ? await Workspace.whereWithUser(user)
           : await Workspace.where();
 

@@ -8,6 +8,9 @@ const { User } = require("./user");
 const { PromptHistory } = require("./promptHistory");
 const { SystemSettings } = require("./systemSettings");
 
+// ponytail: in-process dedupe only; server runs single-process today. Multi-replica deploys need a DB constraint (unique personal_for_user_id on workspaces) to be race-proof.
+const personalWorkspaceInflight = new Map();
+
 function isNullOrNaN(value) {
   if (value === null) return true;
   return isNaN(value);
@@ -236,6 +239,56 @@ const Workspace = {
       console.error(error.message);
       return { workspace: null, message: error.message };
     }
+  },
+
+  /**
+   * Ensure a `default`-role user owns at least one workspace. Idempotent: the
+   * lookup only counts workspaces the user is a member of, so a second call
+   * after creation is a no-op. Never throws — the caller is the sidebar list
+   * route, which must still return.
+   * @param {{id:number, username:string, role:string}|null} user
+   * @returns {Promise<{workspace: object|null, created: boolean}>}
+   */
+  ensurePersonal: async function (user) {
+    const none = { workspace: null, created: false };
+    if (!user?.id || !user.username || user.role !== ROLES.default) return none;
+    if (personalWorkspaceInflight.has(user.id))
+      return personalWorkspaceInflight.get(user.id);
+
+    const pending = (async () => {
+      try {
+        const count = await prisma.workspaces.count({
+          where: { workspace_users: { some: { user_id: user.id } } },
+        });
+        if (count > 0) return none;
+        // Not localized: workspace names are user-editable data, not UI copy. Max 64-char username + suffix stays under validations.name's 255 cap.
+        const name = `${user.username}'s workspace`;
+        const { workspace, message } = await this.new(name, user.id);
+        if (!workspace) {
+          console.error("ensurePersonal: failed to create workspace", message);
+          return none;
+        }
+        const membership = await WorkspaceUser.get({
+          user_id: user.id,
+          workspace_id: workspace.id,
+        });
+        if (!membership) {
+          console.error(
+            "ensurePersonal: workspace created without membership, removing",
+            workspace.id
+          );
+          await this.delete({ id: workspace.id });
+          return none;
+        }
+        return { workspace, created: true };
+      } catch (error) {
+        console.error("ensurePersonal:", error.message);
+        return none;
+      }
+    })().finally(() => personalWorkspaceInflight.delete(user.id));
+
+    personalWorkspaceInflight.set(user.id, pending);
+    return pending;
   },
 
   /**
