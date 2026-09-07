@@ -423,6 +423,66 @@ describe("pptx-finance executive theme and layouts", () => {
     expect(renamedSeries[1]).toContain('<a:prstDash val="dash"/>');
   });
 
+  test("(r) cash chart keeps both line series solid", async () => {
+    const tool = setupTool();
+    await tool.call(fixture);
+    const outputDirectory = path.join(storageDir, "generated-files");
+    const downloadCall = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
+    );
+    const [cashXml] = await getSlideChartXml(zip, 7);
+
+    expect(cashXml).not.toContain('<a:prstDash val="dash"/>');
+    expect(cashXml.match(/<a:prstDash val="solid"\/>/g).length).toBeGreaterThanOrEqual(
+      2
+    );
+  });
+
+  test("(s) forecast second series stays dashed", async () => {
+    const tool = setupTool();
+    await tool.call(fixture);
+    const outputDirectory = path.join(storageDir, "generated-files");
+    const downloadCall = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
+    );
+    const [forecastXml] = await getSlideChartXml(zip, 9);
+    const series = forecastXml.match(/<c:ser>[\s\S]*?<\/c:ser>/g) || [];
+
+    expect(series).toHaveLength(2);
+    expect(series[1]).toContain('<a:prstDash val="dash"/>');
+  });
+
+  test("(t) fixer leaves fully populated two-series line charts untouched", async () => {
+    const PptxGenJS = require("pptxgenjs");
+    const pptx = new PptxGenJS();
+    const slide = pptx.addSlide();
+    slide.addChart(
+      pptx.ChartType.line,
+      [
+        { name: "One", labels: ["A", "B"], values: [1, 2] },
+        { name: "Two", labels: ["A", "B"], values: [2, 3] },
+      ],
+      { chartColors: ["1A5276", "C9943E"], lineDataSymbol: "none" }
+    );
+    const fixedZip = await JSZip.loadAsync(
+      await fixEmbeddedChartTables(
+        await pptx.write({ outputType: "nodebuffer" })
+      )
+    );
+    const chartName = Object.keys(fixedZip.files).find((name) =>
+      /^ppt\/charts\/chart\d+\.xml$/.test(name)
+    );
+    const chartXml = await fixedZip.file(chartName).async("string");
+
+    expect(chartXml).not.toContain('<a:prstDash val="dash"/>');
+  });
+
   test("(n) stacked chart guard rejects outEnd labels", () => {
     expect(() =>
       assertStackedLabelPosition({

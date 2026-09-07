@@ -899,6 +899,16 @@ function renderRisksOutlook(slide, pptx, section, theme, ctx) {
   );
 }
 
+function seriesHasNumericGaps(seriesXml) {
+  const numCache = seriesXml.match(/<c:numCache>[\s\S]*?<\/c:numCache>/)?.[0];
+  if (!numCache) return false;
+  const pointCount = Number(numCache.match(/<c:ptCount val="(\d+)"/)?.[1]);
+  const populatedPoints = (
+    numCache.match(/<c:pt idx="\d+"><c:v>[^<]+<\/c:v><\/c:pt>/g) || []
+  ).length;
+  return pointCount > populatedPoints;
+}
+
 async function fixEmbeddedChartTables(buffer) {
   const pptxZip = await JSZip.loadAsync(buffer);
   const chartNames = Object.keys(pptxZip.files).filter((name) =>
@@ -924,7 +934,7 @@ async function fixEmbeddedChartTables(buffer) {
       const lineChart = chartXml.match(/<c:lineChart>[\s\S]*?<\/c:lineChart>/);
       if (!lineChart) return;
       const series = lineChart[0].match(/<c:ser>[\s\S]*?<\/c:ser>/g) || [];
-      if (series.length !== 2) return;
+      if (series.length !== 2 || !series.every(seriesHasNumericGaps)) return;
       series[1] = series[1].replace(
         '<a:prstDash val="solid"/>',
         '<a:prstDash val="dash"/>'
