@@ -48,7 +48,9 @@ Agent ที่ต่อ FlowAccount ผ่าน MCP สร้าง PPTX ส�
 ## Validation (fail-closed)
 
 - `mode: "finance"` แต่ section ใด `layout` ไม่รู้จัก หรือ `data` ขาด field ที่จำเป็น → return string error บอก section index + field ที่ขาด, **ไม่สร้างไฟล์**
-- `waterfall`: `start + Σsteps` ต้องเท่ากับ `end` (tolerance 1) ไม่งั้น error (กัน LLM ยัดเลขไม่ตรง)
+- `waterfall`: `start + Σsteps` ต้องเท่ากับ `end` (tolerance 1) ไม่งั้น error (กัน LLM ยัดเลขไม่ตรง); ยอดสะสมห้ามต่ำกว่า 0 (แกนเริ่มที่ 0 โดยโครงสร้าง stacked bar) — ขาดทุนให้ส่งเป็นค่าบวกพร้อม label ว่าขาดทุน
+- `subtitle` ถ้ามีต้องเป็น string
+- layout เดิม (`content`, `section`, `blank`) ผ่านโหมด finance โดย**ไม่ validate** — ใช้ renderer เดิมของ outline ตามเดิม
 - `scorecard.rows.status` นอก enum → error
 - `outline` mode ไม่เปลี่ยนพฤติกรรมใด ๆ (regression test บังคับ)
 
