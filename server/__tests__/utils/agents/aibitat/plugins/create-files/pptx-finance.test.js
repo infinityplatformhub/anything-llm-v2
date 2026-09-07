@@ -2,29 +2,10 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const JSZip = require("jszip");
 
 const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), "pptx-finance-"));
 process.env.STORAGE_DIR = storageDir;
-
-jest.mock("pptxgenjs", () => {
-  const slide = {
-    addText: jest.fn(),
-    addShape: jest.fn(),
-    addImage: jest.fn(),
-    addTable: jest.fn(),
-    addNotes: jest.fn(),
-  };
-  return class PptxGenJS {
-    static ShapeType = { rect: "rect" };
-    ShapeType = PptxGenJS.ShapeType;
-    addSlide() {
-      return slide;
-    }
-    async write() {
-      return Buffer.from("pptx-finance-test");
-    }
-  };
-});
 
 jest.mock(
   "../../../../../../utils/agents/aibitat/plugins/create-files/pptx/section-agent.js",
@@ -129,11 +110,99 @@ describe("pptx-finance schema", () => {
     expect(result.errors.join(" ")).toMatch(/sections\[0\].*pie/i);
     expect(result.errors.join(" ")).toMatch(/supported layouts/i);
   });
+
+  test("rejects a missing section title", () => {
+    const sections = copy(fixture.sections);
+    delete sections[0].title;
+
+    const result = validateFinanceSections(sections);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toMatch(/sections\[0\]\.title/i);
+  });
+
+  test("rejects a formatted-string trend value", () => {
+    const sections = copy(fixture.sections);
+    sections[2].data.values[0] = "1,980,000";
+
+    const result = validateFinanceSections(sections);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toMatch(
+      /sections\[2\]\.data\.values\[0\].*numeric/i
+    );
+  });
+
+  test("rejects cash series length mismatch", () => {
+    const sections = copy(fixture.sections);
+    sections[5].data.payments.pop();
+
+    const result = validateFinanceSections(sections);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toMatch(
+      /sections\[5\]\.data\.(categories|payments).*same length/i
+    );
+  });
+
+  test("rejects a decision missing killCondition", () => {
+    const sections = copy(fixture.sections);
+    delete sections[8].data.items[0].killCondition;
+
+    const result = validateFinanceSections(sections);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toMatch(
+      /sections\[8\]\.data\.items\[0\]\.killCondition/i
+    );
+  });
 });
 
 describe("pptx-finance mode switch", () => {
   beforeEach(() => {
     runSectionAgent.mockClear();
+  });
+
+  test("exposes finance mode fields and example in the tool contract", () => {
+    const tool = setupTool();
+    const properties = tool.config.parameters.properties;
+    const sectionProperties = properties.sections.items.properties;
+
+    expect(tool.config.description).toMatch(/outline/i);
+    expect(tool.config.description).toMatch(/finance/i);
+    expect(properties.unit.type).toBe("string");
+    expect(properties.footer.properties).toEqual(
+      expect.objectContaining({
+        period: expect.any(Object),
+        source: expect.any(Object),
+        preparedOn: expect.any(Object),
+      })
+    );
+    expect(sectionProperties.layout.enum).toEqual(
+      expect.arrayContaining([
+        "summary",
+        "scorecard",
+        "trend_bar",
+        "bar_donut",
+        "waterfall",
+        "cash",
+        "ranked_pair",
+        "risks_outlook",
+        "decisions",
+        "content",
+        "section",
+        "blank",
+      ])
+    );
+    expect(sectionProperties.subtitle.type).toBe("string");
+    expect(sectionProperties.notes.type).toBe("string");
+    expect(sectionProperties.data.type).toBe("object");
+    const financeExample = tool.config.examples.find((example) => {
+      const call = JSON.parse(example.call);
+      return call.mode === "finance";
+    });
+    expect(financeExample).toBeDefined();
+    expect(JSON.parse(financeExample.call).sections).toHaveLength(2);
   });
 
   test("(f) outline mode calls one section agent per section", async () => {
@@ -167,10 +236,20 @@ describe("pptx-finance mode switch", () => {
       "fileDownloadCard",
       expect.objectContaining({ filename: fixture.filename })
     );
-    const generatedFiles = fs.readdirSync(
-      path.join(storageDir, "generated-files")
+    const outputDirectory = path.join(storageDir, "generated-files");
+    const downloadCall = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
     );
-    expect(generatedFiles.some((name) => name.endsWith(".pptx"))).toBe(true);
+    const generatedFile = downloadCall[1].storageFilename;
+
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(outputDirectory, generatedFile))
+    );
+    expect(zip.file("ppt/presentation.xml")).not.toBeNull();
+    const slideFiles = Object.keys(zip.files).filter((name) =>
+      /^ppt\/slides\/slide\d+\.xml$/.test(name)
+    );
+    expect(slideFiles.length).toBeGreaterThanOrEqual(10);
   });
 
   test("(h) invalid finance input returns early without writing a file", async () => {
