@@ -2,7 +2,9 @@
 const { describe, beforeEach, it, expect } = require("@jest/globals");
 require("../utils/lark/_polyfill");
 jest.mock("../../utils/prisma", () => ({ workspaces: { count: jest.fn() } }));
-jest.mock("../../models/systemSettings", () => ({ SystemSettings: { get: jest.fn() } }));
+jest.mock("../../models/systemSettings", () => ({
+  SystemSettings: { get: jest.fn() },
+}));
 jest.mock("../../models/workspaceUsers", () => ({
   WorkspaceUser: { get: jest.fn() },
 }));
@@ -52,7 +54,10 @@ describe("Workspace.ensurePersonal", () => {
   });
 
   it("does nothing when user is missing", async () => {
-    expect(await Workspace.ensurePersonal(null)).toEqual({ workspace: null, created: false });
+    expect(await Workspace.ensurePersonal(null)).toEqual({
+      workspace: null,
+      created: false,
+    });
     expect(Workspace.new).not.toHaveBeenCalled();
   });
 
@@ -101,7 +106,10 @@ describe("Workspace.ensurePersonal", () => {
   });
 
   it("does nothing when username is missing", async () => {
-    const result = await Workspace.ensurePersonal({ ...defaultUser, username: null });
+    const result = await Workspace.ensurePersonal({
+      ...defaultUser,
+      username: null,
+    });
 
     expect(Workspace.new).not.toHaveBeenCalled();
     expect(prisma.workspaces.count).not.toHaveBeenCalled();
