@@ -1,16 +1,13 @@
 const prisma = require("../utils/prisma");
 
-// Skills a new workspace starts with (#48). Mirrors the multi-user toggles in frontend/src/pages/Admin/Agents/skills.jsx; single-user-only skills and internal plugins are excluded. Users turn these off per workspace in the Agent Skills tab.
+// Skills a new workspace starts with (#48). Mirrors the multi-user toggles in frontend/src/pages/Admin/Agents/skills.jsx; single-user-only skills and internal plugins are excluded. Users turn these off per workspace in the Agent Skills tab. sql-agent, filesystem-agent and web-scraping stay opt-in: they reach global SQL connections, a shared server sandbox, or server-side fetches without an approval prompt (#48 review).
 const DEFAULT_ENABLED_SKILLS = [
   "rag-memory",
   "document-summarizer",
-  "web-scraping",
-  "filesystem-agent",
   "create-files-agent",
   "create-chart",
   "generate-image",
   "web-browsing",
-  "sql-agent",
   "lark-cli",
 ];
 

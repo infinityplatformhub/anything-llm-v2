@@ -139,13 +139,10 @@ describe("WorkspaceAgentSettings", () => {
     expect(DEFAULT_ENABLED_SKILLS).toEqual([
       "rag-memory",
       "document-summarizer",
-      "web-scraping",
-      "filesystem-agent",
       "create-files-agent",
       "create-chart",
       "generate-image",
       "web-browsing",
-      "sql-agent",
       "lark-cli",
     ]);
   });

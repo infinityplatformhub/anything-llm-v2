@@ -13,13 +13,10 @@ const ADMIN = { username: "e2eadmin", password: PASSWORD };
 const DEFAULT_SKILLS = [
   "rag-memory",
   "document-summarizer",
-  "web-scraping",
-  "filesystem-agent",
   "create-files-agent",
   "create-chart",
   "generate-image",
   "web-browsing",
-  "sql-agent",
   "lark-cli",
 ];
 
