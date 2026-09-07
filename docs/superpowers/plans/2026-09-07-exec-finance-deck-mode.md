@@ -10,7 +10,7 @@
 
 **Issue:** #38 · **Spec:** `docs/superpowers/specs/2026-09-07-exec-finance-deck-mode.md` · **Mockup:** `docs/superpowers/mockups/exec-finance-deck.html` @ `56f157f5` (blob `1de6d3ea`)
 
-**Evidence contract:** `cd server && node ../node_modules/jest/bin/jest.js __tests__/utils/agents/aibitat/plugins/create-files/pptx-finance.test.js --runInBand` → output มี `pptx-finance` และ `passed`
+**Evidence contract:** `cd server && NODE_OPTIONS=--experimental-vm-modules node ../node_modules/jest/bin/jest.js __tests__/utils/agents/aibitat/plugins/create-files/pptx-finance.test.js --runInBand` → output มี `pptx-finance` และ `passed`
 
 **Ledger:** `.superpowers/sdd/exec-finance-deck/ledger.md` — ทุก ruling จด `Ruling: <what> — <why> — <cost if wrong>`
 
