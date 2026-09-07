@@ -37,6 +37,7 @@ const {
   fixEmbeddedChartTables,
   formatNumber,
   formatPct,
+  roundedAxisMax,
 } = require("../../../../../../utils/agents/aibitat/plugins/create-files/pptx/finance-layouts.js");
 
 function copy(value) {
@@ -112,6 +113,29 @@ describe("pptx-finance schema", () => {
 
     expect(result.ok).toBe(false);
     expect(result.errors.join(" ")).toMatch(/tie/i);
+  });
+
+  test("(u) rejects a waterfall whose running total dips below zero", () => {
+    const sections = copy(fixture.sections);
+    const waterfall = sections[4].data;
+    waterfall.start.value = -500000;
+    waterfall.steps = [{ label: "ขาดทุนเพิ่ม", value: -200000, kind: "structural" }];
+    waterfall.end.value = -700000;
+
+    const result = validateFinanceSections(sections);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toMatch(/sections\[4\].*below zero/i);
+  });
+
+  test("(v) rejects a non-string subtitle", () => {
+    const sections = copy(fixture.sections);
+    sections[0].subtitle = { text: "x" };
+
+    const result = validateFinanceSections(sections);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toMatch(/sections\[0\]\.subtitle/);
   });
 
   test("(d) rejects unknown scorecard status", () => {
@@ -311,6 +335,49 @@ describe("pptx-finance executive theme and layouts", () => {
     expect(chartXml).toContain('<c:showVal val="0"/>');
     expect(slideXml).toContain("1,640,000");
     expect(slideXml).toContain("2,530,000");
+  });
+
+  test("(x) axis maximum is always finite, positive and above the data", () => {
+    for (const value of [-800000, -0, 0, NaN, Infinity, 0.4, 37, 2530000, 28700000]) {
+      const max = roundedAxisMax(value);
+      expect(Number.isFinite(max)).toBe(true);
+      expect(max).toBeGreaterThan(0);
+      if (Number.isFinite(value)) expect(max).toBeGreaterThanOrEqual(value);
+    }
+    expect(roundedAxisMax(2530000)).toBe(3000000);
+    expect(roundedAxisMax(-500000)).toBe(1);
+  });
+
+  test("(w) zero and tiny waterfall/trend values never produce non-finite geometry", async () => {
+    const tool = setupTool();
+    const small = copy(fixture);
+    const waterfall = small.sections[4].data;
+    waterfall.start.value = 0;
+    waterfall.steps = [
+      { label: "ค่าธรรมเนียม", value: 0, kind: "timing" },
+      { label: "ดอกเบี้ยรับ", value: 300, kind: "structural" },
+    ];
+    waterfall.end.value = 300;
+    small.sections[2].data.values = small.sections[2].data.values.map(() => 0);
+    delete small.sections[2].data.planBand;
+    await tool.call(small);
+    const outputDirectory = path.join(storageDir, "generated-files");
+    const downloadCall = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    expect(downloadCall).toBeDefined();
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
+    );
+    for (const slideNumber of [4, 6]) {
+      const slideXml = await zip.file(`ppt/slides/slide${slideNumber}.xml`).async("string");
+      expect(slideXml).not.toMatch(/Infinity|NaN/);
+      for (const chartXml of await getSlideChartXml(zip, slideNumber)) {
+        expect(chartXml).not.toMatch(/Infinity|NaN/);
+        const max = Number(chartXml.match(/<c:max val="([^"]+)"/)?.[1]);
+        expect(Number.isFinite(max) && max > 0).toBe(true);
+      }
+    }
   });
 
   test("bar and doughnut charts render compact complete data labels", async () => {

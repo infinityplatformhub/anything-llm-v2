@@ -420,6 +420,19 @@ function commonChartOptions(theme) {
   };
 }
 
+/**
+ * Zero-based value-axis maximum with ~18% headroom, rounded up to a clean step.
+ * Always finite and > 0 so label geometry that divides by it can never be -Infinity/NaN
+ * (Opus final review #38: all-negative or all-zero data rounded to -0).
+ * The step scales with the data (100000 for Baht-size figures, 1 for tiny values).
+ */
+function roundedAxisMax(maxValue) {
+  const safeMax = Number.isFinite(maxValue) && maxValue > 0 ? maxValue : 0;
+  const headroom = safeMax * 1.18;
+  const step = Math.max(1, 10 ** Math.floor(Math.log10(headroom || 1)) / 10);
+  return Math.max(step, Math.ceil(headroom / step) * step);
+}
+
 function renderTrendBar(slide, pptx, section, theme, ctx) {
   const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
   const chartX = MARGIN_X;
@@ -430,7 +443,7 @@ function renderTrendBar(slide, pptx, section, theme, ctx) {
     ...section.data.values,
     section.data.planBand?.high || 0
   );
-  const axisMax = Math.ceil((maxValue * 1.18) / 100000) * 100000;
+  const axisMax = roundedAxisMax(maxValue);
 
   slide.addChart(
     pptx.ChartType.bar,
@@ -608,10 +621,9 @@ function renderWaterfall(slide, pptx, section, theme, ctx) {
     cumulative += step.value;
     cumulativeValues.push(cumulative);
   });
-  const axisMax =
-    Math.ceil(
-      (Math.max(...cumulativeValues, section.data.end.value) * 1.18) / 100000
-    ) * 100000;
+  const axisMax = roundedAxisMax(
+    Math.max(...cumulativeValues, section.data.end.value)
+  );
   const options = {
     ...commonChartOptions(theme),
     x: MARGIN_X,
@@ -1011,4 +1023,5 @@ module.exports = {
   fixEmbeddedChartTables,
   formatNumber,
   formatPct,
+  roundedAxisMax,
 };

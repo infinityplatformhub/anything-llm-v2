@@ -208,6 +208,17 @@ function validateWaterfall(data, path, errors) {
       errors.push(
         `${path} waterfall does not tie: start plus steps is ${calculatedEnd}, but end is ${end}`
       );
+    // The stacked-bar waterfall draws on a zero-based axis; a running total below zero
+    // has no bar geometry (axis max rounds to -0 and label positions divide by it).
+    let running = start;
+    const dipsBelowZero =
+      start < 0 ||
+      end < 0 ||
+      data.steps.some((step) => (running += step.value) < 0);
+    if (dipsBelowZero)
+      errors.push(
+        `${path} waterfall running total goes below zero; express losses as a positive magnitude (e.g. "ขาดทุนสุทธิ") so every bar stays on the zero-based axis`
+      );
   }
 }
 
@@ -317,6 +328,8 @@ function validateFinanceSections(sections) {
   sections.forEach((section, index) => {
     const sectionPath = `sections[${index}]`;
     requireString(section?.title, `${sectionPath}.title`, errors);
+    if (section?.subtitle !== undefined && typeof section.subtitle !== "string")
+      errors.push(`${sectionPath}.subtitle must be a string when present`);
 
     const layout = section?.layout;
     if (!Object.hasOwn(FINANCE_LAYOUTS, layout)) {
