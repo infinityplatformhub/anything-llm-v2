@@ -11,6 +11,7 @@ const {
   FINANCE_LAYOUTS,
   validateFinanceSections,
 } = require("./finance-schema.js");
+const { RENDERERS } = require("./finance-layouts.js");
 
 /**
  * Extracts recent conversation history from the parent AIbitat's chat log
@@ -342,17 +343,19 @@ module.exports.CreatePptxPresentation = {
               let allSlides;
               if (mode === "finance") {
                 allSlides = sections.map((section) => {
-                  if (["content", "section", "blank"].includes(section.layout))
-                    return {
-                      ...section,
-                      unit: section.unit || unit,
-                      footer: section.footer || footer,
-                    };
+                  const financeContext = {
+                    unit: section.unit || unit,
+                    footer: section.footer || footer,
+                  };
+                  if (
+                    RENDERERS[section.layout] ||
+                    ["content", "section", "blank"].includes(section.layout)
+                  )
+                    return { ...section, ...financeContext };
                   return {
                     ...section,
                     content: [`layout ${section.layout} pending`],
-                    unit: section.unit || unit,
-                    footer: section.footer || footer,
+                    ...financeContext,
                   };
                 });
               } else {
@@ -424,6 +427,18 @@ module.exports.CreatePptxPresentation = {
                 const slide = pptx.addSlide();
                 const slideNumber = index + 1;
                 const layout = slideData.layout || "content";
+                const financeRenderer =
+                  mode === "finance" ? RENDERERS[layout] : null;
+
+                if (financeRenderer) {
+                  financeRenderer(slide, pptx, slideData, theme, {
+                    slideNumber,
+                    totalSlides: totalSlideCount,
+                    unit: slideData.unit,
+                    footer: slideData.footer,
+                  });
+                  return;
+                }
 
                 switch (layout) {
                   case "title":

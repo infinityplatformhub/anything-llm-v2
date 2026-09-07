@@ -27,6 +27,14 @@ const {
 const {
   CreatePptxPresentation,
 } = require("../../../../../../utils/agents/aibitat/plugins/create-files/pptx/create-presentation.js");
+const {
+  getAvailableThemes,
+  getTheme,
+} = require("../../../../../../utils/agents/aibitat/plugins/create-files/pptx/themes.js");
+const {
+  formatNumber,
+  formatPct,
+} = require("../../../../../../utils/agents/aibitat/plugins/create-files/pptx/finance-layouts.js");
 
 function copy(value) {
   return JSON.parse(JSON.stringify(value));
@@ -167,6 +175,63 @@ describe("pptx-finance schema", () => {
     expect(result.errors.join(" ")).toMatch(
       /sections\[8\]\.data\.items\[0\]\.cost.*numeric/i
     );
+  });
+});
+
+describe("pptx-finance executive theme and layouts", () => {
+  test("(i) every theme color token is a six-digit hex value without #", () => {
+    for (const themeName of getAvailableThemes()) {
+      const theme = getTheme(themeName);
+      const colorTokens = Object.entries(theme).flatMap(([key, value]) => {
+        if (key === "chartColors") return value;
+        return /color|^chart|^status/i.test(key) ? [value] : [];
+      });
+
+      expect(colorTokens.length).toBeGreaterThan(0);
+      colorTokens.forEach((color) => {
+        expect(color).not.toContain("#");
+        expect(color).toMatch(/^[0-9A-F]{6}$/i);
+      });
+    }
+  });
+
+  test("(j) exposes the executive theme", () => {
+    expect(getAvailableThemes()).toContain("executive");
+  });
+
+  test("formats finance numbers and percentages", () => {
+    expect(formatNumber(1234567, "บาท")).toBe("1,234,567 บาท");
+    expect(formatNumber(1234.56)).toBe("1,234.6");
+    expect(formatPct(12.4)).toBe("+12.4%");
+    expect(formatPct(-6.8)).toBe("-6.8%");
+  });
+
+  test("(k) renders non-chart finance layouts without pending fallback", async () => {
+    const tool = setupTool();
+
+    await tool.call(fixture);
+
+    const outputDirectory = path.join(storageDir, "generated-files");
+    const downloadCall = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(outputDirectory, downloadCall[1].storageFilename))
+    );
+    const [summaryXml, scorecardXml, risksXml, decisionsXml] = await Promise.all(
+      [2, 3, 9, 10].map((slideNumber) =>
+        zip.file(`ppt/slides/slide${slideNumber}.xml`).async("string")
+      )
+    );
+
+    expect(summaryXml).toContain("18,420,000");
+    expect(scorecardXml).toContain("<a:tbl>");
+    expect(risksXml).toContain("<a:tbl>");
+    expect((decisionsXml.match(/roundRect/g) || []).length).toBeGreaterThanOrEqual(
+      3
+    );
+    for (const slideXml of [summaryXml, scorecardXml, risksXml, decisionsXml])
+      expect(slideXml).not.toContain("pending");
   });
 });
 
