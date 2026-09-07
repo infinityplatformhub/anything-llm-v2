@@ -239,6 +239,34 @@ const Workspace = {
   },
 
   /**
+   * Ensure a `default`-role user owns at least one workspace. Idempotent: the
+   * lookup only counts workspaces the user is a member of, so a second call
+   * after creation is a no-op. Never throws — the caller is the sidebar list
+   * route, which must still return.
+   * @param {{id:number, username:string, role:string}|null} user
+   * @returns {Promise<{workspace: object|null, created: boolean}>}
+   */
+  ensurePersonal: async function (user) {
+    const none = { workspace: null, created: false };
+    if (!user?.id || user.role !== ROLES.default) return none;
+    try {
+      const existing = await this.whereWithUser(user, {}, 1);
+      if (existing.length > 0) return none;
+      // Name template is product copy, not environment config; a true constant.
+      const name = `${user.username}'s workspace`;
+      const { workspace, message } = await this.new(name, user.id);
+      if (!workspace) {
+        console.error("ensurePersonal: failed to create workspace", message);
+        return none;
+      }
+      return { workspace, created: true };
+    } catch (error) {
+      console.error("ensurePersonal:", error.message);
+      return none;
+    }
+  },
+
+  /**
    * Update the settings for a workspace. Applies validations to the updates provided.
    * @param {number} id - The ID of the workspace to update.
    * @param {Object} updates - The data to update.
