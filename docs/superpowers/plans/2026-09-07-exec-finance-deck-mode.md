@@ -99,6 +99,15 @@
 
 ---
 
+## Task 4 — สิ่งที่ dev2 ต้องมีก่อน run จริง (พบระหว่างทำ, รายละเอียดใน ledger)
+
+- `AGENT_SKILL_RERANKER_ENABLED=false` — reranker top-15 ตัด `create-pptx-presentation` และ `accounting__get_profit_loss` ทิ้ง
+- `AGENT_MAX_TOOL_CALLS=30`, `GENERIC_OPEN_AI_MAX_TOKENS=16384` — deck ต้องการ ≥13 tool calls และ payload 9 section เกิน 4096 token
+- workspace prompt ฉบับ `docs/superpowers/specs/2026-09-07-exec-finance-deck-workspace-prompt.txt` (call budget 13, ห้าม list cash receipts/payments)
+- `create-pptx-presentation` อยู่ใน `system_settings.whitelisted_agent_skills` เมื่อสั่งผ่าน developer API (http-socket auto-deny)
+- MCP FlowAccount: 1 ใน 3 A record ตายจาก pod → warm-up 1 call ก่อน run (issue #37 มีหลักฐาน + fix)
+- gate ไฟล์: `node e2e/scripts/finance-deck/verify-deck.cjs <deck.pptx>` (negative control: `mutate-deck.cjs`)
+
 ## Ledger rulings ที่ตัดสินล่วงหน้า
 
 - Ruling: waterfall ใช้ stacked bar + base series สีพื้นหลัง — pptxgenjs ไม่มี waterfall native และ transparency ต่อ series ไม่รองรับ — ถ้าผิด: กราฟดูมีแท่งขาวทับ grid

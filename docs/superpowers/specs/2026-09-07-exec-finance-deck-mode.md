@@ -73,6 +73,8 @@ cd server && node ../node_modules/jest/bin/jest.js __tests__/utils/agents/aibita
 
 หลัง unit เขียว: รัน tool จริงบน dev2 (workspace `infi`) ด้วย prompt ตัวอย่าง เปิดไฟล์ด้วย LibreOffice headless → PDF → ดูภาพ 9 หน้าเทียบ mockup ก่อนปิด issue
 
+System prompt ของ workspace ที่ใช้จริงบน dev2 (ฉบับสุดท้าย, มี call budget 13 ครั้ง): `docs/superpowers/specs/2026-09-07-exec-finance-deck-workspace-prompt.txt` — ต้องคู่กับ `AGENT_MAX_TOOL_CALLS≥14`, `GENERIC_OPEN_AI_MAX_TOKENS≥16384` และปิด Intelligent Skill Selection (ดู ledger #38 Task 4). Machine gate ของไฟล์ที่ได้: `node e2e/scripts/finance-deck/verify-deck.cjs <deck.pptx>`
+
 ## นอกขอบเขต
 
 - Custom skill / Hub packaging (Option B)

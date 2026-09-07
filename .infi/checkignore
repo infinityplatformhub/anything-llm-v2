@@ -44,3 +44,9 @@ e2e/scripts/mcp-ui.cjs
 e2e/scripts/run-mcp-ui.sh
 e2e/ui/workspace-mcp-connectors.spec.ts
 e2e/mcp-ui.playwright.config.ts
+
+# Task 38 (#38) Task 4 deck gate + its negative-control mutator. Test-only: read
+# a generated .pptx, no network, no secrets. Cost: shape gates stop scanning
+# these two files; they contain no URL, marker or credential.
+e2e/scripts/finance-deck/verify-deck.cjs
+e2e/scripts/finance-deck/mutate-deck.cjs
