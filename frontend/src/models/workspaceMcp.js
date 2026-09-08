@@ -38,7 +38,13 @@ export function validateMcpConfig(config) {
   if (config.headers !== undefined) {
     if (
       !isObject(config.headers) ||
-      Object.values(config.headers).some((value) => typeof value !== "string")
+      Object.entries(config.headers).some(
+        ([key, value]) =>
+          !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(key) ||
+          typeof value !== "string" ||
+          // Update resolves sentinels before native HTTP header validation.
+          (value !== MCP_SECRET_MASK && /[^\t\x20-\x7e\x80-\xff]/.test(value))
+      )
     )
       return "invalid_headers";
     if (
@@ -118,14 +124,11 @@ async function request(
     signal,
     ...(body && { body: JSON.stringify(body) }),
   });
+  if (response.status === 401 || response.status === 403)
+    throw new Error("admin_required");
   const data = await response.json();
   if (!response.ok || data.success === false || data.error) {
-    const error = new Error(
-      data.error ||
-        (response.status === 401 || response.status === 403
-          ? "admin_required"
-          : "request_failed")
-    );
+    const error = new Error(data.error || "request_failed");
     error.errors = data.errors;
     throw error;
   }
