@@ -436,6 +436,82 @@ describe("exec layouts", () => {
     expect(Math.max(...tiles.map((tile) => tile.y + tile.h))).toBeLessThanOrEqual(5.05);
   });
 
+  test("compressed kpi tiles keep the value clear of the delta pill", async () => {
+    // 2.35 is the start-Y Task 5 uses to seat tiles under a narrative; it is the
+    // tightest grid this layout has to draw.
+    const theme = getTheme("executive");
+    const pptx = new PptxGenJS();
+    pptx.layout = "LAYOUT_16x9";
+    EXEC_RENDERERS.kpi(
+      pptx.addSlide(), pptx,
+      { layout: "kpi", title: "T", data: { kpis: [
+        { label: "a", value: 16994313, delta: "-36.5%", status: "bad" },
+        { label: "b", value: 14453214, delta: "-23.7%", status: "warn" },
+        { label: "c", value: 2541099, delta: "-67.5%", status: "bad" },
+        { label: "d", value: "15.0%", delta: "-14.2 pt", status: "bad" } ] } },
+      theme,
+      { slideNumber: 1, totalSlides: 1, bg: theme.background, y: 2.35 }
+    );
+    const zip = await JSZip.loadAsync(await pptx.write({ outputType: "nodebuffer" }));
+    const slideXml = await zip.file("ppt/slides/slide1.xml").async("string");
+    // One <p:sp> per shape, in the order the renderer emitted them: tile, label,
+    // value, pill, delta — so grouping by tile is a matter of walking that order.
+    const shapes = [...slideXml.matchAll(
+      /<a:off x="(\d+)" y="(\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"\/>/g
+    )].map((m) => ({
+      x: Number(m[1]) / 914400, y: Number(m[2]) / 914400,
+      w: Number(m[3]) / 914400, h: Number(m[4]) / 914400,
+    }));
+    const tiles = shapes.filter((shape) => Math.abs(shape.w - 4.2) < 0.001);
+    expect(tiles).toHaveLength(4);
+
+    for (const tile of tiles) {
+      const inner = shapes.filter(
+        (shape) =>
+          shape !== tile &&
+          shape.x >= tile.x && shape.x < tile.x + tile.w &&
+          shape.y >= tile.y && shape.y < tile.y + tile.h
+      );
+      // The 40pt value is the tallest text in the tile; the pill is the widest
+      // short box below it.
+      const value = inner.reduce((tallest, shape) =>
+        shape.h > tallest.h ? shape : tallest
+      );
+      const pill = inner
+        .filter((shape) => shape.y > value.y)
+        .reduce((highest, shape) => (shape.y < highest.y ? shape : highest));
+      expect(value.y + value.h).toBeLessThanOrEqual(pill.y + 1e-9);
+      expect(pill.y + pill.h).toBeLessThanOrEqual(tile.y + tile.h + 1e-9);
+    }
+  });
+
+  test("finance mode renders an exec layout instead of a pending slide", async () => {
+    const tool = setupTool();
+    await tool.call({
+      filename: "exec-in-finance", title: "Exec", theme: "executive",
+      mode: "finance", unit: "บาท",
+      sections: [{ layout: "kpi", title: "ผลประกอบการ", data: { kpis: [
+        { label: "รายได้", value: 16994313, delta: "-36.5%", status: "bad" },
+        { label: "กำไรสุทธิ", value: 2541099, delta: "-67.5%", status: "bad" } ] } }],
+    });
+    const directory = path.join(storageDir, "generated-files");
+    const file = fs.readdirSync(directory)
+      .filter((name) => name.endsWith(".pptx"))
+      .sort((a, b) =>
+        fs.statSync(path.join(directory, b)).mtimeMs -
+        fs.statSync(path.join(directory, a)).mtimeMs)[0];
+    const zip = await JSZip.loadAsync(fs.readFileSync(path.join(directory, file)));
+    const slideNames = Object.keys(zip.files)
+      .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
+    const slideXmls = await Promise.all(
+      slideNames.map((name) => zip.file(name).async("string"))
+    );
+    const body = slideXmls.join("");
+    expect(body).not.toMatch(/pending/);
+    expect(body).toMatch(/sz="4000" b="1"/);
+    expect(body).toContain("16,994,313");
+  });
+
   test("finance mode accepts the exec layouts and still fails closed on bad data", () => {
     expect(Object.keys(FINANCE_LAYOUTS)).toEqual(
       expect.arrayContaining(["kpi", "chart", "two-column", "statement"])

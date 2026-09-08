@@ -12,6 +12,7 @@ const {
   validateFinanceSections,
 } = require("./finance-schema.js");
 const { RENDERERS, fixEmbeddedChartTables } = require("./finance-layouts.js");
+const { EXEC_RENDERERS } = require("./exec-layouts.js");
 
 /**
  * Extracts recent conversation history from the parent AIbitat's chat log
@@ -416,9 +417,12 @@ module.exports.CreatePptxPresentation = {
                 const slide = pptx.addSlide();
                 const slideNumber = index + 1;
                 const layout = slideData.layout || "content";
+                // The generic executive layouts are valid finance layouts too, so
+                // they must render rather than fall through to the pending slide.
                 const financeRenderer =
                   mode === "finance"
                     ? RENDERERS[layout] ||
+                      EXEC_RENDERERS[layout] ||
                       (!["content", "section", "blank"].includes(layout)
                         ? RENDERERS.__pending
                         : null)
@@ -430,6 +434,7 @@ module.exports.CreatePptxPresentation = {
                     totalSlides: totalSlideCount,
                     unit: slideData.unit,
                     footer: slideData.footer,
+                    bg: theme.background,
                   });
                   return;
                 }

@@ -26,10 +26,28 @@ const FOOTER_Y = 5.05; // The hairline addFooter draws; content must stay above 
 // 8.6 in exactly, so the same tile width serves rows of 1, 2, and 4.
 const TILE_GAP = 0.2;
 const TILE_W_HALF = 4.2;
-const TILE_H = 1.55;
-// A 2 x 2 grid pushed down by a caller's ctx.y would otherwise cross the footer;
-// tiles compress to fit, down to the height that still holds a 40pt number.
-const TILE_H_MIN = 1.1;
+const TILE_H = 1.55; // Reference height; every inner offset below is a share of it.
+// A 2 x 2 grid pushed down by a caller's ctx.y would otherwise cross the footer,
+// so tiles compress. Below this the number would be too small to read across a
+// boardroom even after scaling, so the tile stops shrinking and the caller's
+// start-Y is the thing that has to give.
+const TILE_H_MIN = 1.0;
+
+// Inner layout, as fractions of TILE_H so a compressed tile keeps its proportions
+// instead of colliding with itself. Derived from the reference tile: label at
+// 0.14in, value at 0.44in with a 0.6in box, delta pill 0.32in tall sitting 0.14in
+// off the bottom.
+const TILE_LABEL_Y_RATIO = 0.14 / TILE_H;
+const TILE_LABEL_H_RATIO = 0.28 / TILE_H;
+const TILE_VALUE_Y_RATIO = 0.44 / TILE_H;
+const TILE_VALUE_H_RATIO = 0.6 / TILE_H;
+const TILE_PILL_H_RATIO = 0.32 / TILE_H;
+const TILE_PILL_GAP_RATIO = 0.14 / TILE_H;
+// The 40pt number is the point of a KPI tile, so it holds full size while the
+// tile does. Below the reference height it scales with the tile and stops at
+// 28pt, the smallest that still reads as the headline number rather than body text.
+const KPI_VALUE_FONT_SIZE = 40;
+const KPI_VALUE_FONT_MIN = 28;
 const TILE_PAD_X = 0.25; // Inner padding so text never touches the tile edge.
 const KPI_DEFAULT_Y = 1.5;
 
@@ -316,7 +334,7 @@ function chartOptions(data, theme, bg, frame) {
       Math.max(...values.map((value) => Math.abs(value)))
     );
     options.chartColors = colors;
-    options.invertedColors = colors;
+    options.invertedColors = [...colors];
     options.valAxisMinVal = -bound;
     options.valAxisMaxVal = bound;
     options.catAxisLabelPos = "low"; // Keep labels below the axis, clear of the negative bars.
@@ -424,6 +442,10 @@ function renderKpi(slide, pptx, section, theme, ctx) {
     TILE_H_MIN,
     Math.min(TILE_H, (FOOTER_Y - startY - TILE_GAP * (rows - 1)) / rows)
   );
+  const valueFontSize = Math.max(
+    KPI_VALUE_FONT_MIN,
+    Math.round(KPI_VALUE_FONT_SIZE * Math.min(1, tileH / TILE_H))
+  );
 
   kpis.forEach((kpi, index) => {
     const column = index % columns;
@@ -444,9 +466,9 @@ function renderKpi(slide, pptx, section, theme, ctx) {
     });
     slide.addText(kpi.label, {
       x: textX,
-      y: y + 0.14,
+      y: y + tileH * TILE_LABEL_Y_RATIO,
       w: textW,
-      h: 0.28,
+      h: tileH * TILE_LABEL_H_RATIO,
       fontSize: 14,
       color: theme.groundText,
       fontFace: theme.fontFace,
@@ -459,10 +481,10 @@ function renderKpi(slide, pptx, section, theme, ctx) {
         : String(kpi.value),
       {
         x: textX,
-        y: y + 0.44,
+        y: y + tileH * TILE_VALUE_Y_RATIO,
         w: textW,
-        h: 0.6,
-        fontSize: 40,
+        h: tileH * TILE_VALUE_H_RATIO,
+        fontSize: valueFontSize,
         bold: true,
         color: theme.groundText,
         fontFace: theme.fontFace,
@@ -472,11 +494,12 @@ function renderKpi(slide, pptx, section, theme, ctx) {
       }
     );
 
+    const pillH = tileH * TILE_PILL_H_RATIO;
+    const gapH = tileH * TILE_PILL_GAP_RATIO;
     let cursorX = textX;
     if (kpi.delta) {
       const pillW = Math.min(1.5, textW);
-      const pillH = 0.32;
-      const pillY = y + tileH - pillH - 0.14;
+      const pillY = y + tileH - pillH - gapH;
       slide.addShape(pptx.ShapeType.roundRect, {
         x: textX,
         y: pillY,
@@ -505,9 +528,9 @@ function renderKpi(slide, pptx, section, theme, ctx) {
     if (kpi.note) {
       slide.addText(kpi.note, {
         x: cursorX,
-        y: y + tileH - 0.46,
+        y: y + tileH - (pillH + gapH),
         w: textX + textW - cursorX,
-        h: 0.32,
+        h: pillH,
         fontSize: 12,
         color: theme.groundMuted,
         fontFace: theme.fontFace,
