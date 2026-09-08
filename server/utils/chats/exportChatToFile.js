@@ -1,7 +1,4 @@
 const moment = require("moment");
-const {
-  applyBranding,
-} = require("../agents/aibitat/plugins/create-files/pdf/utils.js");
 const { convertToChatHistory } = require("../helpers/chat/responses.js");
 
 const THOUGHT_TAGS = "thinking|think|thought|thought_chain";
@@ -198,7 +195,7 @@ function chatHistoryToHTML(history = [], { workspaceName, threadName }) {
 }
 
 /**
- * Convert a chat history into a branded PDF buffer.
+ * Convert a chat history into a PDF buffer.
  * Reuses the same markdown -> PDF pipeline as the create-pdf-file agent skill so
  * it works identically across browser and desktop builds.
  * @param {Object[]} history - Output of convertToChatHistory
@@ -208,12 +205,7 @@ function chatHistoryToHTML(history = [], { workspaceName, threadName }) {
 async function chatHistoryToPDF(history = [], meta = {}) {
   const markdown = chatHistoryToMarkdown(history, meta);
   const { markdownToPdf } = await import("@mintplex-labs/mdpdf");
-  const { PDFDocument, rgb, StandardFonts } = await import("pdf-lib");
-
-  const pdfDoc = await PDFDocument.load(await markdownToPdf(markdown));
-  await applyBranding(pdfDoc, { rgb, StandardFonts });
-
-  return Buffer.from(await pdfDoc.save());
+  return Buffer.from(await markdownToPdf(markdown));
 }
 
 /**

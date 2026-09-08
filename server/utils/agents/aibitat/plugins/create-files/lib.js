@@ -1,6 +1,5 @@
 const path = require("path");
 const fs = require("fs/promises");
-const fsSync = require("fs");
 const { v4: uuidv4 } = require("uuid");
 
 /**
@@ -299,34 +298,6 @@ class CreateFilesManager {
       return cleaned;
     }
     return value;
-  }
-
-  /**
-   * Gets the AnythingLLM logo for branding.
-   * @param {Object} options
-   * @param {boolean} [options.forDarkBackground=false] - True to get light logo (for dark backgrounds), false for dark logo (for light backgrounds)
-   * @param {"buffer"|"dataUri"} [options.format="buffer"] - Return format: "buffer" for raw Buffer, "dataUri" for base64 data URI
-   * @returns {Buffer|string|null} Logo as Buffer, data URI string, or null if file not found
-   */
-  getLogo({ forDarkBackground = false, format = "buffer" } = {}) {
-    // On Docker this is pre-packed images local to this lib.
-    // Does not honor Whitelabeling changes/preferences right now.
-    const assetsPath = path.join(__dirname, "assets");
-    const filename = forDarkBackground
-      ? "anything-llm.png"
-      : "anything-llm-invert.png";
-    try {
-      if (format === "dataUri") {
-        const base64 = fsSync.readFileSync(
-          path.join(assetsPath, filename),
-          "base64"
-        );
-        return `image/png;base64,${base64}`;
-      }
-      return fsSync.readFileSync(path.join(assetsPath, filename));
-    } catch {
-      return null;
-    }
   }
 }
 

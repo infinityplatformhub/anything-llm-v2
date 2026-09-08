@@ -1,7 +1,6 @@
 const JSZip = require("jszip");
 const {
   addAccentUnderline,
-  addBranding,
   addSlideFooter,
   addTopAccentBar,
 } = require("./utils.js");
@@ -82,7 +81,6 @@ function addFinanceChrome(slide, pptx, section, theme, ctx) {
     theme.accentColor
   );
   addSlideFooter(slide, pptx, theme, ctx.slideNumber, ctx.totalSlides);
-  addBranding(slide, theme.background);
   addDeckFooter(slide, theme, ctx.footer);
   if (section.notes) slide.addNotes(section.notes);
   return contentStartY + 0.25;

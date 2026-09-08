@@ -172,11 +172,6 @@ module.exports.CreateDocxFile = {
                 `create-docx-file: Parsed markdown to HTML (${html.length} chars), theme: ${theme}, margins: ${margins}`
               );
 
-              const logoBuffer = createFilesLib.getLogo({
-                forDarkBackground: false,
-                format: "buffer",
-              });
-
               const docElements = await htmlToDocxElements(
                 html,
                 libs,
@@ -209,7 +204,6 @@ module.exports.CreateDocxFile = {
                     date: currentDate,
                     theme: themeColors,
                     margins: marginConfig,
-                    logoBuffer,
                   })
                 );
 
@@ -228,7 +222,7 @@ module.exports.CreateDocxFile = {
                     ),
                   },
                   footers: {
-                    default: createRunningFooter(docx, logoBuffer, themeColors),
+                    default: createRunningFooter(docx, themeColors),
                   },
                 });
               } else {
@@ -240,7 +234,7 @@ module.exports.CreateDocxFile = {
                   },
                   children: docElements,
                   footers: {
-                    default: createRunningFooter(docx, logoBuffer, themeColors),
+                    default: createRunningFooter(docx, themeColors),
                   },
                 });
               }

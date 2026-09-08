@@ -1,5 +1,3 @@
-const createFilesLib = require("../lib.js");
-
 // All positioning assumes LAYOUT_16x9: 10 × 5.625 in.
 const MARGIN_X = 0.7;
 const CONTENT_W = 8.6; // 10 - 2 × MARGIN_X
@@ -11,51 +9,6 @@ function isDarkColor(hexColor) {
   const g = parseInt(hex.substr(2, 2), 16);
   const b = parseInt(hex.substr(4, 2), 16);
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5;
-}
-
-function addBranding(slide, bgColor) {
-  const isDark = isDarkColor(bgColor);
-  const textColor = isDark ? "FFFFFF" : "000000";
-  const logo = createFilesLib.getLogo({
-    forDarkBackground: isDark,
-    format: "dataUri",
-  });
-
-  slide.addText("Created with", {
-    x: 7.85,
-    y: 5.06,
-    w: 1.85,
-    h: 0.12,
-    fontSize: 5.5,
-    color: textColor,
-    transparency: 78,
-    fontFace: "Calibri",
-    align: "center",
-    italic: true,
-  });
-
-  if (logo) {
-    slide.addImage({
-      data: logo,
-      x: 8.025,
-      y: 5.17,
-      w: 1.5,
-      h: 0.24,
-      transparency: 78,
-    });
-  } else {
-    slide.addText("AnythingLLM", {
-      x: 7.85,
-      y: 5.17,
-      w: 1.85,
-      h: 0.24,
-      fontSize: 8,
-      color: textColor,
-      transparency: 78,
-      fontFace: "Calibri",
-      align: "center",
-    });
-  }
 }
 
 function addTopAccentBar(slide, pptx, theme) {
@@ -144,7 +97,6 @@ function renderTitleSlide(slide, pptx, { title, author }, theme) {
     line: { color: theme.titleSlideAccentColor },
   });
 
-  addBranding(slide, theme.titleSlideBackground);
 }
 
 function renderSectionSlide(
@@ -200,7 +152,6 @@ function renderSectionSlide(
     align: "left",
   });
 
-  addBranding(slide, theme.titleSlideBackground);
 
   if (slideData.notes) slide.addNotes(slideData.notes);
 }
@@ -272,7 +223,6 @@ function renderContentSlide(
   }
 
   addSlideFooter(slide, pptx, theme, slideNumber, totalSlides);
-  addBranding(slide, theme.background);
 
   if (slideData.notes) slide.addNotes(slideData.notes);
 }
@@ -280,7 +230,6 @@ function renderContentSlide(
 function renderBlankSlide(slide, pptx, theme, slideNumber, totalSlides) {
   slide.background = { color: theme.background };
   addSlideFooter(slide, pptx, theme, slideNumber, totalSlides);
-  addBranding(slide, theme.background);
 }
 
 function addBulletContent(slide, content, theme, startY, maxHeight) {
@@ -365,7 +314,6 @@ function addTableContent(slide, pptx, tableData, theme, startY) {
 
 module.exports = {
   isDarkColor,
-  addBranding,
   addTopAccentBar,
   addAccentUnderline,
   addSlideFooter,

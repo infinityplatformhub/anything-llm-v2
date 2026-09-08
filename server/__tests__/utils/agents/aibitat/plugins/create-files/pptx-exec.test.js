@@ -144,3 +144,43 @@ describe("exec themes", () => {
     }
   });
 });
+
+describe("no watermark", () => {
+  test("pptx (finance fixture) has no branding text or image in any slide part", async () => {
+    const tool = setupTool();
+    await tool.call(fixture);
+    const directory = path.join(storageDir, "generated-files");
+    const file = fs.readdirSync(directory)
+      .filter((name) => name.endsWith(".pptx"))
+      .sort((a, b) => fs.statSync(path.join(directory, b)).mtimeMs - fs.statSync(path.join(directory, a)).mtimeMs)[0];
+    const zip = await JSZip.loadAsync(fs.readFileSync(path.join(directory, file)));
+    const slides = Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
+    expect(slides.length).toBeGreaterThan(0);
+    for (const name of slides) {
+      const xml = await zip.file(name).async("string");
+      expect(xml).not.toMatch(/Created with|AnythingLLM/);
+    }
+    expect(Object.values(zip.files).some((entry) => !entry.dir && /^ppt\/media\//.test(entry.name))).toBe(false);
+  });
+
+  test("chat PDF export still produces a readable PDF after shared helper removal", async () => {
+    const { sendChatHistoryFile } = require("../../../../../../utils/chats/exportChatToFile.js");
+    const { PDFDocument } = require("pdf-lib");
+    const headers = {};
+    const buffer = await sendChatHistoryFile({
+      setHeader: (name, value) => { headers[name] = value; },
+      send: (value) => value,
+    }, [], { workspaceName: "Watermark regression" }, "pdf");
+    expect(headers["Content-Type"]).toBe("application/pdf");
+    expect(Buffer.isBuffer(buffer)).toBe(true);
+    const pdf = await PDFDocument.load(buffer);
+    expect(pdf.getPageCount()).toBeGreaterThan(0);
+  });
+
+  test("branding helpers are gone", () => {
+    expect(require("../../../../../../utils/agents/aibitat/plugins/create-files/lib.js").getLogo).toBeUndefined();
+    expect(require("../../../../../../utils/agents/aibitat/plugins/create-files/pdf/utils.js").applyBranding).toBeUndefined();
+    expect(require("../../../../../../utils/agents/aibitat/plugins/create-files/xlsx/utils.js").applyBranding).toBeUndefined();
+    expect(require("../../../../../../utils/agents/aibitat/plugins/create-files/pptx/utils.js").addBranding).toBeUndefined();
+  });
+});
