@@ -61,10 +61,10 @@
 
 **Files:** `server/utils/MCP/hypervisor/index.js`, `server/utils/MCP/index.js`, `server/endpoints/mcpOAuth.js` (`target()` เท่านั้น), test `server/__tests__/utils/MCP/workspaceOwnedServers.test.js`
 
-- [ ] **RED:** workspace-owned non-OAuth `{url, headers:{Authorization:"Bearer x"}}` → `activeMCPServers(workspace)` บูต key `7:erp` ด้วย transport ที่ได้ headers จาก config (ไม่ต้องมี token ใน connection แต่ต้อง `enabled`); ชื่อซ้ำ global → workspace-owned ชนะเฉพาะห้องนั้น + log warning หนึ่งครั้ง; `stopWorkspaceServer` หลัง update ปิด client เดิม; `probeServerConfig(config)` คืน `{tools, latencyMs}` แล้ว `close()` เสมอแม้ listTools throw; timeout 15 s (fake timers); ห้อง B ไม่เห็น server ของห้อง A ใน `activeMCPServers`; `convertServerToolsToPlugins` + handler resolve config ผ่าน `findServerConfig` (ห้อง B เรียก tool ของห้อง A → "not enabled for this workspace")
-- [ ] **GREEN:** `findServerConfig`, `workspaceServerConfigs` (อ่านผ่าน `WorkspaceMcpServer.listDecrypted`), แก้ `connectWorkspaceServer` ให้แยก branch OAuth/non-OAuth, `probeServerConfig`, `mcpOAuth.js target()`
-- [ ] เทสเดิมทั้ง `__tests__/utils/MCP/*` + `workspaceMcpGating.test.js` + endpoint tests เดิมยังผ่าน
-- [ ] commit `feat(mcp): hypervisor resolves workspace-owned servers and probes configs (#51)`
+- [x] **RED:** workspace-owned non-OAuth `{url, headers:{Authorization:"Bearer x"}}` → `activeMCPServers(workspace)` บูต key `7:erp` ด้วย transport ที่ได้ headers จาก config (ไม่ต้องมี token ใน connection แต่ต้อง `enabled`); ชื่อซ้ำ global → workspace-owned ชนะเฉพาะห้องนั้น + log warning หนึ่งครั้ง; `stopWorkspaceServer` หลัง update ปิด client เดิม; `probeServerConfig(config)` คืน `{tools, latencyMs}` แล้ว `close()` เสมอแม้ listTools throw; timeout 15 s (fake timers); ห้อง B ไม่เห็น server ของห้อง A ใน `activeMCPServers`; `convertServerToolsToPlugins` + handler resolve config ผ่าน `findServerConfig` (ห้อง B เรียก tool ของห้อง A → "not enabled for this workspace")
+- [x] **GREEN:** `findServerConfig`, `workspaceServerConfigs` (อ่านผ่าน `WorkspaceMcpServer.listDecrypted`), แก้ `connectWorkspaceServer` ให้แยก branch OAuth/non-OAuth, `probeServerConfig`, `mcpOAuth.js target()`
+- [x] เทสเดิมทั้ง `__tests__/utils/MCP/*` + `workspaceMcpGating.test.js` + endpoint tests เดิมยังผ่าน — focused + requested regressions: 7 suites / 164 tests; `index.test.js` / `hypervisor.test.js` Node 26 load failures excluded per brief. Required Task 2 eslint clean.
+- [x] commit `feat(mcp): hypervisor resolves workspace-owned servers and probes configs (#51)` — `a9b71b6d`; includes mock-only updates in four regression fixtures and allowlist-gated `callServerTool` per ledger rulings.
 
 ## Task 3 — endpoints
 
