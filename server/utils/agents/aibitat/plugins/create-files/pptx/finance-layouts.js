@@ -1,16 +1,9 @@
 const JSZip = require("jszip");
 const { addFooter } = require("./utils.js");
+const { formatNumber, roundedAxisMax } = require("./format.js");
 
 const MARGIN_X = 0.7;
 const CONTENT_W = 8.6;
-
-function formatNumber(value, unit = "") {
-  const formatted = Number(value).toLocaleString("en-US", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 1,
-  });
-  return unit ? `${formatted} ${unit}` : formatted;
-}
 
 function formatPct(value) {
   const prefix = Number(value) > 0 ? "+" : "";
@@ -407,19 +400,6 @@ function commonChartOptions(theme) {
     valAxisLabelFontSize: 8,
     valGridLine: { color: theme.chartGrid, size: 0.5 },
   };
-}
-
-/**
- * Zero-based value-axis maximum with ~18% headroom, rounded up to a clean step.
- * Always finite and > 0 so label geometry that divides by it can never be -Infinity/NaN
- * (Opus final review #38: all-negative or all-zero data rounded to -0).
- * The step scales with the data (100000 for Baht-size figures, 1 for tiny values).
- */
-function roundedAxisMax(maxValue) {
-  const safeMax = Number.isFinite(maxValue) && maxValue > 0 ? maxValue : 0;
-  const headroom = safeMax * 1.18;
-  const step = Math.max(1, 10 ** Math.floor(Math.log10(headroom || 1)) / 10);
-  return Math.max(step, Math.ceil(headroom / step) * step);
 }
 
 function renderTrendBar(slide, pptx, section, theme, ctx) {

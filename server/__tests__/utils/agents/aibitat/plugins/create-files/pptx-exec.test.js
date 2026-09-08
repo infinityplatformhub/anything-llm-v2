@@ -39,6 +39,7 @@ jest.mock(
 
 const fixture = require("./fixtures/finance-deck.json");
 const {
+  FINANCE_LAYOUTS,
   validateFinanceSections,
 } = require("../../../../../../utils/agents/aibitat/plugins/create-files/pptx/finance-schema.js");
 const {
@@ -296,5 +297,163 @@ describe("chrome", () => {
       plotArea: { fill: { color: "FFFFFF" }, border: { color: "FFFFFF", pt: 0 } },
     });
     expect(chartBaseOptions(theme, theme.ground).plotArea.fill.color).toBe("0F1B1F");
+  });
+});
+
+const {
+  EXEC_RENDERERS,
+  validateExecSection,
+  CHART_TYPES,
+} = require("../../../../../../utils/agents/aibitat/plugins/create-files/pptx/exec-layouts.js");
+
+async function renderOne(layout, data, themeId = "executive") {
+  const theme = getTheme(themeId);
+  const pptx = new PptxGenJS();
+  pptx.layout = "LAYOUT_16x9";
+  EXEC_RENDERERS[layout](
+    pptx.addSlide(),
+    pptx,
+    { layout, title: "T", data },
+    theme,
+    { slideNumber: 1, totalSlides: 1, bg: theme.background }
+  );
+  const zip = await JSZip.loadAsync(
+    await pptx.write({ outputType: "nodebuffer" })
+  );
+  return {
+    slideXml: await zip.file("ppt/slides/slide1.xml").async("string"),
+    chartXmls: await getSlideChartXml(zip, 1),
+  };
+}
+
+describe("exec layouts", () => {
+  test("kpi: 4 tiles, 40pt numbers, delta in theme.bad", async () => {
+    const { slideXml } = await renderOne("kpi", { kpis: [
+      {label:"รายได้",value:16994313,delta:"-36.5%",status:"bad"},{label:"ค่าใช้จ่าย",value:14453214,delta:"-23.7%",status:"warn"},
+      {label:"กำไรสุทธิ",value:2541099,delta:"-67.5%",status:"bad"},{label:"อัตรากำไร",value:"15.0%",delta:"-14.2 pt",status:"bad"} ]});
+    expect((slideXml.match(/sz="4000" b="1"/g)||[]).length).toBe(4);
+    expect(slideXml).toMatch(/<a:srgbClr val="B3261E"\/>/); expect(slideXml).toMatch(/<a:srgbClr val="8A6100"\/>/);
+    expect(slideXml).toMatch(/16,994,313/);
+  });
+  test("chart column with highlight: 8 dPt, index 6 accent, others muted, no gridlines", async () => {
+    const { chartXmls } = await renderOne("chart", { type:"column", categories:["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค."], series:[{name:"รายได้",values:[2.35,2.2,2.05,1.95,1.92,1.83,2.89,1.81]}], highlight:[6] });
+    const x = chartXmls[0]; const dpts = x.match(/<c:dPt>[\s\S]*?<\/c:dPt>/g);
+    expect(dpts).toHaveLength(8); expect(dpts[6]).toMatch(/0F4C5C/); expect(dpts[0]).toMatch(/A6C8CE/);
+    expect(x).not.toMatch(/<c:majorGridlines>/); expect(x).toMatch(/sz="1100"/); expect(x).toMatch(/typeface="Leelawadee UI"/);
+  });
+  test("bridge: negatives bad, positives good, ends accent, symmetric axis", async () => {
+    const { chartXmls } = await renderOne("chart", { type:"bridge", categories:["2568","รายได้หาย","ค่าบริการ","พนักงาน","เบ็ดเตล็ด","อื่นๆ","2569"], series:[{name:"กำไร",values:[7.82,-9.75,-1.8,0.99,4.93,0.35,2.54]}] });
+    const d = chartXmls[0].match(/<c:dPt>[\s\S]*?<\/c:dPt>/g);
+    expect(d[0]).toMatch(/0F4C5C/); expect(d[1]).toMatch(/B3261E/); expect(d[3]).toMatch(/1E7A4B/); expect(d[6]).toMatch(/0F4C5C/);
+    expect(chartXmls[0]).toMatch(/<c:min val="-12"\/>/); expect(chartXmls[0]).toMatch(/<c:max val="12"\/>/);
+  });
+  test("doughnut: hole + total text", async () => {
+    const { slideXml, chartXmls } = await renderOne("chart", { type:"doughnut", categories:["a","b"], series:[{name:"s",values:[7.8,4.26]}] });
+    expect(chartXmls[0]).toMatch(/<c:holeSize val="62"\/>/); expect(slideXml).toMatch(/12\.06/);
+  });
+  test("two-column: chart on the left half, points on the right", async () => {
+    const { slideXml, chartXmls } = await renderOne("two-column", { chart:{type:"doughnut",categories:["a","b"],series:[{name:"s",values:[1,2]}]}, points:["หนึ่ง","สอง","สาม"] });
+    expect(chartXmls).toHaveLength(1);
+    const xs = [...slideXml.matchAll(/<a:off x="(\d+)"/g)].map(m=>+m[1]); expect(Math.max(...xs)).toBeGreaterThanOrEqual(5.9*914400);
+    expect(slideXml).toMatch(/หนึ่ง/);
+  });
+  test("validation: length mismatch, >4 kpis, bridge with 2 series are errors", () => {
+    const errs=[]; validateExecSection({layout:"chart",title:"t",data:{type:"bar",categories:["a"],series:[{name:"s",values:[1,2]}]}},"sections[0]",errs);
+    validateExecSection({layout:"kpi",title:"t",data:{kpis:new Array(5).fill({label:"l",value:1})}},"sections[1]",errs);
+    validateExecSection({layout:"chart",title:"t",data:{type:"bridge",categories:["a"],series:[{name:"s",values:[1]},{name:"t",values:[1]}]}},"sections[2]",errs);
+    expect(errs).toHaveLength(3); expect(errs[0]).toMatch(/sections\[0\]/);
+  });
+  test("statement delegates to the ground-coloured statement chrome", async () => {
+    const { slideXml } = await renderOne("statement", { headline: "รักษากระแสเงินสด", subtitle: "ลงทุนเฉพาะที่พิสูจน์แล้ว" });
+    expect(slideXml).toMatch(/<a:srgbClr val="0F1B1F"\/>/);
+    expect(slideXml).toMatch(/sz="4800" b="1"/);
+    expect(slideXml).not.toContain("1 / 1");
+  });
+  test("doughnut percent labels keep a percent format code", async () => {
+    const { chartXmls } = await renderOne("chart", {
+      type: "doughnut", categories: ["a", "b"],
+      series: [{ name: "s", values: [7.8, 4.26] }],
+    });
+    expect(chartXmls[0]).toMatch(/<c:numFmt formatCode="0%"/);
+    expect(chartXmls[0]).toMatch(/<c:showPercent val="1"\/>/);
+    const withFormat = await renderOne("chart", {
+      type: "doughnut", categories: ["a", "b"],
+      series: [{ name: "s", values: [7.8, 4.26] }], valueFormat: "0.0%",
+    });
+    expect(withFormat.chartXmls[0]).toMatch(/<c:numFmt formatCode="0.0%"/);
+  });
+
+  test("four points stay above the footer hairline", async () => {
+    const { slideXml } = await renderOne("two-column", {
+      chart: { type: "column", categories: ["a"], series: [{ name: "s", values: [1] }] },
+      points: ["หนึ่ง", "สอง", "สาม", "สี่"],
+    });
+    // Only the right-hand points column; the footer text below the hairline is
+    // drawn by addFooter and is allowed there.
+    const bottoms = [...slideXml.matchAll(/<a:off x="(\d+)" y="(\d+)"\/><a:ext cx="\d+" cy="(\d+)"\/>/g)]
+      .filter((m) => Number(m[1]) >= 5.9 * 914400)
+      .map((m) => (Number(m[2]) + Number(m[3])) / 914400);
+    expect(bottoms.length).toBeGreaterThanOrEqual(4);
+    expect(Math.max(...bottoms)).toBeLessThanOrEqual(5.05);
+    expect(slideXml).toMatch(/สี่/);
+  });
+
+  test("charts fall back to the theme background when ctx.bg is absent", async () => {
+    const theme = getTheme("executive");
+    const pptx = new PptxGenJS();
+    pptx.layout = "LAYOUT_16x9";
+    EXEC_RENDERERS.chart(
+      pptx.addSlide(), pptx,
+      { layout: "chart", title: "T", data: {
+        type: "column", categories: ["a"], series: [{ name: "s", values: [1] }] } },
+      theme, { slideNumber: 1, totalSlides: 1 }
+    );
+    const zip = await JSZip.loadAsync(await pptx.write({ outputType: "nodebuffer" }));
+    const [chartXml] = await getSlideChartXml(zip, 1);
+    expect(chartXml).not.toMatch(/val="undefined"/);
+    expect(chartXml).toMatch(/<a:srgbClr val="FFFFFF"\/>/);
+  });
+
+  test("kpi tiles honour ctx.y and stay above the footer", async () => {
+    const theme = getTheme("executive");
+    const pptx = new PptxGenJS();
+    pptx.layout = "LAYOUT_16x9";
+    EXEC_RENDERERS.kpi(
+      pptx.addSlide(), pptx,
+      { layout: "kpi", title: "T", data: { kpis: [
+        { label: "a", value: 1 }, { label: "b", value: 2 },
+        { label: "c", value: 3 }, { label: "d", value: 4 } ] } },
+      theme,
+      { slideNumber: 1, totalSlides: 1, bg: theme.background, y: 2.2 }
+    );
+    const zip = await JSZip.loadAsync(await pptx.write({ outputType: "nodebuffer" }));
+    const slideXml = await zip.file("ppt/slides/slide1.xml").async("string");
+    const boxes = [...slideXml.matchAll(/<a:off x="(\d+)" y="(\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"\/>/g)]
+      .map((m) => ({ y: Number(m[2]) / 914400, w: Number(m[3]) / 914400, h: Number(m[4]) / 914400 }));
+    const tiles = boxes.filter((box) => Math.abs(box.w - 4.2) < 0.001);
+    expect(tiles).toHaveLength(4);
+    expect(Math.min(...tiles.map((tile) => tile.y))).toBeCloseTo(2.2, 5);
+    expect(Math.max(...tiles.map((tile) => tile.y + tile.h))).toBeLessThanOrEqual(5.05);
+  });
+
+  test("finance mode accepts the exec layouts and still fails closed on bad data", () => {
+    expect(Object.keys(FINANCE_LAYOUTS)).toEqual(
+      expect.arrayContaining(["kpi", "chart", "two-column", "statement"])
+    );
+    expect(CHART_TYPES).toEqual([
+      "bar", "column", "line", "area", "pie", "doughnut", "bridge",
+    ]);
+    const ok = validateFinanceSections([
+      { layout: "kpi", title: "t", data: { kpis: [
+        { label: "a", value: 1 }, { label: "b", value: 2, status: "good" } ] } },
+    ]);
+    expect(ok).toEqual({ ok: true, errors: [] });
+    const bad = validateFinanceSections([
+      { layout: "two-column", title: "t", data: { chart: {
+        type: "column", categories: ["a"], series: [{ name: "s", values: [1] }],
+      }, points: ["only one"] } },
+    ]);
+    expect(bad.ok).toBe(false);
+    expect(bad.errors.join(" ")).toMatch(/sections\[0\]\.data\.points/);
   });
 });

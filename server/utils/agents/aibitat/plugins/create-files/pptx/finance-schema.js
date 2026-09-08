@@ -1,3 +1,5 @@
+const { validateExecSection } = require("./exec-layouts.js");
+
 const FINANCE_LAYOUTS = {
   summary: ["narrative", "metrics", "verdict"],
   scorecard: ["columns", "rows"],
@@ -8,6 +10,11 @@ const FINANCE_LAYOUTS = {
   ranked_pair: ["left", "right"],
   risks_outlook: ["risks", "forecast"],
   decisions: ["items"],
+  // Generic executive layouts, usable from finance mode and from the section agent.
+  kpi: ["kpis"],
+  chart: ["type", "categories", "series"],
+  "two-column": ["chart", "points"],
+  statement: ["headline"],
 };
 
 const LEGACY_LAYOUTS = ["content", "section", "blank"];
@@ -308,6 +315,12 @@ function validateDecisions(data, path, errors) {
   });
 }
 
+/** Adapt an executive layout to the (data, path, errors) validator shape. */
+function execValidator(layout) {
+  return (data, path, errors) =>
+    validateExecSection({ layout, data }, path.replace(/\.data$/, ""), errors);
+}
+
 const VALIDATORS = {
   summary: validateSummary,
   scorecard: validateScorecard,
@@ -318,6 +331,10 @@ const VALIDATORS = {
   ranked_pair: validateRankedPair,
   risks_outlook: validateRisksOutlook,
   decisions: validateDecisions,
+  kpi: execValidator("kpi"),
+  chart: execValidator("chart"),
+  "two-column": execValidator("two-column"),
+  statement: execValidator("statement"),
 };
 
 function validateFinanceSections(sections) {
