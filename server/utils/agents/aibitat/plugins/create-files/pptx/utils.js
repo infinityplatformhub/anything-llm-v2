@@ -53,9 +53,10 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 // Thai word boundaries, which is the only way to break Thai: it is written without spaces.
 const words = new Intl.Segmenter(undefined, { granularity: "word" });
 // Matches what tokenize() now produces: a figure with its sign and percent
-// attached, so an over-wide signed figure still takes the cut-and-mark branch
-// rather than the grapheme fallback that would wrap it mid-number.
-const NUMBER_TOKEN = /^[+\u2212-]?[\d.,]+%?$/;
+// attached, and a range of two such figures, so an over-wide one still takes
+// the cut-and-mark branch rather than the grapheme fallback that would wrap it
+// mid-number.
+const NUMBER_TOKEN = /^[+\u2212-]?[\d.,]+%?(?:[+\u2212-][\d.,]+%?)?$/;
 
 function tokenize(text) {
   const tokens = [];
@@ -63,7 +64,15 @@ function tokenize(text) {
     const prev = tokens[tokens.length - 1];
     // ICU already keeps "7,799,188" whole, but merging across every digit/separator
     // seam keeps the never-break-a-number rule independent of ICU's locale data.
-    if (prev && /[\d.,]$/.test(prev) && /^[\d.,]/.test(segment))
+    // The optional trailing sign carries a range dash across, so "2568-2569"
+    // rejoins as one token rather than reopening a line at "-2569".
+    if (prev && /[\d.,%][+\u2212-]?$/.test(prev) && /^[\d.,]/.test(segment))
+      tokens[tokens.length - 1] = prev + segment;
+    // A sign glued to the end of a figure is a range dash, not a sign: keep it
+    // with the figure before it, so the branch above can then rejoin the whole
+    // range. This runs before the sign branch below, which would otherwise
+    // claim the same hyphen as the second figure's sign.
+    else if (prev && /[\d.,%]$/.test(prev) && /^[+\u2212-]$/.test(segment))
       tokens[tokens.length - 1] = prev + segment;
     // ICU breaks a sign or a percent away from the figure it belongs to, so
     // "-1,234,567" could wrap as "-" then the digits, reading as a gain. Merge

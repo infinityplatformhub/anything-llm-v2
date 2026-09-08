@@ -1141,25 +1141,37 @@ describe("Thai text measurement and token-safe bounding", () => {
     expect(slideXml).not.toContain("<a:normAutofit");
   });
 
-  test("two-column points never split a sign or a percent from its figure", async () => {
-    // Both lines wrap exactly at the seam ICU offers between the sign or the
-    // percent and its digits, which is where a loss used to render as a gain.
+  test("two-column points never split a sign, a percent, or a range from its figure", async () => {
+    // Every line wraps exactly at a seam ICU offers around a sign or a percent.
+    // The first two are where a loss used to render as a gain; the last two are
+    // ranges, where a line opening at "-2569" reads as a negative year.
     const { slideXml } = await renderOne("two-column", {
       chart: { type: "column", categories: ["ม.ค."], series: [{ name: "รายได้", values: [1] }] },
       points: [
         "กกกกกกกกกกกกก -1,234,567 บาท",
         "กกกกกกกกกกกกกกกกกก 15.0% ของแผน",
+        "กกกกกกกกกกกกกก 2568-2569 ยังไม่ปรับแผน",
+        "กกกกกกกกกกกกกกกกกก 50%-60% ของเป้า",
       ],
     });
     const texts = runs(slideXml);
-    expect(texts.some((text) => text.includes("-1,234,567"))).toBe(true);
-    expect(texts.some((text) => text.includes("15.0%"))).toBe(true);
+    for (const figure of ["-1,234,567", "15.0%", "2568-2569", "50%-60%"]) {
+      expect(texts.some((text) => text.includes(figure))).toBe(true);
+    }
     for (const text of texts) {
+      // No run may end on a lone sign, open on a percent, or open on a sign
+      // glued to digits — each of those is a figure broken across two lines.
       expect(text).not.toMatch(/[-+\u2212]\s*$/);
       expect(text).not.toMatch(/^\s*%/);
-      // A run may hold the digits only when it also holds the sign or percent.
+      // A run may open on a signed figure only when the sign is the figure's own,
+      // as in the genuine loss below. A sign pulled off the figure before it,
+      // which is what a broken range looks like, is the defect.
+      if (/^\s*[-+\u2212][\d.,]/.test(text)) expect(text).toContain("-1,234,567");
+      // A run may hold the digits only when it also holds the whole figure.
       if (text.includes("1,234,567")) expect(text).toContain("-1,234,567");
       if (text.includes("15.0")) expect(text).toContain("15.0%");
+      if (text.includes("2569")) expect(text).toContain("2568-2569");
+      if (text.includes("60%")) expect(text).toContain("50%-60%");
     }
     expect(slideXml).not.toContain("<a:normAutofit");
   });
