@@ -27,9 +27,8 @@ function mcpOAuthEndpoints(app) {
       throw new Error("invalid_target");
     const workspace = await Workspace.get({ slug: workspaceSlug });
     const hypervisor = new MCPCompatibilityLayer();
-    const config = hypervisor.mcpServerConfigs.find(
-      ({ name }) => name === serverName
-    )?.server;
+    const config = (await hypervisor.findServerConfig(serverName, workspace))
+      ?.server;
     if (
       !workspace ||
       config?.anythingllm?.perWorkspaceAuth !== true ||

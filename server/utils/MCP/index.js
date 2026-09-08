@@ -27,24 +27,16 @@ class MCPCompatibilityLayer extends MCPHypervisor {
     if (!Number.isInteger(workspace?.id) || workspace.id <= 0) return [];
 
     const connections = await WorkspaceMcpConnection.list(workspace.id);
-    const configs = this.mcpServerConfigs;
-    const allowed = new Set(
-      connections
-        .filter((connection) => {
-          if (!connection.enabled) return false;
-          const config = configs.find((s) => s.name === connection.server_name);
-          return (
-            !config?.server?.anythingllm?.perWorkspaceAuth ||
-            !!connection.access_token
-          );
-        })
-        .map((connection) => connection.server_name)
-    );
     await this.bootMCPServers();
     const active = [];
-    for (const name of allowed) {
-      const config = configs.find((s) => s.name === name);
-      if (config?.server?.anythingllm?.perWorkspaceAuth) {
+    for (const connection of connections) {
+      if (!connection.enabled) continue;
+      const name = connection.server_name;
+      const config = await this.findServerConfig(name, workspace);
+      if (!config) continue;
+      const perWorkspaceAuth = config.server?.anythingllm?.perWorkspaceAuth;
+      if (perWorkspaceAuth && !connection.access_token) continue;
+      if (config.owner === "workspace" || perWorkspaceAuth) {
         try {
           await this.bootWorkspaceServer(workspace, name);
           active.push(`@@mcp_${name}`);
@@ -64,9 +56,14 @@ class MCPCompatibilityLayer extends MCPHypervisor {
    */
   async convertServerToolsToPlugins(name, _aibitat = null) {
     const workspace = _aibitat?.handlerProps?.invocation?.workspace;
-    const perWorkspaceAuth = this.mcpServerConfigs.find((s) => s.name === name)
-      ?.server?.anythingllm?.perWorkspaceAuth;
-    const mcp = perWorkspaceAuth
+    const config = await this.findServerConfig(name, workspace);
+    if (!config) return null;
+    const scoped =
+      config.owner === "workspace" ||
+      config.server?.anythingllm?.perWorkspaceAuth;
+    if (scoped && (!Number.isInteger(workspace?.id) || workspace.id <= 0))
+      return null;
+    const mcp = scoped
       ? this.mcps[this.workspaceServerKey(workspace, name)]
       : this.mcps[name];
     if (!mcp) return null;
@@ -78,13 +75,13 @@ class MCPCompatibilityLayer extends MCPHypervisor {
     } catch (error) {
       this.log(
         `Failed to list tools for MCP server ${name}:`,
-        perWorkspaceAuth ? "MCP tool listing failed" : error
+        scoped ? "MCP tool listing failed" : error
       );
       return null;
     }
     if (!tools || !tools.length) return null;
 
-    const suppressedTools = this.getSuppressedTools(name);
+    const suppressedTools = config.server?.anythingllm?.suppressedTools || [];
     const totalTools = tools.length;
     tools = tools.filter((tool) => !suppressedTools.includes(tool.name));
     const suppressedCount = totalTools - tools.length;
@@ -136,10 +133,18 @@ class MCPCompatibilityLayer extends MCPHypervisor {
                       throw new Error(
                         `MCP server ${name} is not enabled for this workspace`
                       );
-                    const perWorkspaceAuth = mcpLayer.mcpServerConfigs.find(
-                      (s) => s.name === name
-                    )?.server?.anythingllm?.perWorkspaceAuth;
-                    const currentMcp = perWorkspaceAuth
+                    const config = await mcpLayer.findServerConfig(
+                      name,
+                      workspace
+                    );
+                    if (!config)
+                      throw new Error(
+                        `MCP server ${name} is not enabled for this workspace`
+                      );
+                    const scoped =
+                      config.owner === "workspace" ||
+                      config.server?.anythingllm?.perWorkspaceAuth;
+                    const currentMcp = scoped
                       ? await mcpLayer.bootWorkspaceServer(workspace, name)
                       : mcpLayer.mcps[name];
                     if (!currentMcp)
@@ -155,7 +160,7 @@ class MCPCompatibilityLayer extends MCPHypervisor {
                       `Executing MCP server: ${name} with ${JSON.stringify(args, null, 2)}`
                     );
                     const request = { name: tool.name, arguments: args };
-                    const result = perWorkspaceAuth
+                    const result = scoped
                       ? await mcpLayer.callWorkspaceTool(
                           workspace,
                           name,
