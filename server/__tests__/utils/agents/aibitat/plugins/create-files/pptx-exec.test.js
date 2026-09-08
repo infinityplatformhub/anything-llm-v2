@@ -711,3 +711,34 @@ test("long finance titles and decision details end with ellipsis at fixed sizes"
     expect(shape).not.toContain("<a:normAutofit");
   }
 });
+
+test("KPI values fit their serialized boxes, reducing size before ellipsizing at 28pt", async () => {
+  const { slideXml } = await renderOne("kpi", { kpis: [
+    { label: "Long", value: 1000000000000000 },
+    { label: "Medium", value: 12345678 },
+    { label: "Short", value: 1 },
+  ] });
+  const values = (slideXml.match(/<p:sp>[\s\S]*?<\/p:sp>/g) || [])
+    .filter((shape) => /<a:t>[\d,]+…?<\/a:t>/.test(shape));
+  expect(values).toHaveLength(3);
+  const sizes = [];
+  for (const shape of values) {
+    const text = shape.match(/<a:t>([^<]+)<\/a:t>/)[1];
+    const size = Number(shape.match(/sz="(\d+)"/)[1]) / 100;
+    const [, x, y, w, h] = shape.match(/<a:off x="(\d+)" y="(\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"\/>/).map(Number);
+    // Independent digit/comma/ellipsis widths in em, matching the estimator's conservative contract.
+    const widthEm = [...text].reduce((sum, char) => sum + (char === "," ? 0.35 : char === "…" ? 0.8 : 0.62), 0);
+    expect(widthEm * size).toBeLessThanOrEqual(w / 12700);
+    expect(size).toBeLessThanOrEqual(h / 12700);
+    expect(x).toBeGreaterThan(0);
+    expect(y).toBeGreaterThanOrEqual(1.5 * 914400);
+    expect(size).toBeGreaterThanOrEqual(28);
+    expect(shape).not.toContain("<a:normAutofit");
+    sizes.push(size);
+  }
+  expect(values[0]).toContain("…");
+  expect(sizes[0]).toBe(28);
+  expect(values[1]).not.toContain("…");
+  expect(sizes[1]).toBeLessThan(40);
+  expect(sizes[2]).toBe(40);
+});

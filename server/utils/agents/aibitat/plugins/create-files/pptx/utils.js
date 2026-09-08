@@ -18,30 +18,36 @@ function isDarkColor(hexColor) {
 // ponytail: conservative em-width budgeting, not font shaping. Explicit line breaks
 // and ellipsis keep fixed-size text in its box; use a shaping engine if exact wrap is needed.
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+function textWidthEm(text) {
+  return [...text].reduce(
+    (sum, char) =>
+      sum +
+      (/\p{Mark}/u.test(char)
+        ? 0
+        : /\s/u.test(char)
+          ? 0.35
+          : /[il.,'|!:;]/.test(char)
+            ? 0.35
+            : /[MW@]/.test(char)
+              ? 1
+              : /[A-Z]/.test(char)
+                ? 0.75
+                : /[a-z0-9]/.test(char)
+                  ? 0.62
+                  : 0.8),
+    0
+  );
+}
+
 function boundText(text, { w, h, fontSize }) {
   const lineBudget = (w * 72) / fontSize;
+  text = String(text ?? "");
+  if (!text.includes("\n") && textWidthEm(text) <= lineBudget) return text;
   const maxLines = Math.max(1, Math.floor((h * 72) / (fontSize * 1.3)));
   const lines = [""];
   let used = 0;
   for (const { segment } of graphemes.segment(String(text ?? ""))) {
-    const width = [...segment].reduce(
-      (sum, char) =>
-        sum +
-        (/\p{Mark}/u.test(char)
-          ? 0
-          : /\s/u.test(char)
-            ? 0.35
-            : /[il.,'|!:;]/.test(char)
-              ? 0.35
-              : /[MW@]/.test(char)
-                ? 1
-                : /[A-Z]/.test(char)
-                  ? 0.75
-                  : /[a-z0-9]/.test(char)
-                    ? 0.62
-                    : 0.8),
-      0
-    );
+    const width = textWidthEm(segment);
     if (segment === "\n" || used + width > lineBudget - 1) {
       if (lines.length === maxLines) return lines.join("\n").trimEnd() + "…";
       lines.push("");

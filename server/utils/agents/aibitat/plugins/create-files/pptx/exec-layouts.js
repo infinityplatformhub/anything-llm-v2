@@ -49,7 +49,6 @@ const TILE_PILL_GAP_RATIO = 0.14 / TILE_H;
 // 28pt, the smallest that still reads as the headline number rather than body text.
 const KPI_VALUE_FONT_SIZE = 40;
 const KPI_VALUE_FONT_MIN = 28;
-const KPI_VALUE_REFERENCE_W = 3.2; // Below this inner width, use an explicit smaller headline size, never auto-shrink.
 const TILE_PAD_X = 0.25; // Inner padding so text never touches the tile edge.
 const KPI_DEFAULT_Y = 1.5;
 
@@ -444,12 +443,9 @@ function renderKpi(slide, pptx, section, theme, ctx) {
     TILE_H_MIN,
     Math.min(TILE_H, (FOOTER_Y - startY - TILE_GAP * (rows - 1)) / rows)
   );
-  const valueFontSize = Math.max(
+  const maxValueFontSize = Math.max(
     KPI_VALUE_FONT_MIN,
-    Math.round(
-      KPI_VALUE_FONT_SIZE *
-        Math.min(1, tileH / TILE_H, (tileW - TILE_PAD_X * 2) / KPI_VALUE_REFERENCE_W)
-    )
+    Math.round(KPI_VALUE_FONT_SIZE * Math.min(1, tileH / TILE_H))
   );
 
   kpis.forEach((kpi, index) => {
@@ -486,23 +482,36 @@ function renderKpi(slide, pptx, section, theme, ctx) {
         margin: 0,
       }
     );
-    slide.addText(
-      Number.isFinite(kpi.value)
-        ? formatNumber(kpi.value, kpi.unit || "")
-        : String(kpi.value),
-      {
-        x: textX,
-        y: y + tileH * TILE_VALUE_Y_RATIO,
-        w: textW,
-        h: tileH * TILE_VALUE_H_RATIO,
+    const rawValue = Number.isFinite(kpi.value)
+      ? formatNumber(kpi.value, kpi.unit || "")
+      : String(kpi.value);
+    let valueFontSize = maxValueFontSize;
+    const valueBox = { w: textW, h: tileH * TILE_VALUE_H_RATIO };
+    // Reuse the shared width budget: prefer complete figures, then ellipsize
+    // at the 28pt floor. A KPI stays on one line even in a tall tile.
+    const fitValue = () =>
+      boundText(rawValue, {
+        ...valueBox,
+        h: Math.min(valueBox.h, valueFontSize / 72),
         fontSize: valueFontSize,
-        bold: true,
-        color: theme.groundText,
-        fontFace: theme.fontFace,
-        margin: 0,
-        valign: "mid",
-      }
-    );
+      });
+    let value = fitValue();
+    while (value !== rawValue && valueFontSize > KPI_VALUE_FONT_MIN) {
+      valueFontSize -= 1;
+      value = fitValue();
+    }
+    slide.addText(value, {
+      x: textX,
+      y: y + tileH * TILE_VALUE_Y_RATIO,
+      w: textW,
+      h: tileH * TILE_VALUE_H_RATIO,
+      fontSize: valueFontSize,
+      bold: true,
+      color: theme.groundText,
+      fontFace: theme.fontFace,
+      margin: 0,
+      valign: "mid",
+    });
 
     const pillH = tileH * TILE_PILL_H_RATIO;
     const gapH = tileH * TILE_PILL_GAP_RATIO;
