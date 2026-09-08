@@ -89,10 +89,10 @@
 
 **Files:** `e2e/ui/workspace-mcp-servers.spec.ts`, `e2e/scripts/run-mcp-servers-ui.sh` (+ `mcp-ui.cjs` ถ้าต้องเพิ่ม tool ใน fake server)
 
-- [ ] harness: real server + fake MCP (HTTP, Bearer header ตรวจค่าคงที่) ตาม `e2e/scripts/mcp-ui.cjs`
-- [ ] cases: (1) admin add via form → test ok → save → card shows Workspace-owned → run `get_company` → result visible; (2) `@edge` paste JSON with `command` → inline stdio error, save disabled; (3) `@edge` edit: secret shows mask, save without touching → test still ok (server merged old value); (4) manager sees masked config, no buttons; (5) delete → card gone + `GET /workspace/:slug/mcp` no longer lists it
-- [ ] `npx playwright test -c <config> --headed --reporter=json > .infi/e2e-report.json` ทุกเคสเขียว, ≥1 `@edge` ผ่าน
-- [ ] commit `test(e2e): headed coverage for workspace MCP server management (#51)`
+- [x] harness: real server + fake MCP (HTTP, Bearer header ตรวจค่าคงที่) ตาม `e2e/scripts/mcp-ui.cjs` — isolated temp Prisma client; shared dependencies unchanged; original OAuth self-checks retained.
+- [x] cases: (1) admin add via form → test ok → save → card shows Workspace-owned → run `get_company` → result visible; (2) `@edge` paste JSON with `command`/`args`/`env` → inline stdio error, save disabled; (3) `@edge` edit: secret shows mask, save without touching → test still ok (server merged old value); (4) manager sees read-only cards with config reduced to `{anythingllm}`, no headers/URL/buttons per Task 3 contract and ledger ruling; (5) delete → card gone + catalog/allowlist GET no longer list it; (6) `@edge` invalid object JSON rejected, valid `create_invoice` object reaches fake MCP.
+- [x] `npx playwright test -c e2e/mcp-servers-ui.playwright.config.ts --headed --reporter=json` ทุกเคสเขียว, ≥1 `@edge` ผ่าน — runner sets `PLAYWRIGHT_JSON_OUTPUT_FILE=.infi/e2e-report.json`; full unfiltered headed run passed, no failures/skips/flakes. Browser caught owned-toggle bug fixed separately in `9743cf1a` with unchanged assertion.
+- [x] commit `test(e2e): headed coverage for workspace MCP server management (#51)` — `8891e682`
 
 ## Close-out (PMO)
 
