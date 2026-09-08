@@ -190,6 +190,10 @@ describe("MCP OAuth", () => {
     stop = jest.fn();
     Hypervisor.mockImplementation(() => ({
       mcpServerConfigs: configs,
+      findServerConfig: jest.fn(async (name) => {
+        const config = configs.find((s) => s.name === name);
+        return config ? { ...config, owner: "global" } : null;
+      }),
       stopWorkspaceServer: stop,
     }));
     routes = {};

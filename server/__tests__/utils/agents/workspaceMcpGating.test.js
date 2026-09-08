@@ -12,6 +12,10 @@ jest.mock(
           { name: "flowaccount", server: {} },
           { name: "other", server: {} },
         ];
+        this.findServerConfig = jest.fn(async (name) => {
+          const config = this.mcpServerConfigs.find((s) => s.name === name);
+          return config ? { ...config, owner: "global" } : null;
+        });
         this.bootMCPServers = jest.fn().mockResolvedValue(undefined);
         this.bootWorkspaceServer = jest.fn().mockResolvedValue({});
         this.stopWorkspaceServer = jest.fn().mockResolvedValue(undefined);

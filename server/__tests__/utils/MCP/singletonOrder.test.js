@@ -8,6 +8,12 @@ jest.mock("../../../utils/http", () => ({
 jest.mock("../../../models/workspace", () => ({
   Workspace: { get: jest.fn().mockResolvedValue({ id: 7 }) },
 }));
+jest.mock("../../../models/workspaceMcpServer", () => ({
+  WorkspaceMcpServer: {
+    find: jest.fn().mockResolvedValue(null),
+    listDecrypted: jest.fn().mockResolvedValue([]),
+  },
+}));
 jest.mock("../../../models/workspaceMcpConnection", () => ({
   WorkspaceMcpConnection: { setEnabled: jest.fn(), clearTokens: jest.fn() },
 }));

@@ -85,9 +85,7 @@ function mcpServersEndpoints(app) {
             .status(400)
             .json({ success: false, error: "Invalid serverName or enabled" });
         const hypervisor = new MCPCompatibilityLayer();
-        const config = hypervisor.mcpServerConfigs.find(
-          ({ name }) => name === serverName
-        );
+        const config = await hypervisor.findServerConfig(serverName, workspace);
         if (!config)
           return response
             .status(404)
@@ -176,7 +174,25 @@ function mcpServersEndpoints(app) {
           );
         }
         const mcp = new MCPCompatibilityLayer();
-        const allServers = await mcp.servers();
+        const { maskConfig } = require("../utils/MCP/serverConfig");
+        const owned = workspace
+          ? await mcp.workspaceServerConfigs(workspace.id)
+          : [];
+        const ownedNames = new Set(owned.map(({ name }) => name));
+        const allServers = [
+          ...(await mcp.servers())
+            .filter(({ name }) => !ownedNames.has(name))
+            .map((server) => ({ ...server, owner: "global" })),
+          ...owned.map(({ name, server }) => ({
+            name,
+            owner: "workspace",
+            config: maskConfig(server),
+            running: false,
+            tools: [],
+            error: null,
+            process: null,
+          })),
+        ];
         const servers =
           enabledNames === null
             ? allServers
@@ -184,19 +200,23 @@ function mcpServersEndpoints(app) {
                 allServers
                   .filter((server) => enabledNames.includes(server.name))
                   .map(async (server) => {
-                    if (!server.config?.anythingllm?.perWorkspaceAuth)
+                    const perWorkspaceAuth =
+                      server.config?.anythingllm?.perWorkspaceAuth;
+                    if (server.owner !== "workspace" && !perWorkspaceAuth)
                       return server;
                     try {
-                      const connection = await WorkspaceMcpConnection.find(
-                        workspace.id,
-                        server.name
-                      );
-                      if (
-                        !connection?.enabled ||
-                        !connection.access_token ||
-                        !connection.refresh_token
-                      )
-                        return server;
+                      if (perWorkspaceAuth) {
+                        const connection = await WorkspaceMcpConnection.find(
+                          workspace.id,
+                          server.name
+                        );
+                        if (
+                          !connection?.enabled ||
+                          !connection.access_token ||
+                          !connection.refresh_token
+                        )
+                          return server;
+                      }
                       const client = await mcp.bootWorkspaceServer(
                         workspace,
                         server.name
@@ -233,11 +253,10 @@ function mcpServersEndpoints(app) {
                 }))
               : servers,
         });
-      } catch (error) {
-        console.error("Error listing MCP servers:", error);
+      } catch {
         return response.status(500).json({
           success: false,
-          error: error.message,
+          error: "list_failed",
         });
       }
     }

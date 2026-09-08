@@ -11,6 +11,12 @@ jest.mock("../../../utils/http", () => ({ safeJsonParse: JSON.parse }));
 jest.mock("../../../utils/helpers/shell", () => ({
   patchShellEnvironmentPath: jest.fn(),
 }));
+jest.mock("../../../models/workspaceMcpServer", () => ({
+  WorkspaceMcpServer: {
+    find: jest.fn().mockResolvedValue(null),
+    listDecrypted: jest.fn().mockResolvedValue([]),
+  },
+}));
 jest.mock("../../../models/workspaceMcpConnection", () => ({
   WorkspaceMcpConnection: {
     find: jest.fn(),

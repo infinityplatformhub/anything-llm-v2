@@ -2,8 +2,17 @@ import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import * as Skeleton from "react-loading-skeleton";
 import Toggle from "@/components/lib/Toggle";
-import MCPServers from "@/models/mcpServers";
-import WorkspaceMcp from "@/models/workspaceMcp";
+import { useTranslation } from "react-i18next";
+import Modal, {
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
+  ModalSecondaryButton,
+  ModalDangerButton,
+} from "@/components/lib/Modal";
+import WorkspaceMcp, { mcpErrorMessage } from "@/models/workspaceMcp";
+import ServerModal from "./ServerModal";
+import ToolTester from "./ToolTester";
 import paths from "@/utils/paths";
 import showToast from "@/utils/toast";
 
@@ -11,6 +20,10 @@ const buttonClass =
   "rounded-lg border border-theme-modal-border px-4 py-2 text-sm font-semibold hover:bg-theme-bg-primary disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2";
 
 export default function McpConnectors({ workspace, canManage }) {
+  const { t } = useTranslation();
+  const [modal, setModal] = useState(null);
+  const [menu, setMenu] = useState(null);
+  const [deleteError, setDeleteError] = useState(null);
   const [servers, setServers] = useState([]);
   const [connections, setConnections] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -26,12 +39,10 @@ export default function McpConnectors({ workspace, canManage }) {
     setOauthError(null);
     try {
       const [catalog, status] = await Promise.all([
-        MCPServers.listServers(canManage ? undefined : slug),
+        WorkspaceMcp.servers(slug),
         WorkspaceMcp.list(slug),
       ]);
-      if (!catalog.success || !Array.isArray(catalog.servers))
-        throw new Error("Unable to load MCP connectors.");
-      setServers(catalog.servers);
+      setServers(catalog);
       setConnections(status);
     } catch {
       setError("Unable to load MCP connectors. Please try again.");
@@ -40,7 +51,7 @@ export default function McpConnectors({ workspace, canManage }) {
     }
   }, [slug, canManage]);
 
-  const hasExpiry = connections.some((connection) => connection.expiresAt);
+  const hasExpiry = servers.some((server) => server.expiresAt);
   useEffect(() => {
     if (!hasExpiry) return;
     setNow(Date.now());
@@ -119,15 +130,47 @@ export default function McpConnectors({ workspace, canManage }) {
     }
   };
 
+  useEffect(() => {
+    setModal(null);
+    setMenu(null);
+  }, [slug, canManage]);
+
+  const remove = async () => {
+    if (!canManage || pending || modal?.action !== "delete") return;
+    setPending(modal.server.name);
+    setDeleteError(null);
+    try {
+      await WorkspaceMcp.remove(slug, modal.server.name);
+      setModal(null);
+      showToast(t("agent.mcp.deleted"), "success");
+      await refresh();
+    } catch (error) {
+      setDeleteError(mcpErrorMessage(t, error));
+    } finally {
+      setPending(null);
+    }
+  };
+
   return (
     <section
       className="mt-8 w-full max-w-3xl text-theme-text-primary"
       aria-label="MCP Connectors"
       aria-busy={loading}
     >
-      <h2 className="text-sm font-bold uppercase tracking-widest">
-        MCP Connectors
-      </h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-sm font-bold uppercase tracking-widest">
+          MCP Connectors
+        </h2>
+        {canManage && (
+          <button
+            type="button"
+            className={`${buttonClass} bg-primary-button text-theme-button-text`}
+            onClick={() => setModal({ action: "add" })}
+          >
+            {t("agent.mcp.add")}
+          </button>
+        )}
+      </div>
       <p className="mt-2 mb-4 text-sm text-theme-text-secondary">
         Choose which connectors this workspace can use. OAuth connections belong
         to this workspace only.
@@ -156,26 +199,32 @@ export default function McpConnectors({ workspace, canManage }) {
         </div>
       ) : servers.length === 0 ? (
         <div className="rounded-xl border border-theme-modal-border bg-theme-bg-secondary p-8 text-center">
-          <h3 className="font-bold">No MCP servers configured</h3>
+          <h3 className="font-bold">{t("agent.mcp.empty-title")}</h3>
           <p className="mt-2 text-sm text-theme-text-secondary">
-            Add MCP servers in Admin › Agents before enabling them for this
-            workspace.
+            {t("agent.mcp.empty-description")}
           </p>
           {canManage && (
-            <a
-              href={paths.settings.agentSkills()}
-              className={`${buttonClass} mt-4 inline-block`}
-            >
-              Go to Admin › Agents
-            </a>
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                className={`${buttonClass} bg-primary-button text-theme-button-text`}
+                onClick={() => setModal({ action: "add" })}
+              >
+                {t("agent.mcp.add")}
+              </button>
+              <a href={paths.settings.agentSkills()} className={buttonClass}>
+                {t("agent.mcp.shared-catalog")}
+              </a>
+            </div>
           )}
         </div>
       ) : (
         <div className="flex flex-col gap-4">
           {servers.map((server) => {
-            const connection = connections.find(
-              (item) => item.serverName === server.name
-            );
+            const connection = {
+              ...connections.find((item) => item.serverName === server.name),
+              ...server,
+            };
             const oauth = server.config?.anythingllm?.perWorkspaceAuth === true;
             const expiry = connection?.expiresAt
               ? new Date(connection.expiresAt)
@@ -207,10 +256,110 @@ export default function McpConnectors({ workspace, canManage }) {
                 )}
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="font-bold break-all">{server.name}</h3>
-                  <span className="rounded-full border border-theme-modal-border px-2 py-0.5 text-xs text-theme-text-secondary">
-                    {oauth ? "OAuth · per workspace" : "Shared globally"}
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-xs ${server.owner === "workspace" ? "border-primary-button text-primary-button" : "border-theme-modal-border text-theme-text-secondary"}`}
+                  >
+                    {t(
+                      server.owner === "workspace"
+                        ? "agent.mcp.workspace-owned"
+                        : "agent.mcp.shared-globally"
+                    )}
                   </span>
+                  {oauth && (
+                    <span className="rounded-full border border-theme-modal-border px-2 py-0.5 text-xs text-theme-text-secondary">
+                      OAuth · per workspace
+                    </span>
+                  )}
+                  {canManage && server.owner === "workspace" ? (
+                    <div
+                      className="relative ml-auto"
+                      onBlur={(event) => {
+                        if (!event.currentTarget.contains(event.relatedTarget))
+                          setMenu(null);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") setMenu(null);
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className={buttonClass}
+                        aria-label={t("agent.mcp.manage-server", {
+                          name: server.name,
+                        })}
+                        aria-expanded={menu === server.name}
+                        aria-haspopup="menu"
+                        onClick={() =>
+                          setMenu(menu === server.name ? null : server.name)
+                        }
+                      >
+                        {t("agent.mcp.manage")}
+                      </button>
+                      {menu === server.name && (
+                        <div
+                          role="menu"
+                          aria-label={t("agent.mcp.manage-server", {
+                            name: server.name,
+                          })}
+                          className="absolute right-0 z-10 mt-1 min-w-40 rounded-lg border border-theme-modal-border bg-theme-bg-secondary p-1 shadow-lg"
+                        >
+                          {["edit", "test", "delete"].map((action) => (
+                            <button
+                              key={action}
+                              type="button"
+                              role="menuitem"
+                              className="block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-theme-bg-primary"
+                              onClick={() => {
+                                setMenu(null);
+                                setDeleteError(null);
+                                setModal({ action, server });
+                              }}
+                            >
+                              {t(
+                                `agent.mcp.${action === "test" ? "test-tools" : action}`
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    canManage &&
+                    server.enabled && (
+                      <button
+                        type="button"
+                        className={`${buttonClass} ml-auto`}
+                        onClick={() => setModal({ action: "test", server })}
+                      >
+                        {t("agent.mcp.test-tools")}
+                      </button>
+                    )
+                  )}
                 </div>
+                {server.config?.url && (
+                  <p className="mt-2 break-all font-mono text-xs text-theme-text-secondary">
+                    {server.config.url} ·{" "}
+                    {server.config.type === "http" ||
+                    server.config.type === "streamable"
+                      ? "Streamable HTTP"
+                      : "SSE"}
+                  </p>
+                )}
+                {Object.entries(server.config?.headers || {}).length > 0 && (
+                  <dl className="mt-2 text-xs text-theme-text-secondary">
+                    {Object.entries(server.config.headers).map(
+                      ([key, value]) => (
+                        <div
+                          key={key}
+                          className="flex flex-wrap gap-1 break-all font-mono"
+                        >
+                          <dt>{key}:</dt>
+                          <dd>{value}</dd>
+                        </div>
+                      )
+                    )}
+                  </dl>
+                )}
                 {oauth ? (
                   <div className="mt-4 text-sm">
                     <p>
@@ -232,7 +381,7 @@ export default function McpConnectors({ workspace, canManage }) {
                         </p>
                       )}
                     <div className="mt-3 flex flex-wrap items-center gap-3">
-                      {connected && (
+                      {canManage && connected && (
                         <button
                           type="button"
                           className={buttonClass}
@@ -242,7 +391,7 @@ export default function McpConnectors({ workspace, canManage }) {
                           {pending === server.name ? "Updating…" : "Disconnect"}
                         </button>
                       )}
-                      {(!connected || failed) && (
+                      {canManage && (!connected || failed) && (
                         <button
                           type="button"
                           className={`${buttonClass} bg-primary-button text-theme-button-text`}
@@ -259,8 +408,11 @@ export default function McpConnectors({ workspace, canManage }) {
                   </div>
                 ) : (
                   <p className="mt-2 text-xs text-theme-text-secondary">
-                    Uses this instance's shared credentials. Enabling grants
-                    this workspace access to its tools.
+                    {t(
+                      server.owner === "workspace"
+                        ? "agent.mcp.workspace-credentials"
+                        : "agent.mcp.shared-credentials"
+                    )}
                   </p>
                 )}
                 <div className="mt-4 border-t border-theme-modal-border pt-4">
@@ -289,9 +441,74 @@ export default function McpConnectors({ workspace, canManage }) {
       )}
       {!canManage && (
         <p className="mt-4 rounded-xl border border-theme-modal-border p-4 text-sm text-theme-text-secondary">
-          Read-only view. Only administrators can connect, disconnect, or enable
-          MCP connectors.
+          {t("agent.mcp.read-only")}
         </p>
+      )}
+      {canManage && ["add", "edit"].includes(modal?.action) && (
+        <ServerModal
+          key={`${slug}-${modal.server?.name || "new"}`}
+          slug={slug}
+          server={modal.server}
+          onClose={() => setModal(null)}
+          onSaved={refresh}
+        />
+      )}
+      {canManage && modal?.action === "test" && (
+        <ToolTester
+          slug={slug}
+          server={modal.server}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {canManage && modal?.action === "delete" && (
+        <Modal
+          isOpen
+          onClose={() => {
+            if (!pending) setModal(null);
+          }}
+          size="sm"
+        >
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-label={t("agent.mcp.delete-title", {
+              name: modal.server.name,
+            })}
+            className="flex flex-col gap-4 text-theme-text-primary"
+          >
+            <ModalHeader
+              title={t("agent.mcp.delete-title", { name: modal.server.name })}
+            />
+            <ModalBody>
+              <p className="text-sm text-theme-text-secondary">
+                {t("agent.mcp.delete-warning", {
+                  workspace: workspace.name || slug,
+                })}
+              </p>
+              {deleteError && (
+                <p role="alert" className="text-sm text-red-400">
+                  {deleteError}
+                </p>
+              )}
+            </ModalBody>
+            <ModalFooter>
+              <ModalSecondaryButton
+                type="button"
+                disabled={!!pending}
+                onClick={() => setModal(null)}
+              >
+                {t("agent.mcp.cancel")}
+              </ModalSecondaryButton>
+              <ModalDangerButton
+                type="button"
+                disabled={!!pending}
+                onClick={remove}
+              >
+                {t("agent.mcp.confirm-delete")}
+              </ModalDangerButton>
+            </ModalFooter>
+          </div>
+        </Modal>
       )}
     </section>
   );

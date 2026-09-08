@@ -16,6 +16,27 @@ const {
   WorkspaceMcpConnection,
 } = require("../../../models/workspaceMcpConnection");
 const { refreshTokens } = require("../oauth");
+const { createHash } = require("crypto");
+const { WorkspaceMcpServer } = require("../../../models/workspaceMcpServer");
+const { validateWorkspaceServerConfig } = require("../serverConfig");
+
+// Keep workspace connects at the existing runtime deadline; probes are shorter.
+const WORKSPACE_CONNECT_TIMEOUT_MS = 30_000;
+const DEFAULT_MCP_PROBE_TIMEOUT_MS = 15_000;
+
+async function withTimeout(operation, timeoutMs, message) {
+  let timeout;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 /**
  * @typedef {'stdio' | 'http'} MCPServerTypes
@@ -55,6 +76,83 @@ class MCPHypervisor {
    */
   mcpLoadingResults = {};
   workspaceBoots = new Map();
+  workspaceShadowWarnings = new Set();
+
+  async workspaceServerConfigs(workspaceId) {
+    const rows = await WorkspaceMcpServer.listDecrypted(workspaceId);
+    return rows.map(({ name, config }) => ({
+      name,
+      server: config,
+      owner: "workspace",
+    }));
+  }
+
+  async findServerConfig(name, workspace) {
+    const global = this.mcpServerConfigs.find((config) => config.name === name);
+    const owned =
+      Number.isInteger(workspace?.id) && workspace.id > 0
+        ? await WorkspaceMcpServer.find(workspace.id, name)
+        : null;
+    if (owned) {
+      const key = this.workspaceServerKey(workspace, name);
+      if (global && !this.workspaceShadowWarnings.has(key)) {
+        this.workspaceShadowWarnings.add(key);
+        console.warn(
+          `[MCPHypervisor] Workspace server ${key} shadows global server`
+        );
+      }
+      return { name, server: owned.config, owner: "workspace" };
+    }
+    return global ? { ...global, owner: "global" } : null;
+  }
+
+  async probeServerConfig(config, { timeoutMs, accessToken } = {}) {
+    validateWorkspaceServerConfig(config);
+    const configuredTimeout = Number(process.env.MCP_PROBE_TIMEOUT_MS);
+    timeoutMs ??=
+      configuredTimeout > 0 && Number.isFinite(configuredTimeout)
+        ? configuredTimeout
+        : DEFAULT_MCP_PROBE_TIMEOUT_MS;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
+      throw new Error("invalid_probe_timeout");
+    const client = new Client({
+      name: "workspace-mcp-probe",
+      version: "1.0.0",
+    });
+    const started = Date.now();
+    let timedOut = false;
+    let failed = false;
+    try {
+      const server = { ...config };
+      if (accessToken) {
+        const headers = new Headers(server.headers);
+        headers.set("Authorization", `Bearer ${accessToken}`);
+        server.headers = Object.fromEntries(headers);
+      }
+      const transport = this.createHttpTransport(server);
+      const { tools } = await withTimeout(
+        async () => {
+          await client.connect(transport);
+          // A late connection must not start new requests after timeout cleanup.
+          if (timedOut) return { tools: [] };
+          return client.listTools();
+        },
+        timeoutMs,
+        "MCP probe timeout"
+      );
+      return { tools, latencyMs: Date.now() - started };
+    } catch (error) {
+      failed = true;
+      timedOut = error.message === "MCP probe timeout";
+      throw new Error(timedOut ? "MCP probe timeout" : "MCP probe failed");
+    } finally {
+      await client.close().catch(() => {
+        console.warn("MCP_PROBE_CLEANUP_FAILED");
+        // Preserve the probe error; surface cleanup failure only after success.
+        if (!failed) throw new Error("MCP probe cleanup failed");
+      });
+    }
+  }
 
   workspaceServerKey(workspace, name) {
     if (!Number.isInteger(workspace?.id) || workspace.id <= 0)
@@ -129,8 +227,13 @@ class MCPHypervisor {
 
   async connectWorkspaceServer(workspace, name, retryAuth) {
     const key = this.workspaceServerKey(workspace, name);
-    const server = this.mcpServerConfigs.find((s) => s.name === name)?.server;
-    if (!server?.anythingllm?.perWorkspaceAuth)
+    const config = await this.findServerConfig(name, workspace);
+    if (!config)
+      throw new Error(`MCP server ${name} is not enabled for this workspace`);
+    const { server, owner } = config;
+    const perWorkspaceAuth = server?.anythingllm?.perWorkspaceAuth;
+    if (owner === "workspace") validateWorkspaceServerConfig(server);
+    if (!perWorkspaceAuth && owner !== "workspace")
       throw new Error("MCP workspace authentication is not configured");
     const transport = this.#parseServerType(server);
     if (transport !== "http")
@@ -139,20 +242,31 @@ class MCPHypervisor {
       );
     this.#validateServerDefinitionByType(name, server, "http");
     let connection = await WorkspaceMcpConnection.find(workspace.id, name);
+    if (!connection?.enabled)
+      throw new Error(
+        perWorkspaceAuth
+          ? "MCP authentication required"
+          : `MCP server ${name} is not enabled for this workspace`
+      );
     if (
-      !connection?.enabled ||
-      !connection.access_token ||
-      !connection.refresh_token
+      perWorkspaceAuth &&
+      (!connection.access_token || !connection.refresh_token)
     )
       throw new Error("MCP authentication required");
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(server))
+      .digest("hex");
     const expiring =
+      perWorkspaceAuth &&
       connection.expires_at &&
       new Date(connection.expires_at).getTime() < Date.now() + 60000;
     const existing = this.mcps[key];
     if (
       existing &&
       !expiring &&
-      existing.workspaceAccessToken === connection.access_token
+      existing.workspaceConfigFingerprint === fingerprint &&
+      (!perWorkspaceAuth ||
+        existing.workspaceAccessToken === connection.access_token)
     )
       return existing;
     if (existing) {
@@ -168,30 +282,28 @@ class MCPHypervisor {
       );
 
     for (let attempt = 0; attempt < 2; attempt++) {
-      const headers = new Headers(server.headers);
-      headers.set("Authorization", `Bearer ${connection.access_token}`);
       const client = new Client({ name, version: "1.0.0" });
-      const transport = this.createHttpTransport({
-        ...server,
-        headers: Object.fromEntries(headers),
-      });
-      let timeout;
       try {
-        await Promise.race([
-          client.connect(transport),
-          new Promise((_, reject) => {
-            timeout = setTimeout(
-              () => reject(new Error("MCP connection timeout")),
-              30000
-            );
-          }),
-        ]);
-        client.workspaceAccessToken = connection.access_token;
+        let transportConfig = server;
+        if (perWorkspaceAuth) {
+          const headers = new Headers(server.headers);
+          headers.set("Authorization", `Bearer ${connection.access_token}`);
+          transportConfig = { ...server, headers: Object.fromEntries(headers) };
+        }
+        const transport = this.createHttpTransport(transportConfig);
+        await withTimeout(
+          () => client.connect(transport),
+          WORKSPACE_CONNECT_TIMEOUT_MS,
+          "MCP connection timeout"
+        );
+        if (perWorkspaceAuth)
+          client.workspaceAccessToken = connection.access_token;
+        client.workspaceConfigFingerprint = fingerprint;
         this.mcps[key] = client;
         return client;
       } catch (error) {
         await client.close().catch(() => {});
-        if (error.status !== 401 && error.code !== 401)
+        if (!perWorkspaceAuth || (error.status !== 401 && error.code !== 401))
           throw new Error("MCP connection failed");
         if (attempt === 1 || !retryAuth) {
           await WorkspaceMcpConnection.saveTokens(workspace.id, name, {
@@ -206,22 +318,50 @@ class MCPHypervisor {
           server,
           connection
         );
-      } finally {
-        clearTimeout(timeout);
       }
     }
   }
 
+  async callServerTool(workspace, name, request) {
+    if (
+      !Number.isInteger(workspace?.id) ||
+      workspace.id <= 0 ||
+      !(await WorkspaceMcpConnection.isAllowed(workspace.id, name))
+    )
+      throw new Error(`MCP server ${name} is not enabled for this workspace`);
+    const config = await this.findServerConfig(name, workspace);
+    if (!config)
+      throw new Error(`MCP server ${name} is not enabled for this workspace`);
+    if (
+      config.owner === "workspace" ||
+      config.server?.anythingllm?.perWorkspaceAuth
+    )
+      return this.callWorkspaceTool(workspace, name, request);
+    try {
+      if (!this.mcps[name]) await this.bootMCPServers();
+      if (!this.mcps[name]) throw new Error("MCP server unavailable");
+      return await this.mcps[name].callTool(request);
+    } catch {
+      throw new Error("MCP tool call failed");
+    }
+  }
+
   async callWorkspaceTool(workspace, name, args) {
+    const config = await this.findServerConfig(name, workspace);
+    if (!config)
+      throw new Error(`MCP server ${name} is not enabled for this workspace`);
+    const { server } = config;
     let client = await this.bootWorkspaceServer(workspace, name);
     try {
       return await client.callTool(args);
     } catch (error) {
-      if (error.status !== 401 && error.code !== 401)
+      if (
+        !server.anythingllm?.perWorkspaceAuth ||
+        (error.status !== 401 && error.code !== 401)
+      )
         throw new Error("MCP tool call failed");
     }
     await this.stopWorkspaceServer(workspace.id, name);
-    const server = this.mcpServerConfigs.find((s) => s.name === name)?.server;
     const connection = await WorkspaceMcpConnection.find(workspace.id, name);
     if (!connection?.enabled || !connection.access_token)
       throw new Error("MCP authentication required");
@@ -613,22 +753,19 @@ class MCPHypervisor {
    */
   createHttpTransport(server) {
     const url = new URL(server.url);
+    const options = {
+      requestInit: { headers: server.headers },
+      // Never let a validated endpoint redirect requests or credentials elsewhere.
+      fetch: (input, init) => fetch(input, { ...init, redirect: "error" }),
+    };
 
     // If the server block has a type property then use that to determine the transport type
     switch (server.type) {
       case "streamable":
       case "http":
-        return new StreamableHTTPClientTransport(url, {
-          requestInit: {
-            headers: server.headers,
-          },
-        });
+        return new StreamableHTTPClientTransport(url, options);
       default:
-        return new SSEClientTransport(url, {
-          requestInit: {
-            headers: server.headers,
-          },
-        });
+        return new SSEClientTransport(url, options);
     }
   }
 

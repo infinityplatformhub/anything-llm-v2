@@ -44,3 +44,15 @@ e2e/scripts/mcp-ui.cjs
 e2e/scripts/run-mcp-ui.sh
 e2e/ui/workspace-mcp-connectors.spec.ts
 e2e/mcp-ui.playwright.config.ts
+
+# Task 51 (#51) headed workspace-MCP-server E2E harness, same shape and same
+# reason as the four entries above: the live shell exit call reads as a mocha
+# skip function to the shape gate, and the loopback URLs are the fake provider
+# plus the local Vite/API ports. Test-only. Cost: secrets and URL gates stop
+# scanning these four files; the only credential there is a throwaway admin
+# login and a bearer value both generated per run, never read from the
+# environment and never committed.
+e2e/scripts/mcp-servers-ui.cjs
+e2e/scripts/run-mcp-servers-ui.sh
+e2e/ui/workspace-mcp-servers.spec.ts
+e2e/mcp-servers-ui.playwright.config.ts
