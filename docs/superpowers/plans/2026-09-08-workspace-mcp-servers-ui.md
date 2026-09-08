@@ -51,51 +51,51 @@
 
 **Files:** `server/prisma/schema.prisma`, `server/prisma/migrations/20260908000000_workspace_mcp_servers/migration.sql`, `server/models/workspaceMcpServer.js`, `server/utils/MCP/serverConfig.js`, tests `server/__tests__/models/workspaceMcpServer.test.js`, `server/__tests__/utils/MCP/serverConfig.test.js`
 
-- [x] **RED:** `serverConfig.test.js` — validate: ok กับ `{url,type,headers,anythingllm}`; `command`/`args`/`env` → throw `stdio_not_supported`; unknown key → `unknown_field:<key>`; headers เกิน 20 คีย์หรือรวม > 4 KB → `headers_too_large`; ค่าไม่ใช่ string → `invalid_headers`; `type` นอก sse/http/streamable → `invalid_type`; url ผ่าน `httpUrl()` จาก `utils/MCP/oauth.js` (private IP → throw); ชื่อไม่ตรง `^[a-z0-9][a-z0-9_-]{1,63}$` → `invalid_name`. mask: คีย์ที่ match `/token|key|secret|password|authorization|cookie/i` → `"••••••••"`; merge: sentinel = คงเดิม, ค่าใหม่ = ทับ, คีย์หาย = ลบ. parse: รับ `{mcpServers:{a:{},b:{}}}` → `[{name,config}]` และ `{name, config}` เดี่ยว
-- [x] **RED:** `workspaceMcpServer.test.js` — mock `utils/prisma` + `EncryptionManager` (key/salt คงที่); `create` เข้ารหัสก่อนเขียน (ค่าใน `data.config` ต้องไม่มี url ดิบ), `listDecrypted` คืน config ถอดแล้ว, decrypt ล้มเหลว → ข้าม + log ชื่ออย่างเดียว, `delete` ลบ `workspace_mcp_connections` ของชื่อนั้นในห้องนั้นด้วย (ใน `$transaction`)
-- [x] **GREEN:** schema + migration.sql (SQLite syntax ตาม migration เดิม; FK cascade; unique `(workspace_id, name)`), model, serverConfig
-- [x] รัน 2 เทส + `singletonOrder.test.js` ยังผ่าน; eslint clean
-- [x] commit `feat(mcp): workspace_mcp_servers schema, model and config validator (#51)`
+- [ ] **RED:** `serverConfig.test.js` — validate: ok กับ `{url,type,headers,anythingllm}`; `command`/`args`/`env` → throw `stdio_not_supported`; unknown key → `unknown_field:<key>`; headers เกิน 20 คีย์หรือรวม > 4 KB → `headers_too_large`; ค่าไม่ใช่ string → `invalid_headers`; `type` นอก sse/http/streamable → `invalid_type`; url ผ่าน `httpUrl()` จาก `utils/MCP/oauth.js` (private IP → throw); ชื่อไม่ตรง `^[a-z0-9][a-z0-9_-]{1,63}$` → `invalid_name`. mask: คีย์ที่ match `/token|key|secret|password|authorization|cookie/i` → `"••••••••"`; merge: sentinel = คงเดิม, ค่าใหม่ = ทับ, คีย์หาย = ลบ. parse: รับ `{mcpServers:{a:{},b:{}}}` → `[{name,config}]` และ `{name, config}` เดี่ยว
+- [ ] **RED:** `workspaceMcpServer.test.js` — mock `utils/prisma` + `EncryptionManager` (key/salt คงที่); `create` เข้ารหัสก่อนเขียน (ค่าใน `data.config` ต้องไม่มี url ดิบ), `listDecrypted` คืน config ถอดแล้ว, decrypt ล้มเหลว → ข้าม + log ชื่ออย่างเดียว, `delete` ลบ `workspace_mcp_connections` ของชื่อนั้นในห้องนั้นด้วย (ใน `$transaction`)
+- [ ] **GREEN:** schema + migration.sql (SQLite syntax ตาม migration เดิม; FK cascade; unique `(workspace_id, name)`), model, serverConfig
+- [ ] รัน 2 เทส + `singletonOrder.test.js` ยังผ่าน; eslint clean
+- [ ] commit `feat(mcp): workspace_mcp_servers schema, model and config validator (#51)`
 
 ## Task 2 — hypervisor dual-source + workspace-owned boot + probe
 
 **Files:** `server/utils/MCP/hypervisor/index.js`, `server/utils/MCP/index.js`, `server/endpoints/mcpOAuth.js` (`target()` เท่านั้น), test `server/__tests__/utils/MCP/workspaceOwnedServers.test.js`
 
-- [x] **RED:** workspace-owned non-OAuth `{url, headers:{Authorization:"Bearer x"}}` → `activeMCPServers(workspace)` บูต key `7:erp` ด้วย transport ที่ได้ headers จาก config (ไม่ต้องมี token ใน connection แต่ต้อง `enabled`); ชื่อซ้ำ global → workspace-owned ชนะเฉพาะห้องนั้น + log warning หนึ่งครั้ง; `stopWorkspaceServer` หลัง update ปิด client เดิม; `probeServerConfig(config)` คืน `{tools, latencyMs}` แล้ว `close()` เสมอแม้ listTools throw; timeout 15 s (fake timers); ห้อง B ไม่เห็น server ของห้อง A ใน `activeMCPServers`; `convertServerToolsToPlugins` + handler resolve config ผ่าน `findServerConfig` (ห้อง B เรียก tool ของห้อง A → "not enabled for this workspace")
-- [x] **GREEN:** `findServerConfig`, `workspaceServerConfigs` (อ่านผ่าน `WorkspaceMcpServer.listDecrypted`), แก้ `connectWorkspaceServer` ให้แยก branch OAuth/non-OAuth, `probeServerConfig`, `mcpOAuth.js target()`
-- [x] เทสเดิมทั้ง `__tests__/utils/MCP/*` + `workspaceMcpGating.test.js` + endpoint tests เดิมยังผ่าน
-- [x] commit `feat(mcp): hypervisor resolves workspace-owned servers and probes configs (#51)`
+- [ ] **RED:** workspace-owned non-OAuth `{url, headers:{Authorization:"Bearer x"}}` → `activeMCPServers(workspace)` บูต key `7:erp` ด้วย transport ที่ได้ headers จาก config (ไม่ต้องมี token ใน connection แต่ต้อง `enabled`); ชื่อซ้ำ global → workspace-owned ชนะเฉพาะห้องนั้น + log warning หนึ่งครั้ง; `stopWorkspaceServer` หลัง update ปิด client เดิม; `probeServerConfig(config)` คืน `{tools, latencyMs}` แล้ว `close()` เสมอแม้ listTools throw; timeout 15 s (fake timers); ห้อง B ไม่เห็น server ของห้อง A ใน `activeMCPServers`; `convertServerToolsToPlugins` + handler resolve config ผ่าน `findServerConfig` (ห้อง B เรียก tool ของห้อง A → "not enabled for this workspace")
+- [ ] **GREEN:** `findServerConfig`, `workspaceServerConfigs` (อ่านผ่าน `WorkspaceMcpServer.listDecrypted`), แก้ `connectWorkspaceServer` ให้แยก branch OAuth/non-OAuth, `probeServerConfig`, `mcpOAuth.js target()`
+- [ ] เทสเดิมทั้ง `__tests__/utils/MCP/*` + `workspaceMcpGating.test.js` + endpoint tests เดิมยังผ่าน
+- [ ] commit `feat(mcp): hypervisor resolves workspace-owned servers and probes configs (#51)`
 
 ## Task 3 — endpoints
 
 **Files:** `server/endpoints/workspaceMcpServers.js`, `server/endpoints/mcpServers.js` (list เท่านั้น), `server/index.js`, test `server/__tests__/endpoints/workspaceMcpServers.test.js`
 
-- [x] **RED:** ตาม spec ตาราง API: GET list admin+manager(สมาชิก) masked; POST create form + `mcpServers` block (ตัวผิดรายงานแยก, 201), stdio 400, unknown_field 400, ชื่อชน global 409 `name_conflict`, ชื่อชน workspace-owned 409; PUT sentinel merge + `stopWorkspaceServer` ถูกเรียก; DELETE ลบ + stop; POST test ด้วย `{config}` ผ่าน validator (private IP → 400) และด้วย `{name}` saved; POST `:name/call` ผ่าน `callWorkspaceTool`, ผลลัพธ์ string ตัด 64 KB + `truncated:true`, ห้อง B → 404; manager ทุก mutate → 403/401 ตาม middleware; ซ้อน test/call เดียวกัน → 409 `busy`; error body ไม่มีค่า header
-- [x] **RED:** `/mcp-servers/list?workspaceSlug=` คืน workspace-owned พร้อม `owner:"workspace"` และ global `owner:"global"` (เพิ่มเคสใน `workspaceMcpList.test.js`)
-- [x] **GREEN** + register router
-- [x] commit `feat(mcp): workspace MCP server endpoints with test and tool call (#51)`
+- [ ] **RED:** ตาม spec ตาราง API: GET list admin+manager(สมาชิก) masked; POST create form + `mcpServers` block (ตัวผิดรายงานแยก, 201), stdio 400, unknown_field 400, ชื่อชน global 409 `name_conflict`, ชื่อชน workspace-owned 409; PUT sentinel merge + `stopWorkspaceServer` ถูกเรียก; DELETE ลบ + stop; POST test ด้วย `{config}` ผ่าน validator (private IP → 400) และด้วย `{name}` saved; POST `:name/call` ผ่าน `callWorkspaceTool`, ผลลัพธ์ string ตัด 64 KB + `truncated:true`, ห้อง B → 404; manager ทุก mutate → 403/401 ตาม middleware; ซ้อน test/call เดียวกัน → 409 `busy`; error body ไม่มีค่า header
+- [ ] **RED:** `/mcp-servers/list?workspaceSlug=` คืน workspace-owned พร้อม `owner:"workspace"` และ global `owner:"global"` (เพิ่มเคสใน `workspaceMcpList.test.js`)
+- [ ] **GREEN** + register router
+- [ ] commit `feat(mcp): workspace MCP server endpoints with test and tool call (#51)`
 
 ## Task 4 — frontend per mockup
 
 **Files:** `frontend/src/models/workspaceMcp.js`, `McpConnectors/index.jsx`, `McpConnectors/ServerModal.jsx`, `McpConnectors/ToolTester.jsx`
 
-- [x] ต่อยอด component เดิม (ไม่เขียนใหม่): ปุ่ม `+ Add MCP server` (admin), chip `Workspace-owned`/`Shared globally`, เมนู ⚙ Edit/Test tools/Delete บน workspace-owned, ปุ่ม Test tools บน global ที่ enabled, empty state ใหม่, confirm delete ระบุลบ token/allowlist
-- [x] `ServerModal`: tabs Form/JSON ตาม mockup (validation ฝั่ง client เหมือน mockup; ฝั่ง server เป็น source of truth), headers secret → `type=password`, edit prefilled mask + clear, Test connection (states idle/testing/ok/error พร้อม cancel ผ่าน AbortController), Save (disabled จน valid; warning ถ้ายังไม่ test)
-- [x] `ToolTester`: arg form จาก `inputSchema` (string/number/boolean/enum; object/array → JSON textarea; required *), Run → `<pre>` result + latency + copy, error state, banner เตือน
-- [x] ใช้ `Toggle`/`showToast`/class เดิมของ repo; i18n key ใน `frontend/src/locales/en/common.js` (ภาษาอื่นตกไป default ตามกลไก repo); `node node_modules/eslint/bin/eslint.js src/pages/WorkspaceSettings/AgentConfig src/models/workspaceMcp.js` clean; `yarn build` ผ่าน
-- [x] commit `feat(mcp-ui): add, edit, test and call workspace MCP servers from Agent Configuration (#51)`
+- [ ] ต่อยอด component เดิม (ไม่เขียนใหม่): ปุ่ม `+ Add MCP server` (admin), chip `Workspace-owned`/`Shared globally`, เมนู ⚙ Edit/Test tools/Delete บน workspace-owned, ปุ่ม Test tools บน global ที่ enabled, empty state ใหม่, confirm delete ระบุลบ token/allowlist
+- [ ] `ServerModal`: tabs Form/JSON ตาม mockup (validation ฝั่ง client เหมือน mockup; ฝั่ง server เป็น source of truth), headers secret → `type=password`, edit prefilled mask + clear, Test connection (states idle/testing/ok/error พร้อม cancel ผ่าน AbortController), Save (disabled จน valid; warning ถ้ายังไม่ test)
+- [ ] `ToolTester`: arg form จาก `inputSchema` (string/number/boolean/enum; object/array → JSON textarea; required *), Run → `<pre>` result + latency + copy, error state, banner เตือน
+- [ ] ใช้ `Toggle`/`showToast`/class เดิมของ repo; i18n key ใน `frontend/src/locales/en/common.js` (ภาษาอื่นตกไป default ตามกลไก repo); `node node_modules/eslint/bin/eslint.js src/pages/WorkspaceSettings/AgentConfig src/models/workspaceMcp.js` clean; `yarn build` ผ่าน
+- [ ] commit `feat(mcp-ui): add, edit, test and call workspace MCP servers from Agent Configuration (#51)`
 
 ## Task 5 — headed E2E
 
 **Files:** `e2e/ui/workspace-mcp-servers.spec.ts`, `e2e/scripts/run-mcp-servers-ui.sh` (+ `mcp-ui.cjs` ถ้าต้องเพิ่ม tool ใน fake server)
 
-- [x] harness: real server + fake MCP (HTTP, Bearer header ตรวจค่าคงที่) ตาม `e2e/scripts/mcp-ui.cjs`
-- [x] cases: (1) admin add via form → test ok → save → card shows Workspace-owned → run `get_company` → result visible; (2) `@edge` paste JSON with `command` → inline stdio error, save disabled; (3) `@edge` edit: secret shows mask, save without touching → test still ok (server merged old value); (4) manager sees masked config, no buttons; (5) delete → card gone + `GET /workspace/:slug/mcp` no longer lists it
-- [x] `npx playwright test -c <config> --headed --reporter=json > .infi/e2e-report.json` ทุกเคสเขียว, ≥1 `@edge` ผ่าน
-- [x] commit `test(e2e): headed coverage for workspace MCP server management (#51)`
+- [ ] harness: real server + fake MCP (HTTP, Bearer header ตรวจค่าคงที่) ตาม `e2e/scripts/mcp-ui.cjs`
+- [ ] cases: (1) admin add via form → test ok → save → card shows Workspace-owned → run `get_company` → result visible; (2) `@edge` paste JSON with `command` → inline stdio error, save disabled; (3) `@edge` edit: secret shows mask, save without touching → test still ok (server merged old value); (4) manager sees masked config, no buttons; (5) delete → card gone + `GET /workspace/:slug/mcp` no longer lists it
+- [ ] `npx playwright test -c <config> --headed --reporter=json > .infi/e2e-report.json` ทุกเคสเขียว, ≥1 `@edge` ผ่าน
+- [ ] commit `test(e2e): headed coverage for workspace MCP server management (#51)`
 
 ## Close-out (PMO)
 
-- [x] Opus security review (schema + secrets + SSRF ผ่านช่อง test/call + role gating)
-- [x] `task.sh check --issue 51 --base e5bee011` → `task.sh close`
+- [ ] Opus security review (schema + secrets + SSRF ผ่านช่อง test/call + role gating)
+- [ ] `task.sh check --issue 51 --base e5bee011` → `task.sh close`
 - [ ] `infi-lessons` → PR `feat/workspace-mcp-servers-ui` → master
