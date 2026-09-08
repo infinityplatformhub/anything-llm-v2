@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workspace MCP Servers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root {
+    --bg-primary: #0e0f0f; --bg-secondary: #1b1b1e; --bg-input: #27282a;
+    --text-primary: #ffffff; --text-secondary: rgba(255,255,255,.6);
+    --border: rgba(255,255,255,.1); --border-strong: #3f3f42;
+    --btn-primary: #46c8ff; --btn-cta: #7cd4fd; --ok: #34d399; --warn: #fbbf24; --danger: #f87171;
+    --sky-dim: rgba(70,200,255,.12);
+  }
+  body { font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif; background: #101112; color: var(--text-primary); margin: 0; }
+  .app-surface { background: var(--bg-primary); }
+  .panel { background: var(--bg-secondary); border: 1px solid var(--border); }
+  .btn-primary { background: var(--btn-primary); color: #0b1418; }
+  .btn-primary:hover:not(:disabled) { background: var(--btn-cta); }
+  .btn-ghost { border: 1px solid var(--border-strong); color: var(--text-primary); }
+  .btn-ghost:hover:not(:disabled) { background: rgba(255,255,255,.08); }
+  .btn-danger { border: 1px solid rgba(248,113,113,.4); color: var(--danger); }
+  .btn-danger:hover:not(:disabled) { background: rgba(248,113,113,.12); }
+  .chip { border: 1px solid var(--border-strong); color: var(--text-secondary); }
+  .chip.own { border-color: var(--btn-primary); color: var(--btn-primary); background: var(--sky-dim); }
+  .toggle { width: 44px; height: 24px; border-radius: 999px; background: #3f3f42; position: relative; transition: background .2s; cursor: pointer; flex: none; border: 0; }
+  .toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 999px; background: #fff; transition: transform .2s; }
+  .toggle[aria-checked="true"] { background: var(--btn-primary); }
+  .toggle[aria-checked="true"]::after { transform: translateX(20px); }
+  .demo-bar { background: #16181a; border-bottom: 1px solid var(--border-strong); }
+  .demo-bar button.active { background: var(--btn-primary); color: #0b1418; font-weight: 700; }
+  .modal-backdrop { background: rgba(0,0,0,.7); backdrop-filter: blur(2px); }
+  .fa-logo { background: #14548c; color: #7cd4fd; }
+  .spinner { display: inline-block; width: 15px; height: 15px; border: 2px solid var(--border-strong); border-top-color: var(--btn-primary); border-radius: 50%; animation: spin .9s linear infinite; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .skeleton { background: linear-gradient(90deg,#1b1b1e 25%,#242527 50%,#1b1b1e 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { .spinner, .skeleton { animation: none; } }
+  ::placeholder { color: rgba(255,255,255,.4); }
+  input:focus-visible, button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--btn-primary); outline-offset: 1px; }
+  .muted { color: var(--text-secondary); } .ok { color: var(--ok); } .err { color: var(--danger); } .warn { color: var(--warn); }
+  .field { width: 100%; min-width: 0; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--text-primary); border-radius: 8px; padding: 9px 12px; font-size: 13px; }
+  .field.bad { border-color: var(--danger); }
+  textarea.field { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  pre { overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+  .banner-warn { border: 1px solid rgba(251,191,36,.35); background: rgba(251,191,36,.07); color: var(--warn); border-radius: 8px; padding: 10px 12px; }
+  .banner-err { border: 1px solid rgba(248,113,113,.35); background: rgba(248,113,113,.07); border-radius: 8px; padding: 10px 12px; }
+  .banner-ok { border: 1px solid rgba(52,211,153,.35); background: rgba(52,211,153,.07); border-radius: 8px; padding: 10px 12px; }
+  .tab { border-bottom: 2px solid transparent; padding: 6px 2px; font-weight: 600; color: var(--text-secondary); }
+  .tab.active { color: var(--text-primary); border-color: var(--btn-primary); }
+  .menu { position: absolute; right: 0; top: 30px; min-width: 140px; background: #232427; border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.4); z-index: 20; }
+  .menu button { display: block; width: 100%; text-align: left; padding: 8px 12px; font-size: 13px; }
+  .menu button:hover { background: rgba(255,255,255,.08); }
+  .kv { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.5fr) auto; gap: 8px; }
+  details summary { cursor: pointer; }
+  [data-role-only="admin"] { display: revert; }
+  body.manager [data-role-only="admin"] { display: none !important; }
+</style>
+</head>
+<body>
+<!-- DISPOSABLE MOCKUP. In-memory only. No real API, no credentials, never becomes production code. -->
+<div class="demo-bar flex flex-wrap items-center gap-2 px-4 py-2 text-xs sticky top-0 z-30">
+  <span class="muted font-semibold mr-1">สถานะตัวอย่าง (กดเล่นได้):</span>
+  <button data-demo="ready" class="chip rounded-full px-3 py-1 active">พร้อมใช้</button>
+  <button data-demo="loading" class="chip rounded-full px-3 py-1">กำลังโหลด</button>
+  <button data-demo="empty" class="chip rounded-full px-3 py-1">ไม่มี server</button>
+  <span class="muted ml-3">บทบาท:</span>
+  <button data-role="admin" class="chip rounded-full px-3 py-1 active">Admin</button>
+  <button data-role="manager" class="chip rounded-full px-3 py-1">Manager</button>
+  <span class="ml-auto muted">workspace: <b class="text-white">ทีมบัญชี</b> · mockup v1</span>
+</div>
+
+<div class="flex min-h-[calc(100vh-40px)]">
+  <aside class="app-surface hidden md:flex flex-col w-60 shrink-0 border-r" style="border-color: var(--border)">
+    <div class="flex items-center gap-2 px-4 py-4 text-sm font-extrabold tracking-tight"><span class="fa-logo w-7 h-7 rounded-lg grid place-items-center text-xs font-extrabold">AL</span>AnythingLLM</div>
+    <div class="px-4 pt-2 pb-1 text-[10px] font-bold uppercase tracking-widest muted">Workspaces</div>
+    <nav class="flex flex-col gap-0.5 px-2 text-sm">
+      <span class="rounded-lg px-3 py-2 muted">ทีมขาย</span>
+      <span class="rounded-lg px-3 py-2 font-semibold" style="background: rgba(255,255,255,.08)">ทีมบัญชี</span>
+      <span class="rounded-lg px-3 py-2 muted">R&amp;D</span>
+    </nav>
+    <div id="identity" class="mt-auto px-4 py-4 text-xs muted">admin@infi.co</div>
+  </aside>
+
+  <main class="flex-1 min-w-0 px-5 md:px-10 py-6">
+    <div class="text-xs mb-3 muted">Workspace Settings · ทีมบัญชี</div>
+    <h1 class="text-xl font-extrabold tracking-tight">Agent Configuration</h1>
+    <p class="mt-1 text-sm max-w-2xl muted">เลือกว่า agent ของ workspace นี้ใช้อะไรได้บ้าง — MCP server ที่เพิ่มในหน้านี้เป็นของ workspace นี้เท่านั้น ห้องอื่นไม่เห็น</p>
+
+    <section class="mt-6 max-w-3xl" aria-label="MCP Connectors">
+      <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <h2 class="text-sm font-bold uppercase tracking-widest muted">MCP Connectors</h2>
+        <button data-add data-role-only="admin" class="btn-primary rounded-lg px-4 py-2 text-sm font-bold">+ เพิ่ม MCP server</button>
+      </div>
+      <div id="manager-note" class="panel rounded-xl p-4 mb-4 text-sm" hidden><b>มุมมอง Manager:</b> อ่านสถานะและ config (ปิดบัง secret) ได้อย่างเดียว การเพิ่ม/แก้ไข/ทดสอบ/ลบ server ทำได้เฉพาะ Admin</div>
+
+      <div id="state-loading" class="space-y-4" hidden>
+        <div class="panel rounded-xl p-5"><div class="skeleton h-6 w-56 max-w-full rounded"></div><div class="skeleton h-4 w-80 max-w-full rounded mt-3"></div><div class="skeleton h-10 w-full rounded mt-5"></div></div>
+        <div class="panel rounded-xl p-5"><div class="skeleton h-6 w-56 max-w-full rounded"></div><div class="skeleton h-10 w-full rounded mt-5"></div></div>
+      </div>
+
+      <div id="state-empty" class="panel rounded-xl p-8 text-center" hidden>
+        <div class="text-4xl">🔌</div>
+        <h3 class="font-bold mt-3">ยังไม่มี MCP server ใน workspace นี้</h3>
+        <p class="muted text-sm mt-2">เพิ่ม MCP server ของห้องนี้ (HTTP / SSE) หรือเปิดใช้จาก shared catalog ของ instance · stdio ยังตั้งค่าผ่านไฟล์ global เท่านั้น</p>
+        <div class="mt-4 flex flex-wrap justify-center gap-2">
+          <button data-add data-role-only="admin" class="btn-primary rounded-lg px-4 py-2 text-sm font-bold">+ เพิ่ม MCP server</button>
+          <button class="btn-ghost rounded-lg px-4 py-2 text-sm" onclick="toast('shared catalog (ตัวอย่าง): เปิด flowaccount ด้วย toggle บนการ์ด')">เปิดจาก shared catalog</button>
+        </div>
+      </div>
+
+      <div id="cards" class="space-y-4"></div>
+
+      <div id="fn-wrap" class="mt-6">
+        <div class="text-xs font-bold uppercase tracking-widest mb-2 muted">functions ที่ agent ของ workspace นี้โหลดตอนนี้</div>
+        <div id="fn-list" class="flex flex-wrap gap-2 text-xs font-mono"></div>
+      </div>
+      <p class="muted text-xs mt-6">ข้อมูลทั้งหมดอยู่ในหน่วยความจำของหน้านี้ · ไม่มีการเชื่อมต่อจริง · รีเฟรชเพื่อเริ่มใหม่</p>
+    </section>
+  </main>
+</div>
+
+<!-- Add / Edit modal -->
+<div id="modal" class="modal-backdrop fixed inset-0 z-40 flex items-center justify-center p-4" hidden>
+  <section role="dialog" aria-modal="true" aria-labelledby="modal-title" class="panel rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-6">
+    <div class="flex items-center justify-between gap-3">
+      <h2 id="modal-title" class="text-lg font-extrabold">เพิ่ม MCP server</h2>
+      <button class="btn-ghost rounded-lg px-3 py-1 text-xs" data-close>ปิด (Esc)</button>
+    </div>
+    <p class="muted text-xs mt-1">ของ workspace <b class="text-white">ทีมบัญชี</b> เท่านั้น · รองรับ HTTP / SSE · ค่า secret ถูกเข้ารหัสก่อนเก็บ</p>
+
+    <div class="flex gap-5 mt-4 border-b text-sm" style="border-color: var(--border)">
+      <button class="tab active" data-tab="form">ฟอร์ม</button>
+      <button class="tab" data-tab="json">วาง JSON</button>
+    </div>
+
+    <!-- FORM TAB -->
+    <div id="tab-form" class="mt-4 space-y-4">
+      <div class="grid md:grid-cols-2 gap-4">
+        <label class="block text-xs font-semibold">ชื่อ server <span class="err">*</span>
+          <input id="f-name" class="field mt-1 font-mono" placeholder="erp-internal" autocomplete="off">
+          <div id="f-name-msg" class="text-xs mt-1 err" hidden></div>
+        </label>
+        <label class="block text-xs font-semibold">Transport
+          <select id="f-type" class="field mt-1">
+            <option value="sse">SSE (ค่าเริ่มต้น)</option>
+            <option value="http">Streamable HTTP</option>
+          </select>
+        </label>
+      </div>
+      <label class="block text-xs font-semibold">URL <span class="err">*</span>
+        <input id="f-url" class="field mt-1 font-mono" placeholder="https://mcp.example.com/mcp" autocomplete="off">
+        <div id="f-url-msg" class="text-xs mt-1 err" hidden></div>
+        <div class="muted text-[11px] mt-1">ต้องเป็น http(s) · ห้าม IP literal / localhost · ทดสอบได้ก่อนบันทึก</div>
+      </label>
+
+      <div>
+        <div class="flex items-center justify-between">
+          <div class="text-xs font-semibold">Headers</div>
+          <button id="f-add-header" class="btn-ghost rounded-lg px-3 py-1 text-xs">+ เพิ่ม header</button>
+        </div>
+        <div id="f-headers" class="mt-2 space-y-2"></div>
+        <div class="muted text-[11px] mt-1">คีย์ที่ชื่อมี token / key / secret / password / authorization / cookie จะถูกปิดบังตอนอ่านกลับ</div>
+      </div>
+
+      <div class="flex items-start justify-between gap-4 border-t pt-4" style="border-color: var(--border)">
+        <div>
+          <div class="text-sm font-semibold">ต้อง OAuth ต่อ workspace</div>
+          <div class="muted text-xs">server ที่ต้องล็อกอิน (เช่น FlowAccount) — หลังบันทึกจะมีปุ่ม Connect บนการ์ด · ไม่ต้องใส่ Authorization header</div>
+        </div>
+        <button id="f-oauth" class="toggle" role="switch" aria-checked="false" aria-label="ต้อง OAuth ต่อ workspace"></button>
+      </div>
+
+      <div id="f-suppress-wrap" hidden>
+        <div class="text-xs font-semibold">Tools ที่เปิดให้ agent (จากผลทดสอบ)</div>
+        <div id="f-suppress" class="mt-2 space-y-1 text-sm"></div>
+      </div>
+    </div>
+
+    <!-- JSON TAB -->
+    <div id="tab-json" class="mt-4 space-y-3" hidden>
+      <div class="muted text-xs">วางก้อน <code>mcpServers</code> ที่ vendor แจก หรือ definition เดี่ยว <code>{ "url": … }</code> · ตรวจสอบทันทีที่พิมพ์</div>
+      <textarea id="j-text" class="field" rows="12" spellcheck="false"></textarea>
+      <div id="j-msg" class="text-xs" hidden></div>
+      <div class="flex gap-2">
+        <button id="j-apply" class="btn-ghost rounded-lg px-3 py-1.5 text-xs font-semibold">ใช้ค่านี้ในฟอร์ม</button>
+        <button id="j-sample" class="btn-ghost rounded-lg px-3 py-1.5 text-xs">วางตัวอย่าง</button>
+        <button id="j-sample-stdio" class="btn-ghost rounded-lg px-3 py-1.5 text-xs">วางตัวอย่าง stdio (ผิด)</button>
+      </div>
+    </div>
+
+    <!-- TEST + SAVE -->
+    <div class="mt-5 border-t pt-4 space-y-3" style="border-color: var(--border)">
+      <div class="flex flex-wrap items-center gap-2">
+        <button id="t-run" class="btn-ghost rounded-lg px-4 py-2 text-sm font-semibold">ทดสอบการเชื่อมต่อ</button>
+        <button id="t-cancel" class="btn-ghost rounded-lg px-3 py-2 text-xs" hidden>ยกเลิก</button>
+        <span id="t-status" class="text-xs muted">ยังไม่ได้ทดสอบ</span>
+      </div>
+      <div id="t-result" hidden></div>
+      <div id="s-msg" class="text-xs" hidden></div>
+      <div class="flex items-center justify-end gap-2">
+        <button class="btn-ghost rounded-lg px-4 py-2 text-sm" data-close>ยกเลิก</button>
+        <button id="s-save" class="btn-primary rounded-lg px-5 py-2 text-sm font-bold" disabled>บันทึก</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- Test tools modal -->
+<div id="tools-modal" class="modal-backdrop fixed inset-0 z-40 flex items-center justify-center p-4" hidden>
+  <section role="dialog" aria-modal="true" aria-labelledby="tools-title" class="panel rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-6">
+    <div class="flex items-center justify-between gap-3">
+      <h2 id="tools-title" class="text-lg font-extrabold">ทดสอบ tools · <span id="tools-server" class="font-mono"></span></h2>
+      <button class="btn-ghost rounded-lg px-3 py-1 text-xs" data-close>ปิด (Esc)</button>
+    </div>
+    <div class="banner-warn text-xs mt-3">⚠️ เรียกไปที่ server จริงด้วย credential ของ workspace นี้ — tool ที่ขึ้นต้นด้วย create_/update_/delete_ อาจเขียนข้อมูลจริงที่ปลายทาง</div>
+    <label class="block text-xs font-semibold mt-4">เลือก tool
+      <select id="tl-tool" class="field mt-1 font-mono"></select>
+    </label>
+    <div id="tl-desc" class="muted text-xs mt-1"></div>
+    <div id="tl-args" class="mt-3 space-y-3"></div>
+    <div class="flex items-center gap-2 mt-4">
+      <button id="tl-run" class="btn-primary rounded-lg px-4 py-2 text-sm font-bold">เรียก</button>
+      <span id="tl-status" class="text-xs muted"></span>
+    </div>
+    <div id="tl-result" class="mt-3" hidden></div>
+  </section>
+</div>
+
+<!-- Delete confirm -->
+<div id="del-modal" class="modal-backdrop fixed inset-0 z-40 flex items-center justify-center p-4" hidden>
+  <section role="alertdialog" aria-modal="true" class="panel rounded-2xl w-full max-w-md p-6">
+    <h2 class="text-lg font-extrabold">ลบ <span id="del-name" class="font-mono"></span>?</h2>
+    <p class="text-sm mt-2 muted">จะลบ config ของ server นี้ออกจาก workspace <b class="text-white">ทีมบัญชี</b> รวมถึง <b class="text-white">token OAuth และสถานะเปิดใช้</b> ของห้องนี้ด้วย · client ที่กำลังรันจะถูกปิดทันที · ห้องอื่นไม่กระทบ</p>
+    <div class="flex justify-end gap-2 mt-5">
+      <button class="btn-ghost rounded-lg px-4 py-2 text-sm" data-close>ยกเลิก</button>
+      <button id="del-ok" class="btn-danger rounded-lg px-4 py-2 text-sm font-bold">ลบ server</button>
+    </div>
+  </section>
+</div>
+
+<div id="toast" class="panel fixed bottom-5 right-5 left-5 md:left-auto rounded-xl p-4 text-sm z-50" role="status" hidden></div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const SECRET = /token|key|secret|password|authorization|cookie/i;
+const MASK = "••••••••";
+const NAME_RE = /^[a-z0-9][a-z0-9_-]{1,63}$/;
+const URL_RE = /^https?:\/\/\S+$/i;
+const KNOWN = new Set(["url", "type", "headers", "anythingllm"]);
+const STDIO = ["command", "args", "env"];
+
+// ---- fake catalog ----
+const FAKE_TOOLS = [
+  { name: "get_company", description: "ข้อมูลบริษัทที่เชื่อมต่อ", inputSchema: { type: "object", properties: {} } },
+  { name: "list_invoices", description: "รายการใบแจ้งหนี้", inputSchema: { type: "object", properties: { status: { type: "string", enum: ["draft", "paid", "void"] }, limit: { type: "number" }, include_void: { type: "boolean" } }, required: ["status"] } },
+  { name: "create_invoice", description: "สร้างใบแจ้งหนี้ใหม่ (เขียนข้อมูลจริง)", inputSchema: { type: "object", properties: { invoice: { type: "object" }, status: { type: "string", enum: ["draft", "paid"] } }, required: ["invoice"] } },
+];
+
+// ---- state ----
+let role = "admin";
+let servers = [];
+let editing = null;   // name when editing
+let testTimer = null; let lastTest = null;
+const seed = () => [
+  { name: "flowaccount", owner: "global", oauth: true, connected: true, enabled: true, url: "https://mcp.flowaccount.com/mcp", type: "http", headers: {}, tools: FAKE_TOOLS, company: "บจก. ตัวอย่างการบัญชี จำกัด" },
+  { name: "erp-internal", owner: "workspace", oauth: false, connected: true, enabled: true, url: "https://erp.example.com/mcp", type: "http", headers: { Authorization: "Bearer sk-live-4f3a…", "X-Tenant": "acct" }, tools: FAKE_TOOLS.slice(0, 2), suppressed: [] },
+];
+
+function toast(msg, kind = "") {
+  const t = $("#toast"); t.textContent = msg; t.className = `panel fixed bottom-5 right-5 left-5 md:left-auto rounded-xl p-4 text-sm z-50 ${kind}`; t.hidden = false;
+  clearTimeout(t._t); t._t = setTimeout(() => (t.hidden = true), 2600);
+}
+const maskHeaders = (h) => Object.fromEntries(Object.entries(h).map(([k, v]) => [k, SECRET.test(k) ? MASK : v]));
+
+// ---- render ----
+function render() {
+  const cards = $("#cards"); cards.innerHTML = "";
+  $("#state-empty").hidden = servers.length > 0;
+  $("#fn-wrap").hidden = servers.length === 0;
+  servers.forEach((s) => cards.appendChild(card(s)));
+  renderFns();
+}
+function card(s) {
+  const a = document.createElement("article"); a.className = "panel rounded-xl p-5 relative";
+  const own = s.owner === "workspace";
+  const hdrs = Object.entries(maskHeaders(s.headers));
+  a.innerHTML = `
+    <div class="flex items-start gap-4">
+      <div class="w-11 h-11 rounded-xl grid place-items-center font-extrabold text-lg shrink-0 ${own ? "" : "fa-logo"}" style="${own ? "background: var(--bg-input); color: var(--text-secondary)" : ""}">${s.name.slice(0, 2).toUpperCase()}</div>
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-2">
+          <h3 class="font-bold font-mono">${s.name}</h3>
+          <span class="chip ${own ? "own" : ""} rounded-full px-2 py-0.5 text-[10px] font-semibold">${own ? "ของ workspace นี้" : "แชร์ global"}</span>
+          ${s.oauth ? '<span class="chip rounded-full px-2 py-0.5 text-[10px] font-semibold">OAuth ต่อ workspace</span>' : ""}
+          ${own ? `<div class="relative ml-auto" data-role-only="admin">
+            <button class="btn-ghost rounded-lg px-2 py-1 text-xs" data-menu aria-haspopup="menu" aria-label="จัดการ ${s.name}">⚙ จัดการ</button>
+            <div class="menu" hidden role="menu">
+              <button data-act="edit">แก้ไข</button>
+              <button data-act="test">ทดสอบ tools</button>
+              <button data-act="delete" class="err">ลบ</button>
+            </div></div>` : `<div class="ml-auto" data-role-only="admin"><button class="btn-ghost rounded-lg px-2 py-1 text-xs" data-act="test">ทดสอบ tools</button></div>`}
+        </div>
+        <p class="muted text-xs mt-1 font-mono">${s.url} · ${s.type === "http" ? "Streamable HTTP" : "SSE"}</p>
+        ${hdrs.length ? `<div class="mt-2 text-xs font-mono muted">${hdrs.map(([k, v]) => `<div>${k}: <span class="${v === MASK ? "warn" : ""}">${v}</span></div>`).join("")}</div>` : ""}
+        <div class="mt-3 text-sm">
+          ${s.oauth ? (s.connected ? `<span class="ok">● เชื่อมต่อแล้ว</span> · <b>${s.company || "—"}</b> <button class="btn-danger rounded-lg px-2 py-0.5 text-xs ml-2" data-act="disconnect" data-role-only="admin">Disconnect</button>`
+                               : `<span class="muted">○ ยังไม่เชื่อมต่อ</span> <button class="btn-primary rounded-lg px-3 py-1 text-xs font-bold ml-2" data-act="connect" data-role-only="admin">Connect ${s.name}</button>`)
+                    : `<span class="muted">ใช้ headers ตาม config · ${s.tools.length} tools${s.suppressed?.length ? ` (ปิด ${s.suppressed.length})` : ""}</span>`}
+        </div>
+        <div class="flex items-center justify-between gap-4 border-t mt-4 pt-4" style="border-color: var(--border)">
+          <div><div class="text-sm font-semibold">เปิดใช้ใน workspace นี้</div>
+            <div class="muted text-xs">${s.oauth ? "ต้องเชื่อมต่อก่อนจึงเปิดได้" : "เปิดแล้ว agent ของห้องนี้เห็น tools ทันที (โหลดใหม่ตอนเรียกครั้งถัดไป)"}</div></div>
+          <button class="toggle" role="switch" aria-checked="${s.enabled}" data-act="toggle" aria-label="เปิดใช้ ${s.name}" ${role !== "admin" || (s.oauth && !s.connected) ? "disabled" : ""}></button>
+        </div>
+      </div>
+    </div>`;
+  a.addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    if (b.dataset.menu !== undefined) { const m = $(".menu", a); m.hidden = !m.hidden; return; }
+    const act = b.dataset.act; $$(".menu", a).forEach((m) => (m.hidden = true));
+    if (act === "toggle") { s.enabled = !s.enabled; render(); toast(`${s.name}: ${s.enabled ? "เปิด" : "ปิด"}ใช้ในห้องนี้แล้ว`); }
+    if (act === "connect") { s.connected = true; s.enabled = true; render(); toast("เชื่อมต่อ OAuth สำเร็จ (จำลอง)"); }
+    if (act === "disconnect") { s.connected = false; s.enabled = false; render(); toast("ตัดการเชื่อมต่อแล้ว · ปิดใช้ให้ด้วย"); }
+    if (act === "edit") openModal(s);
+    if (act === "test") openTools(s);
+    if (act === "delete") { $("#del-name").textContent = s.name; $("#del-modal").hidden = false; $("#del-ok").onclick = () => { servers = servers.filter((x) => x !== s); $("#del-modal").hidden = true; render(); toast(`ลบ ${s.name} + token/allowlist ของห้องนี้แล้ว`); }; }
+  });
+  return a;
+}
+function renderFns() {
+  const list = $("#fn-list"); list.innerHTML = "";
+  const base = ["@@rag-full", "@@web-browsing"];
+  const mcp = servers.filter((s) => s.enabled && (!s.oauth || s.connected)).flatMap((s) => s.tools.filter((t) => !(s.suppressed || []).includes(t.name)).map((t) => `@@mcp_${s.name}-${t.name}`));
+  [...base, ...mcp].forEach((f) => { const c = document.createElement("span"); c.className = "rounded-md px-2 py-1"; c.style.cssText = "background: var(--bg-input); border: 1px solid var(--border)"; c.textContent = f; list.appendChild(c); });
+  if (!mcp.length) { const c = document.createElement("span"); c.className = "muted"; c.textContent = "— ไม่มี MCP tool ที่เปิดใช้ —"; list.appendChild(c); }
+}
+
+// ---- demo bar ----
+$$("[data-demo]").forEach((b) => b.addEventListener("click", () => {
+  $$("[data-demo]").forEach((x) => x.classList.toggle("active", x === b));
+  const d = b.dataset.demo;
+  $("#state-loading").hidden = d !== "loading"; $("#cards").hidden = d === "loading"; $("#fn-wrap").hidden = d === "loading";
+  if (d === "empty") { servers = []; render(); }
+  if (d === "ready") { servers = seed(); render(); }
+  if (d === "loading") { $("#state-empty").hidden = true; setTimeout(() => { if ($("#state-loading").hidden === false) { $("#state-loading").hidden = true; $("#cards").hidden = false; $("#fn-wrap").hidden = false; servers = seed(); render(); $$("[data-demo]").forEach((x) => x.classList.toggle("active", x.dataset.demo === "ready")); } }, 900); }
+}));
+$$("[data-role]").forEach((b) => b.addEventListener("click", () => {
+  role = b.dataset.role; $$("[data-role]").forEach((x) => x.classList.toggle("active", x === b));
+  document.body.classList.toggle("manager", role === "manager");
+  $("#manager-note").hidden = role !== "manager"; $("#identity").textContent = role === "manager" ? "manager@infi.co" : "admin@infi.co";
+  render();
+}));
+
+// ---- modal: form ----
+const modal = $("#modal");
+function headerRow(k = "", v = "", masked = false) {
+  const r = document.createElement("div"); r.className = "kv";
+  r.innerHTML = `<input class="field font-mono" placeholder="Header" value="${k}" data-k>
+    <div class="min-w-0"><input class="field font-mono" placeholder="ค่า" value="${masked ? MASK : v}" data-v ${SECRET.test(k) ? 'type="password"' : ""} ${masked ? "data-masked=1" : ""}>
+      ${masked ? '<button class="text-[11px] muted underline mt-1" data-clear>ล้างค่า</button>' : ""}</div>
+    <button class="btn-ghost rounded-lg px-2 text-xs" data-rm aria-label="ลบ header">✕</button>`;
+  const kI = $("[data-k]", r), vI = $("[data-v]", r);
+  kI.addEventListener("input", () => { vI.type = SECRET.test(kI.value) ? "password" : "text"; validate(); });
+  vI.addEventListener("input", () => { delete vI.dataset.masked; validate(); });
+  $("[data-clear]", r)?.addEventListener("click", () => { vI.value = ""; delete vI.dataset.masked; vI.focus(); validate(); });
+  $("[data-rm]", r).addEventListener("click", () => { r.remove(); validate(); });
+  return r;
+}
+$("#f-add-header").addEventListener("click", () => { $("#f-headers").appendChild(headerRow()); $("#f-headers input[data-k]:last-of-type")?.focus(); });
+$("#f-oauth").addEventListener("click", () => { const t = $("#f-oauth"); t.setAttribute("aria-checked", t.getAttribute("aria-checked") !== "true"); validate(); });
+["#f-name", "#f-url", "#f-type"].forEach((s) => $(s).addEventListener("input", () => { resetTest(); validate(); }));
+
+function formConfig() {
+  const headers = {};
+  $$("#f-headers .kv").forEach((r) => { const k = $("[data-k]", r).value.trim(), v = $("[data-v]", r); if (k) headers[k] = v.dataset.masked ? MASK : v.value; });
+  const cfg = { url: $("#f-url").value.trim(), type: $("#f-type").value, headers };
+  if ($("#f-oauth").getAttribute("aria-checked") === "true") cfg.anythingllm = { perWorkspaceAuth: true };
+  return cfg;
+}
+function validate() {
+  const name = $("#f-name").value.trim(), url = $("#f-url").value.trim();
+  let ok = true;
+  const nm = $("#f-name-msg"); nm.hidden = true; $("#f-name").classList.remove("bad");
+  if (name && !NAME_RE.test(name)) { nm.textContent = "ต้องเป็น a-z 0-9 _ - ยาว 2–64 ตัว ขึ้นต้นด้วยตัวอักษร/ตัวเลข"; nm.hidden = false; $("#f-name").classList.add("bad"); ok = false; }
+  else if (name && servers.some((s) => s.name === name && s.name !== editing)) { nm.textContent = "name_conflict: มี server ชื่อนี้อยู่แล้ว (ชื่อ tool ของ agent จะชนกัน)"; nm.hidden = false; $("#f-name").classList.add("bad"); ok = false; }
+  else if (!name) ok = false;
+  const um = $("#f-url-msg"); um.hidden = true; $("#f-url").classList.remove("bad");
+  if (url && !URL_RE.test(url)) { um.textContent = "URL ต้องขึ้นต้นด้วย http:// หรือ https://"; um.hidden = false; $("#f-url").classList.add("bad"); ok = false; }
+  else if (url && /^https?:\/\/(localhost|127\.|\d+\.\d+\.\d+\.\d+|\[)/i.test(url)) { um.textContent = "ห้าม IP literal / localhost (กัน SSRF) — ใช้ hostname"; um.hidden = false; $("#f-url").classList.add("bad"); ok = false; }
+  else if (!url) ok = false;
+  $("#s-save").disabled = !ok;
+  const sm = $("#s-msg"); sm.hidden = !(ok && !lastTest); if (!sm.hidden) { sm.className = "text-xs warn"; sm.textContent = "ยังไม่ได้ทดสอบ — บันทึกได้ แต่ agent จะเห็น error ตอนเรียกถ้า config ผิด"; }
+  return ok;
+}
+function resetTest() { lastTest = null; $("#t-result").hidden = true; $("#t-status").textContent = "ยังไม่ได้ทดสอบ"; $("#t-status").className = "text-xs muted"; $("#f-suppress-wrap").hidden = true; }
+
+// ---- modal: json ----
+$$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
+function switchTab(tab) {
+  $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === tab));
+  $("#tab-form").hidden = tab !== "form"; $("#tab-json").hidden = tab !== "json";
+  if (tab === "json") { const cfg = formConfig(); const name = $("#f-name").value.trim() || "my-server"; $("#j-text").value = JSON.stringify({ mcpServers: { [name]: cfg } }, null, 2); checkJson(); }
+}
+function checkJson() {
+  const m = $("#j-msg"); m.hidden = false; m.className = "text-xs";
+  let obj; try { obj = JSON.parse($("#j-text").value); } catch (e) { m.classList.add("err"); m.textContent = "JSON ผิดรูปแบบ: " + e.message; return null; }
+  const entries = obj && obj.mcpServers && typeof obj.mcpServers === "object" ? Object.entries(obj.mcpServers) : [[null, obj]];
+  const errs = [];
+  for (const [n, def] of entries) {
+    if (!def || typeof def !== "object") { errs.push(`${n || "(root)"}: ต้องเป็น object`); continue; }
+    const stdio = STDIO.filter((k) => k in def);
+    if (stdio.length) errs.push(`${n || "(root)"}: ไม่รองรับ stdio ต่อ workspace — ใส่ในไฟล์ global แทน (พบ: ${stdio.join(", ")})`);
+    Object.keys(def).filter((k) => !KNOWN.has(k) && !STDIO.includes(k)).forEach((k) => errs.push(`${n || "(root)"}: unknown field: ${k}`));
+    if (!def.url && !stdio.length) errs.push(`${n || "(root)"}: ต้องมี url`);
+    if (n && !NAME_RE.test(n)) errs.push(`${n}: ชื่อไม่ถูกต้อง`);
+  }
+  if (errs.length) { m.classList.add("err"); m.innerHTML = errs.map((e) => "✕ " + e).join("<br>"); return null; }
+  m.classList.add("ok"); m.textContent = `✓ ถูกต้อง · ${entries.length} server${entries.length > 1 ? " (จะสร้างทีละตัว ตัวที่ผิดรายงานแยก)" : ""}`;
+  return entries;
+}
+$("#j-text").addEventListener("input", checkJson);
+$("#j-apply").addEventListener("click", () => {
+  const entries = checkJson(); if (!entries) { toast("แก้ JSON ให้ผ่านก่อน", "err"); return; }
+  const [n, def] = entries[0];
+  if (n) $("#f-name").value = n; $("#f-url").value = def.url || ""; $("#f-type").value = def.type === "http" || def.type === "streamable" ? "http" : "sse";
+  $("#f-headers").innerHTML = ""; Object.entries(def.headers || {}).forEach(([k, v]) => $("#f-headers").appendChild(headerRow(k, v)));
+  $("#f-oauth").setAttribute("aria-checked", !!def.anythingllm?.perWorkspaceAuth);
+  resetTest(); switchTab("form"); validate(); toast(entries.length > 1 ? `ใช้ตัวแรก (${n}) — อีก ${entries.length - 1} ตัวจะถูกสร้างตอนบันทึก` : "นำเข้าฟอร์มแล้ว");
+});
+$("#j-sample").addEventListener("click", () => { $("#j-text").value = JSON.stringify({ mcpServers: { "crm-vendor": { url: "https://mcp.vendor.example/sse", type: "sse", headers: { "X-API-Key": "vk_9f2…" } } } }, null, 2); checkJson(); });
+$("#j-sample-stdio").addEventListener("click", () => { $("#j-text").value = JSON.stringify({ mcpServers: { "local-fs": { command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"], env: { DEBUG: "1" } } } }, null, 2); checkJson(); });
+
+// ---- test connection ----
+$("#t-run").addEventListener("click", () => {
+  if (!$("#f-url").value.trim()) { toast("ใส่ URL ก่อน", "err"); switchTab("form"); return; }
+  const st = $("#t-status"); st.innerHTML = '<span class="spinner"></span> กำลังเชื่อมต่อ… (timeout 15 s)'; st.className = "text-xs";
+  $("#t-cancel").hidden = false; $("#t-run").disabled = true; $("#t-result").hidden = true;
+  const url = $("#f-url").value;
+  testTimer = setTimeout(() => {
+    $("#t-cancel").hidden = true; $("#t-run").disabled = false;
+    const box = $("#t-result"); box.hidden = false;
+    if (/fail/i.test(url)) { lastTest = { ok: false }; st.textContent = "ล้มเหลว"; st.className = "text-xs err"; box.innerHTML = `<div class="banner-err text-sm"><b class="err">connect_failed</b> · เชื่อมต่อไม่ได้ภายใน 15 s<details class="mt-2 text-xs muted"><summary>รายละเอียด</summary><pre class="mt-1">UND_ERR_CONNECT_TIMEOUT: connect timed out after 10000ms\nhost: ${new URL(url).host}\n(ไม่แสดง header/credential ใน error)</pre></details></div>`; }
+    else if (/401/.test(url)) { lastTest = { ok: false }; st.textContent = "ล้มเหลว"; st.className = "text-xs err"; box.innerHTML = `<div class="banner-err text-sm"><b class="err">unauthorized</b> · server ตอบ 401 — ตรวจ header หรือเปิด OAuth ต่อ workspace<details class="mt-2 text-xs muted"><summary>รายละเอียด</summary><pre class="mt-1">HTTP 401 Unauthorized\nWWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource"</pre></details></div>`; }
+    else { const ms = 300 + Math.floor(Math.random() * 300); lastTest = { ok: true, tools: FAKE_TOOLS, ms }; st.textContent = `สำเร็จ · ${FAKE_TOOLS.length} tools · ${ms} ms`; st.className = "text-xs ok";
+      box.innerHTML = `<div class="banner-ok text-sm"><b class="ok">✓ เชื่อมต่อได้</b> · ${FAKE_TOOLS.length} tools · ${ms} ms<details class="mt-2 text-xs"><summary class="muted">รายชื่อ tools</summary><ul class="mt-1 font-mono">${FAKE_TOOLS.map((t) => `<li>${t.name} <span class="muted">— ${t.description}</span></li>`).join("")}</ul></details></div>`;
+      const sw = $("#f-suppress-wrap"); sw.hidden = false; $("#f-suppress").innerHTML = FAKE_TOOLS.map((t) => `<label class="flex items-center gap-2"><input type="checkbox" checked data-tool="${t.name}"> <span class="font-mono">${t.name}</span> <span class="muted text-xs">${t.description}</span></label>`).join(""); }
+    validate();
+  }, 1300);
+});
+$("#t-cancel").addEventListener("click", () => { clearTimeout(testTimer); $("#t-cancel").hidden = true; $("#t-run").disabled = false; resetTest(); toast("ยกเลิกการทดสอบ"); });
+
+// ---- open / save ----
+function openModal(s = null) {
+  editing = s ? s.name : null;
+  $("#modal-title").textContent = s ? `แก้ไข ${s.name}` : "เพิ่ม MCP server";
+  $("#f-name").value = s?.name || ""; $("#f-name").disabled = !!s; $("#f-url").value = s?.url || ""; $("#f-type").value = s?.type || "sse";
+  $("#f-oauth").setAttribute("aria-checked", !!s?.oauth);
+  $("#f-headers").innerHTML = ""; Object.entries(s?.headers || {}).forEach(([k, v]) => $("#f-headers").appendChild(headerRow(k, v, SECRET.test(k))));
+  $("#j-text").value = ""; $("#j-msg").hidden = true; resetTest(); switchTab("form"); validate(); $("#s-msg").hidden = true;
+  modal.hidden = false; setTimeout(() => (s ? $("#f-url") : $("#f-name")).focus(), 0);
+}
+$$("[data-add]").forEach((b) => b.addEventListener("click", () => openModal()));
+$("#s-save").addEventListener("click", () => {
+  if (!validate()) return;
+  const cfg = formConfig();
+  const suppressed = $$("#f-suppress input[type=checkbox]").filter((c) => !c.checked).map((c) => c.dataset.tool);
+  if (editing) { const s = servers.find((x) => x.name === editing);
+    Object.entries(cfg.headers).forEach(([k, v]) => { if (v !== MASK) s.headers[k] = v; }); Object.keys(s.headers).forEach((k) => { if (!(k in cfg.headers)) delete s.headers[k]; });
+    s.url = cfg.url; s.type = cfg.type; s.oauth = !!cfg.anythingllm?.perWorkspaceAuth; if (lastTest?.ok) { s.tools = lastTest.tools; s.suppressed = suppressed; }
+    toast(`บันทึก ${s.name} แล้ว · client เดิมถูกปิด จะบูตใหม่ตอน agent เรียกครั้งถัดไป`); }
+  else { const oauth = !!cfg.anythingllm?.perWorkspaceAuth;
+    servers.push({ name: $("#f-name").value.trim(), owner: "workspace", oauth, connected: !oauth, enabled: false, url: cfg.url, type: cfg.type, headers: Object.fromEntries(Object.entries(cfg.headers).filter(([, v]) => v !== MASK)), tools: lastTest?.ok ? lastTest.tools : [], suppressed });
+    // extra servers from a pasted mcpServers block
+    const extra = (() => { try { const o = JSON.parse($("#j-text").value || "{}"); return o.mcpServers ? Object.entries(o.mcpServers).slice(1) : []; } catch { return []; } })();
+    extra.forEach(([n, d]) => { if (NAME_RE.test(n) && d.url && !STDIO.some((k) => k in d) && !servers.some((s) => s.name === n)) servers.push({ name: n, owner: "workspace", oauth: !!d.anythingllm?.perWorkspaceAuth, connected: true, enabled: false, url: d.url, type: d.type === "http" || d.type === "streamable" ? "http" : "sse", headers: d.headers || {}, tools: [], suppressed: [] }); });
+    toast(`เพิ่ม ${1 + extra.length} server แล้ว${oauth ? " · กด Connect บนการ์ดเพื่อล็อกอิน" : " · เปิด toggle เพื่อให้ agent ใช้"}`); }
+  modal.hidden = true; $$("[data-demo]").forEach((x) => x.classList.toggle("active", x.dataset.demo === "ready")); render();
+});
+
+// ---- test tools ----
+let toolsServer = null; const failOnce = new Set();
+function openTools(s) {
+  toolsServer = s; $("#tools-server").textContent = s.name;
+  const tools = s.tools.length ? s.tools : FAKE_TOOLS;
+  const sel = $("#tl-tool"); sel.innerHTML = tools.map((t) => `<option value="${t.name}">${t.name}</option>`).join("");
+  $("#tl-result").hidden = true; $("#tl-status").textContent = ""; renderArgs(); $("#tools-modal").hidden = false; setTimeout(() => sel.focus(), 0);
+}
+function renderArgs() {
+  const tools = toolsServer.tools.length ? toolsServer.tools : FAKE_TOOLS; const t = tools.find((x) => x.name === $("#tl-tool").value);
+  $("#tl-desc").textContent = t.description; const req = t.inputSchema.required || []; const props = Object.entries(t.inputSchema.properties || {});
+  $("#tl-args").innerHTML = props.length ? props.map(([k, p]) => { const star = req.includes(k) ? ' <span class="err">*</span>' : "";
+    if (p.enum) return `<label class="block text-xs font-semibold">${k}${star}<select class="field mt-1 font-mono" data-arg="${k}"><option value="">— เลือก —</option>${p.enum.map((e) => `<option>${e}</option>`).join("")}</select></label>`;
+    if (p.type === "boolean") return `<label class="flex items-center gap-2 text-sm"><input type="checkbox" data-arg="${k}"> <span class="font-mono text-xs font-semibold">${k}</span>${star}</label>`;
+    if (p.type === "number") return `<label class="block text-xs font-semibold">${k}${star}<input type="number" class="field mt-1 font-mono" data-arg="${k}" placeholder="0"></label>`;
+    if (p.type === "object" || p.type === "array") return `<label class="block text-xs font-semibold">${k}${star} <span class="muted">(${p.type} · JSON)</span><textarea class="field mt-1" rows="4" data-arg="${k}" data-json>${p.type === "array" ? "[]" : '{\n  "customer": "บจก. ลูกค้า",\n  "total": 1250.00\n}'}</textarea></label>`;
+    return `<label class="block text-xs font-semibold">${k}${star}<input class="field mt-1 font-mono" data-arg="${k}"></label>`; }).join("")
+    : '<div class="muted text-sm">tool นี้ไม่รับ argument</div>';
+}
+$("#tl-tool").addEventListener("change", () => { renderArgs(); $("#tl-result").hidden = true; });
+$("#tl-run").addEventListener("click", () => {
+  const name = $("#tl-tool").value; const args = {}; let bad = null;
+  $$("#tl-args [data-arg]").forEach((el) => { const k = el.dataset.arg; if (el.type === "checkbox") args[k] = el.checked; else if (el.dataset.json !== undefined) { try { args[k] = JSON.parse(el.value); } catch { bad = k; } } else if (el.value !== "") args[k] = el.type === "number" ? Number(el.value) : el.value; });
+  if (bad) { toast(`${bad}: JSON ผิดรูปแบบ`, "err"); return; }
+  const st = $("#tl-status"); st.innerHTML = '<span class="spinner"></span> กำลังเรียก…'; $("#tl-run").disabled = true; $("#tl-result").hidden = true;
+  setTimeout(() => {
+    $("#tl-run").disabled = false; const box = $("#tl-result"); box.hidden = false; const ms = 400 + Math.floor(Math.random() * 500);
+    if (name.startsWith("create_") && !failOnce.has(name)) { failOnce.add(name); st.textContent = `ล้มเหลว · ${ms} ms`; st.className = "text-xs err";
+      box.innerHTML = `<div class="banner-err text-sm"><b class="err">MCP tool call failed</b> · server ตอบ error (ลองอีกครั้งจะสำเร็จในตัวอย่างนี้)<details class="mt-2 text-xs muted"><summary>รายละเอียด</summary><pre class="mt-1">{"code":-32602,"message":"invoice.customer is required"}</pre></details></div>`; return; }
+    st.textContent = `สำเร็จ · ${ms} ms`; st.className = "text-xs ok";
+    const result = name === "get_company" ? { id: "co_8812", name: "บจก. ตัวอย่างการบัญชี จำกัด", taxId: "0105561234567", plan: "Pro" }
+      : name === "list_invoices" ? { total: 2, items: [{ no: "INV-2026-0042", status: args.status || "paid", total: 12500 }, { no: "INV-2026-0043", status: args.status || "paid", total: 8900.5 }] }
+      : { created: true, no: "INV-2026-0044", ...args };
+    const raw = JSON.stringify({ content: [{ type: "text", text: JSON.stringify(result) }] }, null, 2);
+    box.innerHTML = `<div class="flex items-center justify-between text-xs muted"><span>ผลลัพธ์ดิบ (${raw.length} bytes${raw.length > 65536 ? " · ตัดที่ 64 KB" : ""})</span><button class="btn-ghost rounded-lg px-2 py-0.5" id="tl-copy">คัดลอก</button></div><pre class="panel rounded-lg p-3 mt-1 font-mono">${raw.replace(/</g, "&lt;")}</pre>`;
+    $("#tl-copy").addEventListener("click", () => { navigator.clipboard?.writeText(raw); toast("คัดลอกแล้ว"); });
+  }, 900);
+});
+
+// ---- modal chrome ----
+$$("[data-close]").forEach((b) => b.addEventListener("click", () => (b.closest(".modal-backdrop").hidden = true)));
+$$(".modal-backdrop").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) m.hidden = true; }));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $$(".modal-backdrop").forEach((m) => (m.hidden = true)); });
+document.addEventListener("click", (e) => { if (!e.target.closest("[data-menu]")) $$(".menu").forEach((m) => (m.hidden = true)); });
+
+// ---- first paint: skeleton then ready ----
+$("#state-loading").hidden = false; $("#cards").hidden = true; $("#fn-wrap").hidden = true; $("#state-empty").hidden = true;
+setTimeout(() => { $("#state-loading").hidden = true; $("#cards").hidden = false; $("#fn-wrap").hidden = false; servers = seed(); render(); }, 600);
+</script>
+</body>
+</html>
