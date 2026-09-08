@@ -558,7 +558,7 @@ test("finance fixture renders with no font below 11pt, no Calibri, no gridlines,
 describe("finance executive composition", () => {
   const theme = getTheme("executive");
 
-  test("summary has one title/footer, complete source note, and readable comparisons below KPI tiles", async () => {
+  test("summary has one title/footer, prioritised metadata, and readable comparisons below KPI tiles", async () => {
     const section = copy(fixture.sections[0]);
     section.data.metrics[0].delta = 0;
     const xml = await buildDeck((slide, pptx) => RENDERERS.summary(
@@ -566,9 +566,11 @@ describe("finance executive composition", () => {
       { slideNumber: 2, totalSlides: 10, footer: fixture.footer, unit: fixture.unit }
     ));
     const shapes = xml.match(/<p:sp>[\s\S]*?<\/p:sp>/g);
-    expect(shapes.filter((shape) => shape.includes(section.title))).toHaveLength(1);
+    expect(shapes.filter((shape) => shape.includes(section.title.slice(0, 15)))).toHaveLength(1);
     expect(shapes.filter((shape) => shape.includes("2 / 10"))).toHaveLength(1);
-    expect(xml).toContain(`${section.subtitle} · งวด ม.ค.–ส.ค. 2569 · แหล่งข้อมูล FlowAccount · จัดทำ 2026-09-07`);
+    expect(xml).toContain("งวด ม.ค.–ส.ค. 2569");
+    expect(xml).toContain("แหล่งข้อมูล FlowAccount");
+    expect(xml).not.toContain(section.subtitle);
     const zero = shapes.find((shape) => /<a:t>0%<\/a:t>/.test(shape));
     expect(zero).toContain('val="1E7A4B"');
     const negative = shapes.find((shape) => shape.includes("-6.8%"));
@@ -620,5 +622,92 @@ test("finance chart captions do not shrink below their explicit readable size", 
     expect(shape).toBeDefined();
     expect(shape).not.toContain("<a:normAutofit");
     expect(shape).toContain('sz="1100"');
+  }
+});
+
+describe("finance review regressions", () => {
+  test("fixture slide text never requests automatic shrinking", async () => {
+    const pptx = new PptxGenJS();
+    pptx.layout = "LAYOUT_16x9";
+    const theme = getTheme("executive");
+    renderCover(pptx.addSlide(), pptx, { title: fixture.title }, theme);
+    fixture.sections.forEach((section, index) => RENDERERS[section.layout](
+      pptx.addSlide(), pptx, section, theme,
+      { slideNumber: index + 2, totalSlides: 10, footer: fixture.footer, unit: fixture.unit }
+    ));
+    const zip = await JSZip.loadAsync(await pptx.write({ outputType: "nodebuffer" }));
+    for (const name of Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))) {
+      expect(await zip.file(name).async("string")).not.toMatch(/<a:normAutofit/);
+    }
+  });
+
+  test("finance uses fontFace even when legacy aliases disagree", async () => {
+    const theme = { ...getTheme("executive"), fontBody: "Legacy Body", fontTitle: "Legacy Title" };
+    const pptx = new PptxGenJS();
+    pptx.layout = "LAYOUT_16x9";
+    fixture.sections.forEach((section) => RENDERERS[section.layout](pptx.addSlide(), pptx, section, theme,
+      { slideNumber: 1, totalSlides: 9, unit: fixture.unit }));
+    const zip = await JSZip.loadAsync(await pptx.write({ outputType: "nodebuffer" }));
+    for (const name of Object.keys(zip.files).filter((name) => /^ppt\/(slides\/slide|charts\/chart)\d+\.xml$/.test(name))) {
+      expect(await zip.file(name).async("string")).not.toMatch(/Legacy Body|Legacy Title/);
+    }
+  });
+
+  test.each([
+    [undefined, 5, "1E7A4B"], [undefined, -5, "B3261E"],
+    ["higher_is_better", 5, "1E7A4B"], ["higher_is_better", -5, "B3261E"],
+    ["lower_is_better", 5, "B3261E"], ["lower_is_better", -5, "1E7A4B"],
+    ["lower_is_better", 0, "1E7A4B"],
+  ])("summary polarity %s with delta %s uses %s", async (polarity, delta, color) => {
+    const section = copy(fixture.sections[0]);
+    section.data.metrics[0] = { ...section.data.metrics[0], polarity, delta };
+    const xml = await buildDeck((slide, pptx) => RENDERERS.summary(slide, pptx, section,
+      getTheme("executive"), { slideNumber: 1, totalSlides: 1, unit: fixture.unit }));
+    const deltaText = delta > 0 ? `+${delta}%` : `${delta}%`;
+    const shape = (xml.match(/<p:sp>[\s\S]*?<\/p:sp>/g) || []).find((shape) => shape.includes(`<a:t>${deltaText}</a:t>`));
+    expect(shape).toContain(`val="${color}"`);
+  });
+
+  test("summary rejects unknown metric polarity", () => {
+    const section = copy(fixture.sections[0]);
+    section.data.metrics[0].polarity = "sometimes";
+    const result = validateFinanceSections([section]);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toContain("sections[0].data.metrics[0].polarity");
+    for (const polarity of ["higher_is_better", "lower_is_better"]) {
+      section.data.metrics[0].polarity = polarity;
+      expect(validateFinanceSections([section]).ok).toBe(true);
+    }
+  });
+
+  test("footer drops subtitle, prepared date, then source while retaining period", async () => {
+    const theme = getTheme("executive");
+    for (const [note, keep, drop] of [
+      [["S".repeat(200), "งวด Q1", "แหล่งข้อมูล ERP", "จัดทำ today"].join(" · "), ["งวด Q1", "ERP", "today"], ["SSSS"]],
+      [["S".repeat(200), "งวด Q1", "แหล่งข้อมูล ERP", `จัดทำ ${"D".repeat(200)}`].join(" · "), ["งวด Q1", "ERP"], ["DDDD", "SSSS"]],
+      [["S".repeat(200), "งวด Q1", `แหล่งข้อมูล ${"E".repeat(200)}`, "จัดทำ today"].join(" · "), ["งวด Q1"], ["EEEE", "today", "SSSS"]],
+    ]) {
+      const xml = await buildDeck((slide, pptx) => addFooter(slide, pptx, theme,
+        { slideNumber: 1, totalSlides: 1, note }));
+      keep.forEach((text) => expect(xml).toContain(text));
+      drop.forEach((text) => expect(xml).not.toContain(text));
+      expect(xml).not.toContain("<a:normAutofit");
+    }
+  });
+});
+
+test("long finance titles and decision details end with ellipsis at fixed sizes", async () => {
+  const section = copy(fixture.sections[8]);
+  section.title = "Long action title ".repeat(100);
+  section.data.items[0].title = "Long decision ".repeat(100);
+  section.data.items[0].killCondition = "Long condition ".repeat(100);
+  const xml = await buildDeck((slide, pptx) => RENDERERS.decisions(slide, pptx, section,
+    getTheme("executive"), { slideNumber: 1, totalSlides: 1 }));
+  const shapes = xml.match(/<p:sp>[\s\S]*?<\/p:sp>/g);
+  for (const [text, size] of [["Long action", 2600], ["Long decision", 1800], ["Long condition", 1400]]) {
+    const shape = shapes.find((shape) => shape.includes(text));
+    expect(shape).toContain("…");
+    expect(shape).toContain(`sz="${size}"`);
+    expect(shape).not.toContain("<a:normAutofit");
   }
 });

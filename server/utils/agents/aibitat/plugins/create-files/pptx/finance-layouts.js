@@ -1,5 +1,10 @@
 const JSZip = require("jszip");
-const { addActionTitle, addFooter, chartBaseOptions } = require("./utils.js");
+const {
+  addActionTitle,
+  addFooter,
+  chartBaseOptions,
+  boundText,
+} = require("./utils.js");
 const { EXEC_RENDERERS } = require("./exec-layouts.js");
 const { formatNumber, roundedAxisMax } = require("./format.js");
 
@@ -57,7 +62,13 @@ function renderSummary(slide, pptx, section, theme, ctx) {
           label: [metric.label, ctx.unit].filter(Boolean).join(" · "),
           value: metric.value,
           delta: formatPct(metric.delta),
-          status: metric.delta >= 0 ? "good" : "bad",
+          status: (
+            metric.polarity === "lower_is_better"
+              ? metric.delta <= 0
+              : metric.delta >= 0
+          )
+            ? "good"
+            : "bad",
         })),
       },
     },
@@ -143,7 +154,7 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
       options: {
         bold: true,
         fontSize: 14,
-        fontFace: theme.fontBody,
+        fontFace: theme.fontFace,
         color: theme.tableHeaderColor,
         fill: { color: theme.accentColor },
         align: index === 0 ? "left" : "right",
@@ -160,7 +171,7 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
         text: row.label,
         options: {
           fontSize: 14,
-          fontFace: theme.fontBody,
+          fontFace: theme.fontFace,
           color: theme.bodyColor,
           fill: { color: fill },
           align: "left",
@@ -172,7 +183,7 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
         text: formatNumber(row.current),
         options: {
           fontSize: 14,
-          fontFace: theme.fontBody,
+          fontFace: theme.fontFace,
           color: theme.bodyColor,
           fill: { color: fill },
           align: "right",
@@ -184,7 +195,7 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
         text: formatNumber(row.compare),
         options: {
           fontSize: 14,
-          fontFace: theme.fontBody,
+          fontFace: theme.fontFace,
           color: theme.subtitleColor,
           fill: { color: fill },
           align: "right",
@@ -196,7 +207,7 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
         text: formatPct(row.changePct),
         options: {
           fontSize: 14,
-          fontFace: theme.fontBody,
+          fontFace: theme.fontFace,
           color: row.changePct >= 0 ? theme.chartPositive : theme.chartNegative,
           fill: { color: fill },
           align: "right",
@@ -208,7 +219,7 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
         text: "",
         options: {
           fontSize: 14,
-          fontFace: theme.fontBody,
+          fontFace: theme.fontFace,
           color:
             theme[`status${row.status[0].toUpperCase()}${row.status.slice(1)}`],
           fill: { color: fill },
@@ -307,7 +318,7 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
       fontFace: theme.fontFace,
       margin: 0,
     });
-    slide.addText(item.title, {
+    slide.addText(boundText(item.title, { w: 2.2, h: rowH, fontSize: 18 }), {
       x: MARGIN_X + 0.55,
       y,
       w: 2.2,
@@ -318,7 +329,6 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
       fontFace: theme.fontFace,
       margin: 0,
       valign: "top",
-      fit: "shrink",
     });
     fields.forEach((field) => {
       slide.addText(field.label, {
@@ -332,18 +342,24 @@ function renderDecisions(slide, pptx, section, theme, ctx) {
         fontFace: theme.fontFace,
         margin: 0,
       });
-      slide.addText(field.value(item), {
-        x: field.x,
-        y: y + 0.28,
-        w: field.w,
-        h: rowH - 0.28,
-        fontSize: 14,
-        color: theme.bodyColor,
-        fontFace: theme.fontFace,
-        margin: 0,
-        valign: "top",
-        fit: "shrink",
-      });
+      slide.addText(
+        boundText(field.value(item), {
+          w: field.w,
+          h: rowH - 0.28,
+          fontSize: 14,
+        }),
+        {
+          x: field.x,
+          y: y + 0.28,
+          w: field.w,
+          h: rowH - 0.28,
+          fontSize: 14,
+          color: theme.bodyColor,
+          fontFace: theme.fontFace,
+          margin: 0,
+          valign: "top",
+        }
+      );
     });
   });
 }
@@ -409,7 +425,7 @@ function renderTrendBar(slide, pptx, section, theme, ctx) {
         fontSize: 11,
         bold: true,
         color: theme.chartNeutral,
-        fontFace: theme.fontBody,
+        fontFace: theme.fontFace,
         margin: 0,
       }
     );
@@ -423,7 +439,7 @@ function renderTrendBar(slide, pptx, section, theme, ctx) {
       h: 0.3,
       fontSize: 11,
       color: theme.chartNeutral,
-      fontFace: theme.fontBody,
+      fontFace: theme.fontFace,
       margin: 0,
     });
   }
@@ -473,12 +489,12 @@ function renderBarDonut(slide, pptx, section, theme, ctx) {
       h: 2.92,
       chartColors: [...theme.chartColors],
       dataLabelColor: theme.bodyColor,
-      dataLabelFontFace: theme.fontBody,
+      dataLabelFontFace: theme.fontFace,
       dataLabelFontSize: 11,
       holeSize: 55,
       dataLabelPosition: "ctr",
       legendColor: theme.subtitleColor,
-      legendFontFace: theme.fontBody,
+      legendFontFace: theme.fontFace,
       legendFontSize: 11,
       legendPos: "r",
       showLabel: false,
@@ -594,7 +610,7 @@ function renderWaterfall(slide, pptx, section, theme, ctx) {
       h: 0.2,
       align: "center",
       color: theme.bodyColor,
-      fontFace: theme.fontBody,
+      fontFace: theme.fontFace,
       fontSize: 11,
       margin: 0,
     });
@@ -607,7 +623,7 @@ function renderWaterfall(slide, pptx, section, theme, ctx) {
       h: 0.3,
       align: "center",
       color: theme.chartNeutral,
-      fontFace: theme.fontBody,
+      fontFace: theme.fontFace,
       fontSize: 11,
       margin: 0,
     });
@@ -639,7 +655,7 @@ function renderCash(slide, pptx, section, theme, ctx) {
       h: 2.9,
       chartColors: [theme.chartPositive, theme.chartNegative],
       legendColor: theme.subtitleColor,
-      legendFontFace: theme.fontBody,
+      legendFontFace: theme.fontFace,
       legendFontSize: 11,
       legendPos: "b",
       lineDataSymbol: "none",
@@ -688,7 +704,7 @@ function renderCash(slide, pptx, section, theme, ctx) {
       h: 0.2,
       bold: true,
       color: theme.subtitleColor,
-      fontFace: theme.fontBody,
+      fontFace: theme.fontFace,
       fontSize: 11,
     });
     slide.addText(`${formatNumber(section.data.dso)} วัน`, {
@@ -699,7 +715,7 @@ function renderCash(slide, pptx, section, theme, ctx) {
       align: "right",
       bold: true,
       color: theme.titleColor,
-      fontFace: theme.fontTitle,
+      fontFace: theme.fontFace,
       fontSize: 17,
     });
   }
@@ -716,7 +732,7 @@ function renderRankedPair(slide, pptx, section, theme, ctx) {
       h: 0.28,
       bold: true,
       color: theme.bodyColor,
-      fontFace: theme.fontBody,
+      fontFace: theme.fontFace,
       fontSize: 11,
     });
     slide.addChart(
@@ -757,7 +773,7 @@ function renderRisksOutlook(slide, pptx, section, theme, ctx) {
       options: {
         bold: true,
         fontSize: 11,
-        fontFace: theme.fontBody,
+        fontFace: theme.fontFace,
         color: theme.tableHeaderColor,
         fill: { color: theme.tableHeaderBg },
         align: "left",
@@ -774,7 +790,7 @@ function renderRisksOutlook(slide, pptx, section, theme, ctx) {
         text,
         options: {
           fontSize: 11,
-          fontFace: theme.fontBody,
+          fontFace: theme.fontFace,
           color: theme.bodyColor,
           fill: { color: fill },
           align: "left",
@@ -819,7 +835,7 @@ function renderRisksOutlook(slide, pptx, section, theme, ctx) {
       displayBlanksAs: "gap",
       showValue: false,
       legendColor: theme.subtitleColor,
-      legendFontFace: theme.fontBody,
+      legendFontFace: theme.fontFace,
       legendFontSize: 11,
       legendPos: "b",
       showLegend: true,
@@ -914,7 +930,7 @@ function renderPendingSlide(slide, pptx, section, theme, ctx) {
     h: 0.5,
     fontSize: 15,
     color: theme.bodyColor,
-    fontFace: theme.fontBody,
+    fontFace: theme.fontFace,
     bullet: { code: "25AA", color: theme.bulletColor },
   });
 }

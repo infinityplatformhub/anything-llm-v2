@@ -15,15 +15,71 @@ function isDarkColor(hexColor) {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5;
 }
 
+// ponytail: conservative em-width budgeting, not font shaping. Explicit line breaks
+// and ellipsis keep fixed-size text in its box; use a shaping engine if exact wrap is needed.
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+function boundText(text, { w, h, fontSize }) {
+  const lineBudget = (w * 72) / fontSize;
+  const maxLines = Math.max(1, Math.floor((h * 72) / (fontSize * 1.3)));
+  const lines = [""];
+  let used = 0;
+  for (const { segment } of graphemes.segment(String(text ?? ""))) {
+    const width = [...segment].reduce(
+      (sum, char) =>
+        sum +
+        (/\p{Mark}/u.test(char)
+          ? 0
+          : /\s/u.test(char)
+            ? 0.35
+            : /[il.,'|!:;]/.test(char)
+              ? 0.35
+              : /[MW@]/.test(char)
+                ? 1
+                : /[A-Z]/.test(char)
+                  ? 0.75
+                  : /[a-z0-9]/.test(char)
+                    ? 0.62
+                    : 0.8),
+      0
+    );
+    if (segment === "\n" || used + width > lineBudget - 1) {
+      if (lines.length === maxLines) return lines.join("\n").trimEnd() + "…";
+      lines.push("");
+      used = 0;
+      if (segment === "\n") continue;
+    }
+    lines[lines.length - 1] += segment;
+    used += width;
+  }
+  return lines.join("\n");
+}
+
+function footerNote(note) {
+  const box = { w: 7.7, h: 0.25, fontSize: 11 };
+  let parts = String(note).split(" · ");
+  // Drop the least valuable segments first: subtitle, prepared date, source.
+  // Period is retained; even an oversized period is visibly ellipsized, never shrunk.
+  for (const remove of [
+    (part) => !/^(งวด |จัดทำ |แหล่งข้อมูล )/.test(part),
+    (part) => part.startsWith("จัดทำ "),
+    (part) => part.startsWith("แหล่งข้อมูล "),
+  ]) {
+    if (!boundText(parts.join(" · "), box).endsWith("…")) break;
+    // Non-finance source notes have no metadata segments: preserve their text.
+    if (!parts.some((part) => /^(งวด |จัดทำ |แหล่งข้อมูล )/.test(part))) break;
+    parts = parts.filter((part) => !remove(part));
+  }
+  return boundText(parts.join(" · "), box);
+}
+
 function addActionTitle(slide, theme, title, { y = 0.35 } = {}) {
-  slide.addText(title, {
+  slide.addText(boundText(title, { w: CONTENT_W, h: 0.95, fontSize: 26 }), {
     x: MARGIN_X,
     y,
     w: CONTENT_W,
     h: 0.95,
     fontSize: 26,
     bold: true,
-    fit: "shrink",
     color: theme.titleColor,
     fontFace: theme.fontFace,
     margin: 0,
@@ -51,10 +107,9 @@ function addFooter(slide, pptx, theme, { slideNumber, totalSlides, note }) {
     fontFace: theme.fontFace,
     align: "left",
     margin: 0,
-    fit: "shrink",
   });
   if (note) {
-    slide.addText(note, {
+    slide.addText(footerNote(note), {
       x: 1.6,
       y: 5.12,
       w: 7.7,
@@ -64,7 +119,6 @@ function addFooter(slide, pptx, theme, { slideNumber, totalSlides, note }) {
       fontFace: theme.fontFace,
       align: "right",
       margin: 0,
-      fit: "shrink",
     });
   }
 }
@@ -97,25 +151,46 @@ function renderCover(slide, pptx, { title, headline, subtitle, meta }, theme) {
     fontFace: theme.fontFace,
     color: theme.groundMuted,
     margin: 0,
-    fit: "shrink",
   };
   if (headline && title) {
-    slide.addText(title, { ...textOptions, y: 0.9, h: 0.3, fontSize: 14 });
+    slide.addText(boundText(title, { w: COVER_W, h: 0.3, fontSize: 14 }), {
+      ...textOptions,
+      y: 0.9,
+      h: 0.3,
+      fontSize: 14,
+    });
   }
-  slide.addText(headline || title || "Untitled", {
-    ...textOptions,
-    y: 1.5,
-    h: 2.2,
-    fontSize: 48,
-    bold: true,
-    color: theme.groundText,
-    valign: "mid",
-  });
+  slide.addText(
+    boundText(headline || title || "Untitled", {
+      w: COVER_W,
+      h: 2.2,
+      fontSize: 48,
+    }),
+    {
+      ...textOptions,
+      y: 1.5,
+      h: 2.2,
+      fontSize: 48,
+      bold: true,
+      color: theme.groundText,
+      valign: "mid",
+    }
+  );
   if (subtitle) {
-    slide.addText(subtitle, { ...textOptions, y: 3.9, h: 0.65, fontSize: 16 });
+    slide.addText(boundText(subtitle, { w: COVER_W, h: 0.65, fontSize: 16 }), {
+      ...textOptions,
+      y: 3.9,
+      h: 0.65,
+      fontSize: 16,
+    });
   }
   if (meta) {
-    slide.addText(meta, { ...textOptions, y: 4.9, h: 0.3, fontSize: 12 });
+    slide.addText(boundText(meta, { w: COVER_W, h: 0.3, fontSize: 12 }), {
+      ...textOptions,
+      y: 4.9,
+      h: 0.3,
+      fontSize: 12,
+    });
   }
 }
 
@@ -178,15 +253,35 @@ function renderTitleSlide(slide, pptx, { title, author }, theme) {
   renderCover(slide, pptx, { title, meta: author }, theme);
 }
 
-function renderSectionSlide(slide, pptx, slideData, theme, slideNumber, totalSlides) {
-  renderStatement(slide, pptx, {
-    headline: slideData.headline || slideData.title,
-    subtitle: slideData.subtitle,
-  }, theme, { slideNumber, totalSlides });
+function renderSectionSlide(
+  slide,
+  pptx,
+  slideData,
+  theme,
+  slideNumber,
+  totalSlides
+) {
+  renderStatement(
+    slide,
+    pptx,
+    {
+      headline: slideData.headline || slideData.title,
+      subtitle: slideData.subtitle,
+    },
+    theme,
+    { slideNumber, totalSlides }
+  );
   if (slideData.notes) slide.addNotes(slideData.notes);
 }
 
-function renderContentSlide(slide, pptx, slideData, theme, slideNumber, totalSlides) {
+function renderContentSlide(
+  slide,
+  pptx,
+  slideData,
+  theme,
+  slideNumber,
+  totalSlides
+) {
   slide.background = { color: theme.background };
   let contentStartY = slideData.title
     ? addActionTitle(slide, theme, slideData.title)
@@ -209,9 +304,19 @@ function renderContentSlide(slide, pptx, slideData, theme, slideNumber, totalSli
   if (slideData.table) {
     addTableContent(slide, pptx, slideData.table, theme, contentStartY);
   } else {
-    addBulletContent(slide, slideData.content, theme, contentStartY, contentHeight);
+    addBulletContent(
+      slide,
+      slideData.content,
+      theme,
+      contentStartY,
+      contentHeight
+    );
   }
-  addFooter(slide, pptx, theme, { slideNumber, totalSlides, note: slideData.note });
+  addFooter(slide, pptx, theme, {
+    slideNumber,
+    totalSlides,
+    note: slideData.note,
+  });
   if (slideData.notes) slide.addNotes(slideData.notes);
 }
 
@@ -303,6 +408,7 @@ function addTableContent(slide, pptx, tableData, theme, startY) {
 }
 
 module.exports = {
+  boundText,
   isDarkColor,
   addActionTitle,
   addFooter,

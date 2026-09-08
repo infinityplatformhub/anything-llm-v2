@@ -25,6 +25,7 @@
           },
           {
             "label": "ค่าใช้จ่าย",
+            "polarity": "lower_is_better",
             "value": 15890000,
             "delta": 16.2,
             "deltaLabel": "เทียบ 13,676,000 บาท ปีก่อน"

@@ -272,8 +272,9 @@ describe("pptx-finance executive theme and layouts", () => {
     expect(summaryXml).toContain("18,420,000");
     const titleShape = summaryXml
       .match(/<p:sp>[\s\S]*?<\/p:sp>/g)
-      .find((shape) => shape.includes(fixture.sections[0].title));
-    expect(titleShape).toContain("<a:normAutofit");
+      .find((shape) => shape.includes(fixture.sections[0].title.slice(0, 15)));
+    expect(titleShape).not.toContain("<a:normAutofit");
+    expect(titleShape).toContain('sz="2600"');
     expect(scorecardXml).toContain("<a:tbl>");
     expect(risksXml).toContain("<a:tbl>");
     expect((decisionsXml.match(/roundRect/g) || []).length).toBeGreaterThanOrEqual(

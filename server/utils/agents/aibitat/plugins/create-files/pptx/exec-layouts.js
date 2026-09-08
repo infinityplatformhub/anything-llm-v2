@@ -8,6 +8,7 @@
  */
 
 const {
+  boundText,
   addActionTitle,
   addFooter,
   renderStatement,
@@ -48,6 +49,7 @@ const TILE_PILL_GAP_RATIO = 0.14 / TILE_H;
 // 28pt, the smallest that still reads as the headline number rather than body text.
 const KPI_VALUE_FONT_SIZE = 40;
 const KPI_VALUE_FONT_MIN = 28;
+const KPI_VALUE_REFERENCE_W = 3.2; // Below this inner width, use an explicit smaller headline size, never auto-shrink.
 const TILE_PAD_X = 0.25; // Inner padding so text never touches the tile edge.
 const KPI_DEFAULT_Y = 1.5;
 
@@ -444,7 +446,10 @@ function renderKpi(slide, pptx, section, theme, ctx) {
   );
   const valueFontSize = Math.max(
     KPI_VALUE_FONT_MIN,
-    Math.round(KPI_VALUE_FONT_SIZE * Math.min(1, tileH / TILE_H))
+    Math.round(
+      KPI_VALUE_FONT_SIZE *
+        Math.min(1, tileH / TILE_H, (tileW - TILE_PAD_X * 2) / KPI_VALUE_REFERENCE_W)
+    )
   );
 
   kpis.forEach((kpi, index) => {
@@ -464,17 +469,23 @@ function renderKpi(slide, pptx, section, theme, ctx) {
       fill: { color: tileColor },
       line: { color: tileColor, transparency: 100 },
     });
-    slide.addText(kpi.label, {
-      x: textX,
-      y: y + tileH * TILE_LABEL_Y_RATIO,
-      w: textW,
-      h: tileH * TILE_LABEL_H_RATIO,
-      fontSize: 14,
-      color: theme.groundText,
-      fontFace: theme.fontFace,
-      margin: 0,
-      fit: "shrink",
-    });
+    slide.addText(
+      boundText(kpi.label, {
+        w: textW,
+        h: tileH * TILE_LABEL_H_RATIO,
+        fontSize: 14,
+      }),
+      {
+        x: textX,
+        y: y + tileH * TILE_LABEL_Y_RATIO,
+        w: textW,
+        h: tileH * TILE_LABEL_H_RATIO,
+        fontSize: 14,
+        color: theme.groundText,
+        fontFace: theme.fontFace,
+        margin: 0,
+      }
+    );
     slide.addText(
       Number.isFinite(kpi.value)
         ? formatNumber(kpi.value, kpi.unit || "")
@@ -489,7 +500,6 @@ function renderKpi(slide, pptx, section, theme, ctx) {
         color: theme.groundText,
         fontFace: theme.fontFace,
         margin: 0,
-        fit: "shrink",
         valign: "mid",
       }
     );
@@ -509,35 +519,43 @@ function renderKpi(slide, pptx, section, theme, ctx) {
         fill: { color: theme.pillBg },
         line: { color: theme.pillBg, transparency: 100 },
       });
-      slide.addText(kpi.delta, {
-        x: textX,
-        y: pillY,
-        w: pillW,
-        h: pillH,
-        fontSize: 18,
-        bold: true,
-        color: theme[kpi.status] || theme.bodyColor,
-        fontFace: theme.fontFace,
-        align: "center",
-        valign: "mid",
-        margin: 0,
-        fit: "shrink",
-      });
+      slide.addText(
+        boundText(kpi.delta, { w: pillW, h: pillH, fontSize: 18 }),
+        {
+          x: textX,
+          y: pillY,
+          w: pillW,
+          h: pillH,
+          fontSize: 18,
+          bold: true,
+          color: theme[kpi.status] || theme.bodyColor,
+          fontFace: theme.fontFace,
+          align: "center",
+          valign: "mid",
+          margin: 0,
+        }
+      );
       cursorX = textX + pillW + 0.12;
     }
     if (kpi.note) {
-      slide.addText(kpi.note, {
-        x: cursorX,
-        y: y + tileH - (pillH + gapH),
-        w: textX + textW - cursorX,
-        h: pillH,
-        fontSize: 12,
-        color: theme.groundMuted,
-        fontFace: theme.fontFace,
-        valign: "mid",
-        margin: 0,
-        fit: "shrink",
-      });
+      slide.addText(
+        boundText(kpi.note, {
+          w: textX + textW - cursorX,
+          h: pillH,
+          fontSize: 12,
+        }),
+        {
+          x: cursorX,
+          y: y + tileH - (pillH + gapH),
+          w: textX + textW - cursorX,
+          h: pillH,
+          fontSize: 12,
+          color: theme.groundMuted,
+          fontFace: theme.fontFace,
+          valign: "mid",
+          margin: 0,
+        }
+      );
     }
   });
 

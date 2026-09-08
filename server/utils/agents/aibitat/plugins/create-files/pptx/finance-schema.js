@@ -100,6 +100,13 @@ function validateSummary(data, path, errors) {
       requireNumber(metric.value, `${itemPath}.value`, errors);
       requireNumber(metric.delta, `${itemPath}.delta`, errors);
       requireString(metric.deltaLabel, `${itemPath}.deltaLabel`, errors);
+      if (
+        metric.polarity !== undefined &&
+        !["higher_is_better", "lower_is_better"].includes(metric.polarity)
+      )
+        errors.push(
+          `${itemPath}.polarity must be higher_is_better or lower_is_better`
+        );
     });
   }
   if (!SUMMARY_VERDICTS.includes(data.verdict))
