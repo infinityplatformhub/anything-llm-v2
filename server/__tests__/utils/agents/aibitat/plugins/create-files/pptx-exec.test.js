@@ -778,3 +778,97 @@ test.each([
   ), 0);
   expect(em * 28).toBeLessThanOrEqual(width);
 });
+
+describe("outline mode with exec layouts", () => {
+  beforeEach(() => {
+    runSectionAgent.mockClear();
+  });
+
+  test("section agent schema exposes exec layouts and no blank; prompt carries the chart rule", () => {
+    const src = fs.readFileSync(
+      require.resolve(
+        "../../../../../../utils/agents/aibitat/plugins/create-files/pptx/section-agent.js"
+      ),
+      "utf8"
+    );
+    expect(src).toMatch(
+      /enum: \["statement", "content", "kpi", "chart", "two-column"\]/
+    );
+    expect(src).not.toMatch(/"blank"/);
+    expect(src).toMatch(/MUST be a "chart" slide/);
+  });
+
+  test("outline deck: cover from headline, chart slide from agent, closing statement, keynote fix applied", async () => {
+    runSectionAgent.mockResolvedValueOnce({
+      slides: [
+        {
+          layout: "chart",
+          title: "รายได้ต่ำกว่าแผน",
+          data: {
+            type: "column",
+            categories: ["a", "b", "c"],
+            series: [{ name: "s", values: [1, 2, 3] }],
+          },
+        },
+      ],
+      citations: [],
+    });
+    const tool = setupTool();
+    await tool.call({
+      filename: "outline.pptx",
+      title: "รายงานผู้บริหาร",
+      headline: "รายได้หาย 36.5%",
+      closing: { headline: "ปิดปีที่ 25.49 ล้าน" },
+      sections: [{ title: "x" }],
+    });
+    // Generated filenames are UUIDs, so lexicographic sorting picks an arbitrary
+    // deck; the download card names the file this call actually wrote.
+    const [, card] = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const file = path.join(storageDir, "generated-files", card.storageFilename);
+    const zip = await JSZip.loadAsync(fs.readFileSync(file));
+    expect(await zip.file("ppt/slides/slide1.xml").async("string")).toMatch(
+      /รายได้หาย 36.5%/
+    );
+    expect(await getSlideChartXml(zip, 2)).toHaveLength(1);
+    expect(await zip.file("ppt/slides/slide3.xml").async("string")).toMatch(
+      /ปิดปีที่ 25.49/
+    );
+    const wb = await JSZip.loadAsync(
+      await zip
+        .file(Object.keys(zip.files).find((n) => /embeddings\/.*xlsx$/.test(n)))
+        .async("nodebuffer")
+    );
+    expect(await wb.file("xl/tables/table1.xml").async("string")).not.toMatch(
+      /'"/
+    );
+  });
+
+  test("outline deck: invalid chart data falls back to a content slide, deck still written", async () => {
+    runSectionAgent.mockResolvedValueOnce({
+      slides: [
+        {
+          layout: "chart",
+          title: "bad",
+          data: {
+            type: "column",
+            categories: ["a"],
+            series: [{ name: "s", values: [1, 2] }],
+          },
+        },
+      ],
+      citations: [],
+    });
+    const tool = setupTool();
+    const r = await tool.call({
+      filename: "fallback.pptx",
+      title: "t",
+      sections: [{ title: "x" }],
+    });
+    expect(r).toMatch(/Successfully created/);
+    expect(tool.aibitat.handlerProps.log).toHaveBeenCalledWith(
+      expect.stringMatching(/falling back to content/)
+    );
+  });
+});

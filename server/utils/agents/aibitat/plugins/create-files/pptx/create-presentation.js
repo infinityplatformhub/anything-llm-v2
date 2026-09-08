@@ -1,7 +1,8 @@
 const createFilesLib = require("../lib.js");
 const { getTheme, getAvailableThemes } = require("./themes.js");
 const {
-  renderTitleSlide,
+  renderCover,
+  renderStatement,
   renderSectionSlide,
   renderContentSlide,
   renderBlankSlide,
@@ -12,7 +13,7 @@ const {
   validateFinanceSections,
 } = require("./finance-schema.js");
 const { RENDERERS, fixEmbeddedChartTables } = require("./finance-layouts.js");
-const { EXEC_RENDERERS } = require("./exec-layouts.js");
+const { EXEC_RENDERERS, validateExecSection } = require("./exec-layouts.js");
 
 /**
  * Extracts recent conversation history from the parent AIbitat's chat log
@@ -50,7 +51,9 @@ module.exports.CreatePptxPresentation = {
           name: this.name,
           description:
             "Create a professional PowerPoint presentation (PPTX) in outline or finance mode. " +
-            "Outline mode independently builds section outlines with focused sub-agents. " +
+            "Outline mode independently builds section outlines with focused sub-agents that emit " +
+            "native charts and KPI tiles alongside bullet slides. " +
+            "Pass headline for the one-sentence verdict on the cover and closing for the final statement slide. " +
             "Finance mode validates structured financial data and renders sections directly without research.",
           examples: [
             {
@@ -58,7 +61,12 @@ module.exports.CreatePptxPresentation = {
               call: JSON.stringify({
                 filename: "project-updates.pptx",
                 title: "Q1 Project Updates",
+                headline: "Q1 shipped on plan with 40% fewer bugs",
                 theme: "corporate",
+                closing: {
+                  headline: "Hold the Q1 pace into Q2",
+                  subtitle: "Keep the two new engineers on feature X",
+                },
                 sections: [
                   {
                     title: "Overview",
@@ -199,6 +207,26 @@ module.exports.CreatePptxPresentation = {
                 description:
                   "Optional author name for the presentation metadata.",
               },
+              headline: {
+                type: "string",
+                description:
+                  "One-sentence verdict shown on the cover, in place of a topic label.",
+              },
+              closing: {
+                type: "object",
+                description:
+                  "Optional closing statement slide rendered after every section.",
+                properties: {
+                  headline: { type: "string" },
+                  subtitle: { type: "string" },
+                },
+                additionalProperties: false,
+              },
+              note: {
+                type: "string",
+                description:
+                  "One-line source or period note shown in the footer of every content slide.",
+              },
               theme: {
                 type: "string",
                 enum: getAvailableThemes(),
@@ -245,7 +273,7 @@ module.exports.CreatePptxPresentation = {
                         "blank",
                       ],
                       description:
-                        "Finance layout or legacy content, section, or blank layout.",
+                        "Finance or executive layout, or legacy content, section, or blank layout.",
                     },
                     title: {
                       type: "string",
@@ -287,6 +315,9 @@ module.exports.CreatePptxPresentation = {
           handler: async function ({
             filename = "presentation.pptx",
             title = "Untitled Presentation",
+            headline = "",
+            closing = null,
+            note = "",
             author = "",
             theme: themeName = "default",
             mode = "outline",
@@ -302,6 +333,9 @@ module.exports.CreatePptxPresentation = {
               // Strip XML 1.0 illegal control characters so PowerPoint can open
               // the generated deck (slide content is sanitized after assembly).
               title = createFilesLib.stripInvalidXmlChars(title);
+              headline = createFilesLib.stripInvalidXmlChars(headline);
+              note = createFilesLib.stripInvalidXmlChars(note);
+              closing = createFilesLib.stripInvalidXmlChars(closing);
               author = createFilesLib.stripInvalidXmlChars(author);
 
               if (!filename.toLowerCase().endsWith(".pptx"))
@@ -400,7 +434,11 @@ module.exports.CreatePptxPresentation = {
               if (author) pptx.author = author;
               pptx.company = "AnythingLLM";
 
-              const totalSlideCount = allSlides.length;
+              const closingHeadline = closing?.headline || "";
+              // The closing statement is a real slide, so it counts toward the
+              // "n / total" footer the section slides print.
+              const totalSlideCount =
+                allSlides.length + (closingHeadline ? 1 : 0);
 
               // Sub-agent output can carry XML 1.0 illegal control characters
               // (e.g. a form feed from a LaTeX `\frac`); strip them recursively
@@ -408,9 +446,23 @@ module.exports.CreatePptxPresentation = {
               const cleanSlides =
                 createFilesLib.stripInvalidXmlChars(allSlides);
 
-              // Title slide
-              const titleSlide = pptx.addSlide();
-              renderTitleSlide(titleSlide, pptx, { title, author }, theme);
+              // Cover slide: the headline is the verdict, the title becomes the eyebrow.
+              const coverSlide = pptx.addSlide();
+              renderCover(
+                coverSlide,
+                pptx,
+                {
+                  title,
+                  headline,
+                  subtitle: `${footer.period || ""}`,
+                  meta: [author, footer.source, footer.preparedOn]
+                    .filter(Boolean)
+                    .join(" · "),
+                },
+                theme
+              );
+
+              const log = this.super.handlerProps.log;
 
               // Render every slide produced by the section agents
               cleanSlides.forEach((slideData, index) => {
@@ -427,6 +479,46 @@ module.exports.CreatePptxPresentation = {
                         ? RENDERERS.__pending
                         : null)
                     : null;
+                // Outline slides come from a language model, so their layout data
+                // can be malformed; validate before handing it to a renderer that
+                // would otherwise throw and lose the whole deck.
+                const execRenderer =
+                  mode !== "finance" ? EXEC_RENDERERS[layout] : null;
+
+                if (execRenderer) {
+                  const errors = validateExecSection(
+                    slideData,
+                    `slide ${slideNumber}`,
+                    []
+                  );
+                  if (errors.length > 0) {
+                    log(
+                      `create-pptx-presentation: slide ${slideNumber} ${errors.join("; ")} — falling back to content`
+                    );
+                    renderContentSlide(
+                      slide,
+                      pptx,
+                      {
+                        ...slideData,
+                        content: [
+                          JSON.stringify(slideData.data ?? null).slice(0, 300),
+                        ],
+                        note: slideData.note || note,
+                      },
+                      theme,
+                      slideNumber,
+                      totalSlideCount
+                    );
+                    return;
+                  }
+                  execRenderer(slide, pptx, slideData, theme, {
+                    slideNumber,
+                    totalSlides: totalSlideCount,
+                    note: slideData.note || note,
+                    bg: theme.background,
+                  });
+                  return;
+                }
 
                 if (financeRenderer) {
                   financeRenderer(slide, pptx, slideData, theme, {
@@ -464,7 +556,7 @@ module.exports.CreatePptxPresentation = {
                     renderContentSlide(
                       slide,
                       pptx,
-                      slideData,
+                      { ...slideData, note: slideData.note || note },
                       theme,
                       slideNumber,
                       totalSlideCount
@@ -473,11 +565,21 @@ module.exports.CreatePptxPresentation = {
                 }
               });
 
-              const rawBuffer = await pptx.write({ outputType: "nodebuffer" });
-              const buffer =
-                mode === "finance"
-                  ? await fixEmbeddedChartTables(rawBuffer)
-                  : rawBuffer;
+              if (closingHeadline) {
+                renderStatement(
+                  pptx.addSlide(),
+                  pptx,
+                  { headline: closingHeadline, subtitle: closing.subtitle },
+                  theme,
+                  { slideNumber: totalSlideCount, totalSlides: totalSlideCount }
+                );
+              }
+
+              // Every mode can now emit native charts, and pptxgenjs writes a
+              // table ref Keynote refuses to open, so the fixer runs on all decks.
+              const buffer = await fixEmbeddedChartTables(
+                await pptx.write({ outputType: "nodebuffer" })
+              );
               const bufferSizeKB = (buffer.length / 1024).toFixed(2);
               const bufferSizeMB = (buffer.length / (1024 * 1024)).toFixed(2);
               this.super.handlerProps.log(
