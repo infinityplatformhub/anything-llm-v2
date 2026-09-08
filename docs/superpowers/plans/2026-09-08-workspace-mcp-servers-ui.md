@@ -51,11 +51,11 @@
 
 **Files:** `server/prisma/schema.prisma`, `server/prisma/migrations/20260908000000_workspace_mcp_servers/migration.sql`, `server/models/workspaceMcpServer.js`, `server/utils/MCP/serverConfig.js`, tests `server/__tests__/models/workspaceMcpServer.test.js`, `server/__tests__/utils/MCP/serverConfig.test.js`
 
-- [ ] **RED:** `serverConfig.test.js` — validate: ok กับ `{url,type,headers,anythingllm}`; `command`/`args`/`env` → throw `stdio_not_supported`; unknown key → `unknown_field:<key>`; headers เกิน 20 คีย์หรือรวม > 4 KB → `headers_too_large`; ค่าไม่ใช่ string → `invalid_headers`; `type` นอก sse/http/streamable → `invalid_type`; url ผ่าน `httpUrl()` จาก `utils/MCP/oauth.js` (private IP → throw); ชื่อไม่ตรง `^[a-z0-9][a-z0-9_-]{1,63}$` → `invalid_name`. mask: คีย์ที่ match `/token|key|secret|password|authorization|cookie/i` → `"••••••••"`; merge: sentinel = คงเดิม, ค่าใหม่ = ทับ, คีย์หาย = ลบ. parse: รับ `{mcpServers:{a:{},b:{}}}` → `[{name,config}]` และ `{name, config}` เดี่ยว
-- [ ] **RED:** `workspaceMcpServer.test.js` — mock `utils/prisma` + `EncryptionManager` (key/salt คงที่); `create` เข้ารหัสก่อนเขียน (ค่าใน `data.config` ต้องไม่มี url ดิบ), `listDecrypted` คืน config ถอดแล้ว, decrypt ล้มเหลว → ข้าม + log ชื่ออย่างเดียว, `delete` ลบ `workspace_mcp_connections` ของชื่อนั้นในห้องนั้นด้วย (ใน `$transaction`)
-- [ ] **GREEN:** schema + migration.sql (SQLite syntax ตาม migration เดิม; FK cascade; unique `(workspace_id, name)`), model, serverConfig
-- [ ] รัน 2 เทส + `singletonOrder.test.js` ยังผ่าน; eslint clean
-- [ ] commit `feat(mcp): workspace_mcp_servers schema, model and config validator (#51)`
+- [x] **RED:** `serverConfig.test.js` — validate: ok กับ `{url,type,headers,anythingllm}`; `command`/`args`/`env` → throw `stdio_not_supported`; unknown key → `unknown_field:<key>`; headers เกิน 20 คีย์หรือรวม > 4 KB → `headers_too_large`; ค่าไม่ใช่ string → `invalid_headers`; `type` นอก sse/http/streamable → `invalid_type`; url ผ่าน `httpUrl()` จาก `utils/MCP/oauth.js` (private IP → throw); ชื่อไม่ตรง `^[a-z0-9][a-z0-9_-]{1,63}$` → `invalid_name`. mask: คีย์ที่ match `/token|key|secret|password|authorization|cookie/i` → `"••••••••"`; merge: sentinel = คงเดิม, ค่าใหม่ = ทับ, คีย์หาย = ลบ. parse: รับ `{mcpServers:{a:{},b:{}}}` → `[{name,config}]` และ `{name, config}` เดี่ยว
+- [x] **RED:** `workspaceMcpServer.test.js` — mock `utils/prisma` + `EncryptionManager` (key/salt คงที่); `create` เข้ารหัสก่อนเขียน (ค่าใน `data.config` ต้องไม่มี url ดิบ), `listDecrypted` คืน config ถอดแล้ว, decrypt ล้มเหลว → ข้าม + log ชื่ออย่างเดียว, `delete` ลบ `workspace_mcp_connections` ของชื่อนั้นในห้องนั้นด้วย (ใน `$transaction`)
+- [x] **GREEN:** schema + migration.sql (SQLite syntax ตาม migration เดิม; FK cascade; unique `(workspace_id, name)`), model, serverConfig
+- [x] รัน 2 เทส + `singletonOrder.test.js` ยังผ่าน; eslint clean
+- [x] commit `feat(mcp): workspace_mcp_servers schema, model and config validator (#51)`
 
 ## Task 2 — hypervisor dual-source + workspace-owned boot + probe
 
