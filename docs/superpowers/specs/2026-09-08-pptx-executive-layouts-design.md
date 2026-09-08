@@ -99,3 +99,17 @@ layouts per theme, run manually for the visual check.
 
 ## Evidence contract
 `cd server && node ../node_modules/jest/bin/jest.js __tests__/utils/agents/aibitat/plugins/create-files` → `Tests:` with 0 failed.
+
+## Relationship to PR #45 (finance mode, issue #38) — added after recon
+PR #45 (`feat/pptx-finance-mode`, open, not deployed) already adds `mode: "finance"` with 9
+validated layouts (`summary scorecard trend_bar bar_donut waterfall cash ranked_pair risks_outlook
+decisions`), `fixEmbeddedChartTables`, theme `executive`, and 35 tests. The rejected deck came from
+dev2 on master (no #45) via outline mode. This task **builds on #45** instead of a parallel schema:
+- Keep #45's schema/validation. Rename nothing. Add layouts `kpi`, `chart`, `two-column`,
+  `statement` as the generic set the section agent may use in **outline** mode too (so a non-finance
+  request still gets charts), sharing renderers with the finance layouts.
+- Restyle `finance-layouts.js` + `utils.js` to the approved direction (tokens above); `executive`
+  becomes the data-forward teal palette; #46 (footer/branding collision, title-slide watermark) is
+  closed by removing branding altogether.
+- Branch `feat/pptx-exec-design` from `feat/pptx-finance-mode`; PR targets `feat/pptx-finance-mode`
+  if #45 is still open at finish, else `master`.
