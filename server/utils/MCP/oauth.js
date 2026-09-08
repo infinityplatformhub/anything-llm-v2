@@ -280,6 +280,7 @@ async function refreshTokens(refreshToken, serverUrl) {
 }
 
 module.exports = {
+  httpUrl,
   discover,
   ensureClient,
   authorizeUrl,
