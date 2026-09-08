@@ -223,7 +223,7 @@ describe("pptx-finance executive theme and layouts", () => {
     for (const themeName of getAvailableThemes()) {
       const theme = getTheme(themeName);
       const colorTokens = Object.entries(theme).flatMap(([key, value]) => {
-        if (key === "chartColors") return value;
+        if (Array.isArray(value)) return value;
         return /color|^chart|^status/i.test(key) ? [value] : [];
       });
 

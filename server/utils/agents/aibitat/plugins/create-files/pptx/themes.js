@@ -5,18 +5,20 @@
  * palette, table styling, footer colors, and typography.  The rendering code
  * in utils.js consumes these tokens to produce consistent, professional slides.
  *
- * Themes: default · corporate · dark · minimal · creative
+ * Themes: default · corporate · dark · minimal · creative · executive
  */
 
-const FINANCE_THEME_DEFAULTS = {
-  chartColors: ["1A5276", "C9943E", "5A6D82", "7B96B5", "B8C4D0"],
-  chartPositive: "2E7D5B",
-  chartNegative: "B4392E",
-  chartNeutral: "5A6D82",
-  chartGrid: "ECE9E1",
-  statusGreen: "2E7D5B",
-  statusAmber: "B6790F",
-  statusRed: "B4392E",
+const EXEC_TOKEN_DEFAULTS = {
+  ground: "0F1B1F",
+  groundText: "F4F6F5",
+  groundMuted: "9FB0B5",
+  hairline: "D6D9DB",
+  pillBg: "F1F3F2",
+  good: "1E7A4B",
+  warn: "8A6100",
+  bad: "B3261E",
+  tileColors: ["0F4C5C", "1F5F5B", "2E6F6A", "3F7E79"],
+  series: ["0F4C5C", "3A7C8C", "6FA3AD", "A6C8CE", "CBDDE2"],
 };
 
 const THEMES = {
@@ -44,8 +46,9 @@ const THEMES = {
     footerColor: "94A3B8",
     footerLineColor: "E2E8F0",
 
-    fontTitle: "Calibri",
-    fontBody: "Calibri",
+    ground: "1E293B",
+    tileColors: ["1E3A8A", "1D4ED8", "2563EB", "3B82F6"],
+    series: ["2563EB", "94A3B8", "0EA5E9", "F59E0B", "64748B"],
   },
 
   corporate: {
@@ -72,8 +75,9 @@ const THEMES = {
     footerColor: "8B9DB3",
     footerLineColor: "D5DBE2",
 
-    fontTitle: "Calibri",
-    fontBody: "Calibri",
+    ground: "0C1929",
+    tileColors: ["0C1929", "1A3550", "1A5276", "2E6F9E"],
+    series: ["1A5276", "C9943E", "7B96B5", "2C3E50", "B8C4D0"],
   },
 
   dark: {
@@ -100,8 +104,14 @@ const THEMES = {
     footerColor: "71717A",
     footerLineColor: "3F3F46",
 
-    fontTitle: "Calibri",
-    fontBody: "Calibri",
+    ground: "0F0F1A",
+    tileColors: ["312E81", "3730A3", "4338CA", "4F46E5"],
+    series: ["818CF8", "38BDF8", "A1A1AA", "F472B6", "C4B5FD"],
+    good: "4ADE80",
+    warn: "FBBF24",
+    bad: "F87171",
+    hairline: "3F3F46",
+    pillBg: "27272A",
   },
 
   minimal: {
@@ -128,8 +138,9 @@ const THEMES = {
     footerColor: "A3A3A3",
     footerLineColor: "E5E5E5",
 
-    fontTitle: "Calibri",
-    fontBody: "Calibri Light",
+    ground: "171717",
+    tileColors: ["262626", "404040", "525252", "737373"],
+    series: ["262626", "737373", "A3A3A3", "D4D4D4", "E5E5E5"],
   },
 
   creative: {
@@ -156,47 +167,52 @@ const THEMES = {
     footerColor: "A78BFA",
     footerLineColor: "E9D5FF",
 
-    fontTitle: "Calibri",
-    fontBody: "Calibri",
+    ground: "2E1065",
+    tileColors: ["4C1D95", "5B21B6", "6D28D9", "7C3AED"],
+    series: ["7C3AED", "A78BFA", "F472B6", "2DD4BF", "C4B5FD"],
   },
 
   executive: {
     name: "Executive",
     description: "Board-ready financial reporting with restrained accents",
 
-    titleSlideBackground: "0C1929",
+    titleSlideBackground: "0F1B1F",
     titleSlideTitleColor: "FFFFFF",
     titleSlideSubtitleColor: "5A6D82",
     titleSlideAccentColor: "C9943E",
 
     background: "FFFFFF",
-    titleColor: "0C1929",
-    subtitleColor: "5A6D82",
-    bodyColor: "2C3E50",
-    accentColor: "C8860B",
-    bulletColor: "C8860B",
+    titleColor: "141414",
+    subtitleColor: "6E7377",
+    bodyColor: "141414",
+    accentColor: "0F4C5C",
+    bulletColor: "0F4C5C",
 
     tableHeaderBg: "0C1929",
     tableHeaderColor: "FFFFFF",
     tableAltRowBg: "F7F6F2",
     tableBorderColor: "DAD6CC",
 
-    footerColor: "5A6D82",
-    footerLineColor: "DAD6CC",
-
-    fontTitle: "Calibri",
-    fontBody: "Calibri",
-
-    chartColors: ["1A5276", "C9943E", "5A6D82", "7B96B5", "B8C4D0"],
-    chartPositive: "2E7D5B",
-    chartNegative: "B4392E",
-    chartNeutral: "5A6D82",
-    chartGrid: "ECE9E1",
-    statusGreen: "2E7D5B",
-    statusAmber: "B6790F",
-    statusRed: "B4392E",
+    footerColor: "6E7377",
+    footerLineColor: "D6D9DB",
   },
 };
+
+function deriveTheme(base) {
+  const t = { ...EXEC_TOKEN_DEFAULTS, ...base };
+  t.fontFace = t.fontFace || "Leelawadee UI";
+  t.fontTitle = t.fontFace;
+  t.fontBody = t.fontFace;
+  t.chartColors = t.series;
+  t.chartPositive = t.good;
+  t.chartNegative = t.bad;
+  t.chartNeutral = t.groundMuted;
+  t.chartGrid = t.hairline;
+  t.statusGreen = t.good;
+  t.statusAmber = t.warn;
+  t.statusRed = t.bad;
+  return t;
+}
 
 /**
  * Get a theme by name, falling back to default if not found.
@@ -205,7 +221,7 @@ const THEMES = {
  */
 function getTheme(themeName) {
   const key = (themeName || "default").toLowerCase().trim();
-  return { ...FINANCE_THEME_DEFAULTS, ...(THEMES[key] || THEMES.default) };
+  return deriveTheme(THEMES[key] || THEMES.default);
 }
 
 /**
