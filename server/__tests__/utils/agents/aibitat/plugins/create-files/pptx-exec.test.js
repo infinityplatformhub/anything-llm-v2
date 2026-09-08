@@ -200,7 +200,11 @@ describe("no watermark", () => {
 
   test("branding helpers are gone", () => {
     expect(require("../../../../../../utils/agents/aibitat/plugins/create-files/lib.js").getLogo).toBeUndefined();
-    expect(require("../../../../../../utils/agents/aibitat/plugins/create-files/pdf/utils.js").applyBranding).toBeUndefined();
+    // The pdf helper module held nothing but branding, so it is gone entirely;
+    // the other three modules still exist and only lost their branding export.
+    expect(() =>
+      require("../../../../../../utils/agents/aibitat/plugins/create-files/pdf/utils.js")
+    ).toThrow();
     expect(require("../../../../../../utils/agents/aibitat/plugins/create-files/xlsx/utils.js").applyBranding).toBeUndefined();
     expect(require("../../../../../../utils/agents/aibitat/plugins/create-files/pptx/utils.js").addBranding).toBeUndefined();
   });
@@ -510,6 +514,40 @@ describe("exec layouts", () => {
     expect(body).not.toMatch(/pending/);
     expect(body).toMatch(/sz="4000" b="1"/);
     expect(body).toContain("16,994,313");
+  });
+
+  test("an exec layout in a finance deck carries the deck footer and its speaker notes", async () => {
+    const tool = setupTool();
+    await tool.call({
+      filename: "exec-finance-footer", title: "Exec", theme: "executive",
+      mode: "finance", unit: "บาท",
+      footer: { period: "ม.ค.–ส.ค. 2569", source: "FlowAccount", preparedOn: "2026-09-07" },
+      sections: [{
+        layout: "kpi", title: "ผลประกอบการ", subtitle: "ภาพรวม", notes: "พูดถึงรายได้ที่หายไปก่อน",
+        data: { kpis: [
+          { label: "รายได้", value: 16994313, delta: "-36.5%", status: "bad" },
+          { label: "กำไรสุทธิ", value: 2541099, delta: "-67.5%", status: "bad" } ] },
+      }],
+    });
+    const [, card] = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(storageDir, "generated-files", card.storageFilename))
+    );
+    const slide2 = await zip.file("ppt/slides/slide2.xml").async("string");
+    // The same period / source / prepared-on chrome the finance renderers compose,
+    // so a kpi slide is not left with only a page number beside a scorecard.
+    expect(slide2).toContain("ภาพรวม · งวด ม.ค.–ส.ค. 2569");
+    expect(slide2).toContain("แหล่งข้อมูล FlowAccount");
+    // Follow slide 2's own relationships so the notes are proven to hang off the
+    // kpi slide, not merely to exist somewhere in the deck.
+    const rels = await zip
+      .file("ppt/slides/_rels/slide2.xml.rels")
+      .async("string");
+    const target = rels.match(/notesSlides\/(notesSlide\d+\.xml)/)[1];
+    const notes = await zip.file(`ppt/notesSlides/${target}`).async("string");
+    expect(notes).toContain("พูดถึงรายได้ที่หายไปก่อน");
   });
 
   test("finance mode accepts the exec layouts and still fails closed on bad data", () => {
@@ -845,6 +883,63 @@ describe("outline mode with exec layouts", () => {
     );
   });
 
+  test("outline deck: a kpi section shaped exactly as the section-agent prompt documents renders as tiles, not a fallback", async () => {
+    // The prompt in section-agent.js is the contract a model follows, so this
+    // builds a kpi section from it verbatim: a formatted string delta and a
+    // status value. Any drift between that prompt and validateExecSection
+    // shows up here as the raw-JSON content fallback.
+    runSectionAgent.mockResolvedValueOnce({
+      slides: [
+        {
+          layout: "kpi",
+          title: "รายได้ต่ำกว่าแผน 5 ใน 8 เดือน",
+          data: {
+            kpis: [
+              { label: "รายได้", value: 16994313, unit: "บาท", delta: "-36.5%", status: "bad" },
+              { label: "กำไรสุทธิ", value: 2541099, unit: "บาท", delta: "-67.5%", status: "bad" },
+              { label: "อัตรากำไร", value: "15.0%", delta: "+1.2 pt", status: "good" },
+            ],
+            note: "แหล่งข้อมูล FlowAccount",
+          },
+        },
+      ],
+      citations: [],
+    });
+    const tool = setupTool();
+    await tool.call({
+      filename: "kpi-contract.pptx",
+      title: "รายงานผู้บริหาร",
+      headline: "รายได้หาย 36.5%",
+      sections: [{ title: "x" }],
+    });
+    expect(tool.aibitat.handlerProps.log).not.toHaveBeenCalledWith(
+      expect.stringMatching(/falling back to content/)
+    );
+    const [, card] = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(path.join(storageDir, "generated-files", card.storageFilename))
+    );
+    const slide2 = await zip.file("ppt/slides/slide2.xml").async("string");
+    const theme = getTheme("default");
+    // A string value needs no formatting and holds the headline 40pt; the two
+    // long figures carry a wide unit and step down inside a three-column tile,
+    // which is the KPI value fit, not the fallback.
+    expect(slide2).toContain('sz="4000" b="1"');
+    expect(slide2).toContain("15.0%");
+    expect((slide2.match(/sz="2800" b="1"/g) || []).length).toBe(2);
+    for (const value of ["16,9", "2,54"]) expect(slide2).toContain(value);
+    expect(slide2).toMatch(new RegExp(`<a:srgbClr val="${theme.bad}"/>`));
+    expect(slide2).toMatch(new RegExp(`<a:srgbClr val="${theme.good}"/>`));
+    for (const delta of ["-36.5%", "-67.5%", "+1.2 pt"]) {
+      expect(slide2).toContain(delta);
+    }
+    // The fallback renders the section data as escaped JSON on a bullet slide.
+    expect(slide2).not.toContain("&quot;kpis&quot;");
+    expect(slide2).not.toContain("<a:normAutofit");
+  });
+
   test("outline deck: invalid chart data falls back to a content slide, deck still written", async () => {
     runSectionAgent.mockResolvedValueOnce({
       slides: [
@@ -1042,6 +1137,29 @@ describe("Thai text measurement and token-safe bounding", () => {
         const partial = new RegExp(`(?<!${number.slice(0, -1)})${number.slice(0, 3)}`);
         if (partial.test(text)) expect(text).toContain(number);
       }
+    }
+    expect(slideXml).not.toContain("<a:normAutofit");
+  });
+
+  test("two-column points never split a sign or a percent from its figure", async () => {
+    // Both lines wrap exactly at the seam ICU offers between the sign or the
+    // percent and its digits, which is where a loss used to render as a gain.
+    const { slideXml } = await renderOne("two-column", {
+      chart: { type: "column", categories: ["ม.ค."], series: [{ name: "รายได้", values: [1] }] },
+      points: [
+        "กกกกกกกกกกกกก -1,234,567 บาท",
+        "กกกกกกกกกกกกกกกกกก 15.0% ของแผน",
+      ],
+    });
+    const texts = runs(slideXml);
+    expect(texts.some((text) => text.includes("-1,234,567"))).toBe(true);
+    expect(texts.some((text) => text.includes("15.0%"))).toBe(true);
+    for (const text of texts) {
+      expect(text).not.toMatch(/[-+\u2212]\s*$/);
+      expect(text).not.toMatch(/^\s*%/);
+      // A run may hold the digits only when it also holds the sign or percent.
+      if (text.includes("1,234,567")) expect(text).toContain("-1,234,567");
+      if (text.includes("15.0")) expect(text).toContain("15.0%");
     }
     expect(slideXml).not.toContain("<a:normAutofit");
   });

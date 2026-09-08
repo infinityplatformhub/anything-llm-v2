@@ -424,6 +424,7 @@ function execFooter(slide, pptx, section, theme, ctx) {
     totalSlides: ctx.totalSlides,
     note: section.data.note || ctx.note,
   });
+  if (section.notes) slide.addNotes(section.notes);
 }
 
 /**
@@ -670,6 +671,8 @@ function renderTwoColumn(slide, pptx, section, theme, ctx) {
  */
 function renderExecStatement(slide, pptx, section, theme, ctx) {
   renderStatement(slide, pptx, section.data, theme, ctx);
+  // No footer here, so this renderer attaches its own speaker notes.
+  if (section.notes) slide.addNotes(section.notes);
 }
 
 const EXEC_RENDERERS = {

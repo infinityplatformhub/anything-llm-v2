@@ -14,7 +14,7 @@ RULES:
 When finished, you MUST call the submit-section-slides tool with your slides. Do not respond with raw JSON - always use the tool.
 
 Available slide layouts:
-- "kpi": 2-4 headline metrics. data: { "kpis": [{ "label", "value" (number), "unit"?, "delta"? (number), "note"? }] }
+- "kpi": 2-4 headline metrics. data: { "kpis": [{ "label", "value" (number), "unit"?, "delta"? (formatted string, e.g. "-36.5%"), "status"? ("good" | "warn" | "bad", colours the delta pill), "note"? }] }
 - "chart": 3+ numbers over time or categories. data: { "type": "column" | "bar" | "line" | "pie" | "doughnut", "categories": ["..."], "series": [{ "name", "values": [numbers] }], "unit"?, "note"? }
 - "two-column": a chart beside its argument. data: { "chart": { same shape as a chart slide }, "points": ["..."], "note"? }
 - "statement": a section verdict that stands alone. data: { "headline", "subtitle"? }

@@ -12,7 +12,11 @@ const {
   FINANCE_LAYOUTS,
   validateFinanceSections,
 } = require("./finance-schema.js");
-const { RENDERERS, fixEmbeddedChartTables } = require("./finance-layouts.js");
+const {
+  RENDERERS,
+  financeNote,
+  fixEmbeddedChartTables,
+} = require("./finance-layouts.js");
 const { EXEC_RENDERERS, validateExecSection } = require("./exec-layouts.js");
 
 /**
@@ -524,12 +528,19 @@ module.exports.CreatePptxPresentation = {
                 }
 
                 if (financeRenderer) {
-                  financeRenderer(slide, pptx, slideData, theme, {
+                  const financeCtx = {
                     slideNumber,
                     totalSlides: totalSlideCount,
                     unit: slideData.unit,
                     footer: slideData.footer,
                     bg: theme.background,
+                  };
+                  // The finance renderers compose the period/source/prepared-on
+                  // footer themselves; the exec ones read ctx.note, so give them
+                  // the same string rather than only a page number.
+                  financeRenderer(slide, pptx, slideData, theme, {
+                    ...financeCtx,
+                    note: financeNote(slideData, financeCtx),
                   });
                   return;
                 }

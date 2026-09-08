@@ -950,6 +950,7 @@ const RENDERERS = {
 
 module.exports = {
   RENDERERS,
+  financeNote,
   assertStackedLabelPosition,
   fixEmbeddedChartTables,
   formatNumber,

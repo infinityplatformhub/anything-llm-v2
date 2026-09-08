@@ -52,7 +52,10 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 // separators in one segment, keeps a Thai mark with the character it sits on, and knows
 // Thai word boundaries, which is the only way to break Thai: it is written without spaces.
 const words = new Intl.Segmenter(undefined, { granularity: "word" });
-const NUMBER_TOKEN = /^[\d.,]+$/;
+// Matches what tokenize() now produces: a figure with its sign and percent
+// attached, so an over-wide signed figure still takes the cut-and-mark branch
+// rather than the grapheme fallback that would wrap it mid-number.
+const NUMBER_TOKEN = /^[+\u2212-]?[\d.,]+%?$/;
 
 function tokenize(text) {
   const tokens = [];
@@ -61,6 +64,14 @@ function tokenize(text) {
     // ICU already keeps "7,799,188" whole, but merging across every digit/separator
     // seam keeps the never-break-a-number rule independent of ICU's locale data.
     if (prev && /[\d.,]$/.test(prev) && /^[\d.,]/.test(segment))
+      tokens[tokens.length - 1] = prev + segment;
+    // ICU breaks a sign or a percent away from the figure it belongs to, so
+    // "-1,234,567" could wrap as "-" then the digits, reading as a gain. Merge
+    // only a sign that directly precedes a figure and a percent that directly
+    // follows one, which leaves standalone hyphens and "a - b" arithmetic alone.
+    else if (prev && /^[+\u2212-]$/.test(prev) && /^[\d.,]/.test(segment))
+      tokens[tokens.length - 1] = prev + segment;
+    else if (prev && /[\d.,]$/.test(prev) && segment === "%")
       tokens[tokens.length - 1] = prev + segment;
     else tokens.push(segment);
   }
