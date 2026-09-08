@@ -378,6 +378,43 @@ describe("temporary MCP probes", () => {
     }
   );
   it.each(["connect", "listTools"])(
+    "preserves sanitized %s error when cleanup also rejects",
+    async (method) => {
+      Client.mockImplementationOnce(() => {
+        client = {
+          connect: jest.fn().mockResolvedValue(),
+          listTools: jest.fn().mockResolvedValue({ tools }),
+          close: jest.fn().mockRejectedValue(new Error("secret-config")),
+        };
+        client[method].mockRejectedValue(new Error("secret-config"));
+        return client;
+      });
+      await expect(layer.probeServerConfig(owned[0].config)).rejects.toThrow(
+        /^MCP probe failed$/
+      );
+      expect(client.close).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls).toEqual([["MCP_PROBE_CLEANUP_FAILED"]]);
+    }
+  );
+  it("preserves timeout error when cleanup also rejects", async () => {
+    jest.useFakeTimers();
+    Client.mockImplementationOnce(() => {
+      client = {
+        connect: jest.fn(() => new Promise(() => {})),
+        close: jest.fn().mockRejectedValue(new Error("secret-config")),
+      };
+      return client;
+    });
+    const pending = expect(
+      layer.probeServerConfig(owned[0].config)
+    ).rejects.toThrow(/^MCP probe timeout$/);
+    await jest.advanceTimersByTimeAsync(15000);
+    await pending;
+    expect(client.close).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls).toEqual([["MCP_PROBE_CLEANUP_FAILED"]]);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+  it.each(["connect", "listTools"])(
     "times out hung %s after default 15 seconds and closes",
     async (method) => {
       jest.useFakeTimers();

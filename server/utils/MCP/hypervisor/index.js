@@ -121,6 +121,7 @@ class MCPHypervisor {
     });
     const started = Date.now();
     let timedOut = false;
+    let failed = false;
     try {
       const server = { ...config };
       if (accessToken) {
@@ -141,11 +142,14 @@ class MCPHypervisor {
       );
       return { tools, latencyMs: Date.now() - started };
     } catch (error) {
+      failed = true;
       timedOut = error.message === "MCP probe timeout";
       throw new Error(timedOut ? "MCP probe timeout" : "MCP probe failed");
     } finally {
       await client.close().catch(() => {
-        throw new Error("MCP probe cleanup failed");
+        console.warn("MCP_PROBE_CLEANUP_FAILED");
+        // Preserve the probe error; surface cleanup failure only after success.
+        if (!failed) throw new Error("MCP probe cleanup failed");
       });
     }
   }

@@ -20,7 +20,7 @@ const { SystemSettings } = require("../../models/systemSettings");
 const { validatedRequest } = require("../../utils/middleware/validatedRequest");
 const { mcpServersEndpoints } = require("../../endpoints/mcpServers");
 
-let routes, stopWorkspaceServer;
+let routes, stopWorkspaceServer, findServerConfig;
 async function invoke(
   method = "get",
   body = {},
@@ -83,16 +83,22 @@ describe("workspace MCP status and toggle", () => {
       async (_id, serverName, enabled) => ({ server_name: serverName, enabled })
     );
     stopWorkspaceServer = jest.fn().mockResolvedValue(undefined);
+    const globalConfigs = [
+      {
+        name: "flowaccount",
+        server: { anythingllm: { perWorkspaceAuth: true } },
+      },
+      { name: "plain", server: {} },
+      { name: "missing-row", server: {} },
+    ];
+    findServerConfig = jest.fn(async (name) => {
+      const config = globalConfigs.find((config) => config.name === name);
+      return config ? { ...config, owner: "global" } : null;
+    });
     MCPCompatibilityLayer.mockImplementation(() => ({
       stopWorkspaceServer,
-      mcpServerConfigs: [
-        {
-          name: "flowaccount",
-          server: { anythingllm: { perWorkspaceAuth: true } },
-        },
-        { name: "plain", server: {} },
-        { name: "missing-row", server: {} },
-      ],
+      findServerConfig,
+      mcpServerConfigs: globalConfigs,
     }));
     mcpServersEndpoints({
       get(path, middlewares, handler) {
@@ -232,6 +238,47 @@ describe("workspace MCP status and toggle", () => {
     );
   });
 
+  it("enables workspace-owned server absent from global configs", async () => {
+    findServerConfig.mockResolvedValueOnce({
+      name: "owned",
+      server: {},
+      owner: "workspace",
+    });
+    const response = await invoke("post", {
+      serverName: "owned",
+      enabled: true,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(findServerConfig).toHaveBeenCalledWith("owned", {
+      id: 5,
+      slug: "legal",
+    });
+    expect(WorkspaceMcpConnection.setEnabled).toHaveBeenCalledWith(
+      5,
+      "owned",
+      true
+    );
+  });
+
+  it("rejects workspace-owned OAuth enable without token", async () => {
+    findServerConfig.mockResolvedValueOnce({
+      name: "owned-oauth",
+      server: { anythingllm: { perWorkspaceAuth: true } },
+      owner: "workspace",
+    });
+    const response = await invoke("post", {
+      serverName: "owned-oauth",
+      enabled: true,
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toEqual({
+      success: false,
+      error: "Connect MCP server before enabling",
+    });
+    expect(WorkspaceMcpConnection.find).toHaveBeenCalledWith(5, "owned-oauth");
+    expect(WorkspaceMcpConnection.setEnabled).not.toHaveBeenCalled();
+  });
+
   it("rejects OAuth enable before connection without writing row", async () => {
     expect(
       (await invoke("post", { serverName: "flowaccount", enabled: true }))
@@ -305,11 +352,20 @@ describe("workspace MCP status and toggle", () => {
     );
   });
 
-  it("rejects unknown server", async () => {
-    expect(
-      (await invoke("post", { serverName: "unknown", enabled: true }))
-        .statusCode
-    ).toBe(404);
+  it("rejects server absent from workspace and global sources", async () => {
+    const response = await invoke("post", {
+      serverName: "unknown",
+      enabled: true,
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.body).toEqual({
+      success: false,
+      error: "MCP server not found",
+    });
+    expect(findServerConfig).toHaveBeenCalledWith("unknown", {
+      id: 5,
+      slug: "legal",
+    });
     expect(WorkspaceMcpConnection.setEnabled).not.toHaveBeenCalled();
   });
 
