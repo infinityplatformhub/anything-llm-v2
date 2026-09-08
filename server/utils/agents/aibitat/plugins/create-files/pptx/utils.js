@@ -202,29 +202,29 @@ function renderCover(slide, pptx, { title, headline, subtitle, meta }, theme) {
 
 function renderStatement(slide, pptx, { headline, subtitle }, theme, ctx) {
   addGround(slide, pptx, theme);
-  slide.addText(headline || "", {
+  const headlineBox = { w: COVER_W, h: 1.5, fontSize: 48 };
+  slide.addText(boundText(headline || "", headlineBox), {
     x: COVER_MARGIN_X,
     y: 1.9,
-    w: COVER_W,
-    h: 1.5,
-    fontSize: 48,
+    w: headlineBox.w,
+    h: headlineBox.h,
+    fontSize: headlineBox.fontSize,
     bold: true,
     color: theme.groundText,
     fontFace: theme.fontFace,
     margin: 0,
-    fit: "shrink",
   });
   if (subtitle) {
-    slide.addText(subtitle, {
+    const subtitleBox = { w: COVER_W, h: 0.8, fontSize: 18 };
+    slide.addText(boundText(subtitle, subtitleBox), {
       x: COVER_MARGIN_X,
       y: 3.6,
-      w: COVER_W,
-      h: 0.8,
-      fontSize: 18,
+      w: subtitleBox.w,
+      h: subtitleBox.h,
+      fontSize: subtitleBox.fontSize,
       color: theme.groundMuted,
       fontFace: theme.fontFace,
       margin: 0,
-      fit: "shrink",
     });
   }
 }
@@ -293,16 +293,16 @@ function renderContentSlide(
     ? addActionTitle(slide, theme, slideData.title)
     : 0.4;
   if (slideData.subtitle) {
-    slide.addText(slideData.subtitle, {
+    const subtitleBox = { w: CONTENT_W, h: 0.3, fontSize: 14 };
+    slide.addText(boundText(slideData.subtitle, subtitleBox), {
       x: MARGIN_X,
       y: contentStartY,
-      w: CONTENT_W,
-      h: 0.3,
-      fontSize: 14,
+      w: subtitleBox.w,
+      h: subtitleBox.h,
+      fontSize: subtitleBox.fontSize,
       color: theme.subtitleColor,
       fontFace: theme.fontFace,
       margin: 0,
-      fit: "shrink",
     });
     contentStartY += 0.45;
   }

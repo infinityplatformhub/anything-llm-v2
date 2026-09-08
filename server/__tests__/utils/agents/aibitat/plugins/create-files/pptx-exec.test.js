@@ -872,3 +872,119 @@ describe("outline mode with exec layouts", () => {
     );
   });
 });
+
+describe("outline mode text safety", () => {
+  beforeEach(() => {
+    runSectionAgent.mockClear();
+  });
+
+  test("control characters in the deck footer never reach the cover slide", async () => {
+    runSectionAgent.mockResolvedValueOnce({
+      slides: [{ layout: "content", title: "x", content: ["y"] }],
+      citations: [],
+    });
+    const tool = setupTool();
+    // Backspace, vertical tab and form feed are illegal in XML 1.0, so a deck
+    // carrying them into slide1 is one PowerPoint refuses to open.
+    await tool.call({
+      filename: "footer-control.pptx",
+      title: "Deck",
+      headline: "Verdict",
+      footer: {
+        period: `Q${String.fromCharCode(8)}1`,
+        source: `Flow${String.fromCharCode(12)}Account`,
+        preparedOn: `2026${String.fromCharCode(11)}-01-01`,
+      },
+      sections: [{ title: "x" }],
+    });
+    const [, card] = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(
+        path.join(storageDir, "generated-files", card.storageFilename)
+      )
+    );
+    const slide1 = await zip.file("ppt/slides/slide1.xml").async("string");
+    expect(slide1).toMatch(/Q1/);
+    expect(slide1).toMatch(/FlowAccount/);
+    expect(slide1).not.toMatch(/[\u0008\u000B\u000C]/);
+  });
+
+  test("a tool-built deck with a closing and a two-column slide requests no automatic shrinking", async () => {
+    runSectionAgent.mockResolvedValueOnce({
+      slides: [
+        {
+          layout: "two-column",
+          title: "Growth stalled in the second half",
+          data: {
+            chart: {
+              type: "column",
+              categories: ["a", "b", "c"],
+              series: [{ name: "s", values: [1, 2, 3] }],
+            },
+            points: [
+              "Sales headcount doubled without new pipeline".repeat(4),
+              "Discounting held revenue flat",
+            ],
+          },
+        },
+        {
+          layout: "statement",
+          title: "Verdict",
+          data: {
+            headline: "Protect cash before funding any new growth bet".repeat(
+              3
+            ),
+            subtitle: "Reassess at the next board meeting".repeat(4),
+          },
+        },
+        {
+          layout: "chart",
+          title: "Revenue splits four ways",
+          data: {
+            type: "doughnut",
+            categories: ["a", "b", "c"],
+            series: [{ name: "s", values: [111111111, 222222222, 333333333] }],
+          },
+        },
+        {
+          layout: "content",
+          title: "Detail",
+          subtitle: "A subtitle far too long for its 0.3 inch strip".repeat(4),
+          content: ["one", "two"],
+        },
+      ],
+      citations: [],
+    });
+    const tool = setupTool();
+    await tool.call({
+      filename: "no-autofit.pptx",
+      title: "Deck",
+      headline: "Verdict",
+      closing: {
+        headline:
+          "Close the year at 25.49 million after the cost freeze".repeat(3),
+        subtitle: "Every division holds headcount flat until March".repeat(4),
+      },
+      sections: [{ title: "x" }],
+    });
+    const [, card] = tool.aibitat.socket.send.mock.calls.find(
+      ([type]) => type === "fileDownloadCard"
+    );
+    const zip = await JSZip.loadAsync(
+      fs.readFileSync(
+        path.join(storageDir, "generated-files", card.storageFilename)
+      )
+    );
+    const slides = Object.keys(zip.files).filter((name) =>
+      /^ppt\/slides\/slide\d+\.xml$/.test(name)
+    );
+    expect(slides.length).toBe(6);
+    for (const name of slides) {
+      expect(await zip.file(name).async("string")).not.toMatch(
+        /<a:normAutofit/
+      );
+    }
+  });
+});

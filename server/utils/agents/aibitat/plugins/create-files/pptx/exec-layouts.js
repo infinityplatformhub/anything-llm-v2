@@ -386,20 +386,23 @@ function addDoughnutTotal(slide, data, theme, frame) {
   const total = data.series[0].values.reduce((sum, value) => sum + value, 0);
   const holeH = 0.5;
   const ringH = frame.h * (1 - DOUGHNUT_LEGEND_RATIO);
-  slide.addText(formatNumber(total, "", { maximumFractionDigits: 2 }), {
-    x: frame.x,
-    y: frame.y + ringH / 2 - holeH / 2,
-    w: frame.w,
-    h: holeH,
-    fontSize: 28,
-    bold: true,
-    color: theme.titleColor,
-    fontFace: theme.fontFace,
-    align: "center",
-    valign: "mid",
-    margin: 0,
-    fit: "shrink",
-  });
+  const totalBox = { w: frame.w, h: holeH, fontSize: 28 };
+  slide.addText(
+    boundText(formatNumber(total, "", { maximumFractionDigits: 2 }), totalBox),
+    {
+      x: frame.x,
+      y: frame.y + ringH / 2 - holeH / 2,
+      w: totalBox.w,
+      h: totalBox.h,
+      fontSize: totalBox.fontSize,
+      bold: true,
+      color: theme.titleColor,
+      fontFace: theme.fontFace,
+      align: "center",
+      valign: "mid",
+      margin: 0,
+    }
+  );
 }
 
 function addChartBlock(slide, data, theme, ctx, frame) {
@@ -630,17 +633,21 @@ function renderTwoColumn(slide, pptx, section, theme, ctx) {
       fill: { color: theme.accentColor },
       line: { color: theme.accentColor, transparency: 100 },
     });
-    slide.addText(point, {
-      x: POINTS_X + POINT_BULLET_SIZE + 0.14,
-      y,
+    const pointBox = {
       w: POINTS_W - POINT_BULLET_SIZE - 0.14,
       h: rowH - 0.18,
       fontSize: 16,
+    };
+    slide.addText(boundText(point, pointBox), {
+      x: POINTS_X + POINT_BULLET_SIZE + 0.14,
+      y,
+      w: pointBox.w,
+      h: pointBox.h,
+      fontSize: pointBox.fontSize,
       color: theme.bodyColor,
       fontFace: theme.fontFace,
       valign: "top",
       margin: 0,
-      fit: "shrink",
     });
     if (index < section.data.points.length - 1) {
       slide.addShape(pptx.ShapeType.rect, {

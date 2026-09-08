@@ -336,6 +336,9 @@ module.exports.CreatePptxPresentation = {
               headline = createFilesLib.stripInvalidXmlChars(headline);
               note = createFilesLib.stripInvalidXmlChars(note);
               closing = createFilesLib.stripInvalidXmlChars(closing);
+              // The cover reads period/source/preparedOn straight out of footer,
+              // ahead of the post-assembly sweep that only covers section slides.
+              footer = createFilesLib.stripInvalidXmlChars(footer);
               author = createFilesLib.stripInvalidXmlChars(author);
 
               if (!filename.toLowerCase().endsWith(".pptx"))
@@ -499,7 +502,7 @@ module.exports.CreatePptxPresentation = {
                       slide,
                       pptx,
                       {
-                        ...slideData,
+                        title: slideData.title,
                         content: [
                           JSON.stringify(slideData.data ?? null).slice(0, 300),
                         ],
