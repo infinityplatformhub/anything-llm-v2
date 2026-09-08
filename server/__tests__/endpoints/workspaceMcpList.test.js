@@ -20,8 +20,10 @@ let route;
 let servers;
 let bootWorkspaceServer;
 let listTools;
+let workspaceServerConfigs;
 const oauthPlaceholder = {
   name: "flowaccount",
+  owner: "global",
   config: { anythingllm: { perWorkspaceAuth: true } },
   running: false,
   tools: [],
@@ -64,7 +66,10 @@ describe("workspace MCP list", () => {
     SystemSettings.isMultiUserMode.mockResolvedValue(true);
     Workspace.get.mockResolvedValue({ id: 5, slug: "legal" });
     WorkspaceMcpConnection.enabledNames.mockResolvedValue(["flowaccount"]);
-    servers = [{ name: "flowaccount" }, { name: "other" }];
+    servers = [
+      { name: "flowaccount", owner: "global" },
+      { name: "other", owner: "global" },
+    ];
     WorkspaceMcpConnection.find.mockResolvedValue({
       enabled: true,
       access_token: "access-secret",
@@ -81,8 +86,10 @@ describe("workspace MCP list", () => {
       ],
     });
     bootWorkspaceServer = jest.fn().mockResolvedValue({ listTools });
+    workspaceServerConfigs = jest.fn().mockResolvedValue([]);
     MCPCompatibilityLayer.mockImplementation(() => ({
       servers: async () => servers,
+      workspaceServerConfigs,
       bootWorkspaceServer,
     }));
     mcpServersEndpoints({
@@ -91,6 +98,60 @@ describe("workspace MCP list", () => {
       },
       post() {},
     });
+  });
+
+  it("includes enabled owned tools with masked config and shadows globals", async () => {
+    const config = {
+      url: "https://mcp.example.com",
+      headers: { Authorization: "Bearer private-secret" },
+    };
+    workspaceServerConfigs.mockResolvedValue([
+      { name: "flowaccount", server: config, owner: "workspace" },
+    ]);
+    WorkspaceMcpConnection.find.mockResolvedValue({ enabled: true });
+    const response = await invoke({ workspaceSlug: "legal" });
+    expect(response.body.servers).toHaveLength(1);
+    expect(response.body.servers[0]).toMatchObject({
+      name: "flowaccount",
+      owner: "workspace",
+      running: true,
+      config: { headers: { Authorization: "••••••••" } },
+    });
+    expect(bootWorkspaceServer).toHaveBeenCalledWith(
+      { id: 5, slug: "legal" },
+      "flowaccount"
+    );
+    expect(JSON.stringify(response.body)).not.toContain("private-secret");
+  });
+
+  it("tags global catalog entries without loading workspace configs", async () => {
+    servers = [{ name: "plain" }];
+    expect((await invoke()).body.servers[0].owner).toBe("global");
+    expect(workspaceServerConfigs).not.toHaveBeenCalled();
+  });
+
+  it("does not boot owned configs absent from allowlist", async () => {
+    workspaceServerConfigs.mockResolvedValue([
+      { name: "erp", server: {}, owner: "workspace" },
+    ]);
+    WorkspaceMcpConnection.enabledNames.mockResolvedValue([]);
+    expect((await invoke({ workspaceSlug: "legal" })).body.servers).toEqual([]);
+    expect(bootWorkspaceServer).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes catalog failure without logging raw error", async () => {
+    workspaceServerConfigs.mockRejectedValue(
+      new Error("Bearer private-secret")
+    );
+    const spy = jest.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await invoke({ workspaceSlug: "legal" });
+      expect(response.statusCode).toBe(500);
+      expect(JSON.stringify(response.body)).not.toContain("private-secret");
+      expect(JSON.stringify(spy.mock.calls)).not.toContain("private-secret");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("retains session validation middleware", () => {
