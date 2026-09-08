@@ -79,11 +79,11 @@
 
 **Files:** `frontend/src/models/workspaceMcp.js`, `McpConnectors/index.jsx`, `McpConnectors/ServerModal.jsx`, `McpConnectors/ToolTester.jsx`
 
-- [ ] ต่อยอด component เดิม (ไม่เขียนใหม่): ปุ่ม `+ Add MCP server` (admin), chip `Workspace-owned`/`Shared globally`, เมนู ⚙ Edit/Test tools/Delete บน workspace-owned, ปุ่ม Test tools บน global ที่ enabled, empty state ใหม่, confirm delete ระบุลบ token/allowlist
-- [ ] `ServerModal`: tabs Form/JSON ตาม mockup (validation ฝั่ง client เหมือน mockup; ฝั่ง server เป็น source of truth), headers secret → `type=password`, edit prefilled mask + clear, Test connection (states idle/testing/ok/error พร้อม cancel ผ่าน AbortController), Save (disabled จน valid; warning ถ้ายังไม่ test)
-- [ ] `ToolTester`: arg form จาก `inputSchema` (string/number/boolean/enum; object/array → JSON textarea; required *), Run → `<pre>` result + latency + copy, error state, banner เตือน
-- [ ] ใช้ `Toggle`/`showToast`/class เดิมของ repo; i18n key ใน `frontend/src/locales/en/common.js` (ภาษาอื่นตกไป default ตามกลไก repo); `node node_modules/eslint/bin/eslint.js src/pages/WorkspaceSettings/AgentConfig src/models/workspaceMcp.js` clean; `yarn build` ผ่าน
-- [ ] commit `feat(mcp-ui): add, edit, test and call workspace MCP servers from Agent Configuration (#51)`
+- [x] ต่อยอด component เดิม (ไม่เขียนใหม่): ปุ่ม `+ Add MCP server` (admin), chip `Workspace-owned`/`Shared globally`, เมนู ⚙ Edit/Test tools/Delete บน workspace-owned, ปุ่ม Test tools บน global ที่ enabled, empty state ใหม่, confirm delete ระบุลบ token/allowlist
+- [x] `ServerModal`: tabs Form/JSON ตาม mockup (validation ฝั่ง client เหมือน mockup; ฝั่ง server เป็น source of truth), headers secret → `type=password`, edit prefilled mask + clear, Test connection (states idle/testing/ok/error พร้อม cancel ผ่าน AbortController), Save (disabled จน valid; warning ถ้ายังไม่ test)
+- [x] `ToolTester`: arg form จาก `inputSchema` (string/number/boolean/enum; object/array → JSON textarea; required *), Run → `<pre>` result + latency + copy, error state, banner เตือน
+- [x] ใช้ `Toggle`/`showToast`/class เดิมของ repo; i18n key ใน `frontend/src/locales/en/common.js` (ภาษาอื่นตกไป default ตามกลไก repo); `node node_modules/eslint/bin/eslint.js src/pages/WorkspaceSettings/AgentConfig src/models/workspaceMcp.js` clean; `yarn build` ผ่าน — `Done in 35.21s.`; frontend validation/API assert checks passed. Headed UI coverage remains Task 5.
+- [x] commit `feat(mcp-ui): add, edit, test and call workspace MCP servers from Agent Configuration (#51)` — `49c06f76`
 
 ## Task 5 — headed E2E
 
