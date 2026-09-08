@@ -1,7 +1,11 @@
 // All positioning assumes LAYOUT_16x9: 10 × 5.625 in.
-const MARGIN_X = 0.7;
-const CONTENT_W = 8.6; // 10 - 2 × MARGIN_X
+const SLIDE_W = 10;
 const SLIDE_H = 5.625;
+const MARGIN_X = 0.7;
+const CONTENT_W = SLIDE_W - 2 * MARGIN_X;
+const FOOTER_Y = 5.05; // Reserve the bottom strip for page numbers and sources.
+const COVER_MARGIN_X = 0.6;
+const COVER_W = SLIDE_W - 2 * COVER_MARGIN_X;
 
 function isDarkColor(hexColor) {
   const hex = (hexColor || "FFFFFF").replace("#", "");
@@ -11,225 +15,209 @@ function isDarkColor(hexColor) {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5;
 }
 
-function addTopAccentBar(slide, pptx, theme) {
+function addActionTitle(slide, theme, title, { y = 0.35 } = {}) {
+  slide.addText(title, {
+    x: MARGIN_X,
+    y,
+    w: CONTENT_W,
+    h: 0.95,
+    fontSize: 26,
+    bold: true,
+    fit: "shrink",
+    color: theme.titleColor,
+    fontFace: theme.fontFace,
+    margin: 0,
+    valign: "mid",
+  });
+  return 1.45;
+}
+
+function addFooter(slide, pptx, theme, { slideNumber, totalSlides, note }) {
+  slide.addShape(pptx.ShapeType.rect, {
+    x: MARGIN_X,
+    y: FOOTER_Y,
+    w: CONTENT_W,
+    h: 0.007,
+    fill: { color: theme.hairline },
+    line: { color: theme.hairline, transparency: 100 },
+  });
+  slide.addText(`${slideNumber} / ${totalSlides}`, {
+    x: MARGIN_X,
+    y: 5.12,
+    w: 0.8,
+    h: 0.25,
+    fontSize: 11,
+    color: theme.footerColor,
+    fontFace: theme.fontFace,
+    align: "left",
+    margin: 0,
+    fit: "shrink",
+  });
+  if (note) {
+    slide.addText(note, {
+      x: 1.6,
+      y: 5.12,
+      w: 7.7,
+      h: 0.25,
+      fontSize: 11,
+      color: theme.footerColor,
+      fontFace: theme.fontFace,
+      align: "right",
+      margin: 0,
+      fit: "shrink",
+    });
+  }
+}
+
+function addGround(slide, pptx, theme) {
+  slide.background = { color: theme.ground };
   slide.addShape(pptx.ShapeType.rect, {
     x: 0,
     y: 0,
-    w: "100%",
-    h: 0.05,
+    w: SLIDE_W,
+    h: SLIDE_H,
+    fill: { color: theme.ground },
+    line: { color: theme.ground, transparency: 100 },
+  });
+}
+
+function renderCover(slide, pptx, { title, headline, subtitle, meta }, theme) {
+  addGround(slide, pptx, theme);
+  slide.addShape(pptx.ShapeType.rect, {
+    x: COVER_MARGIN_X,
+    y: 1.3,
+    w: 0.5,
+    h: 0.06,
     fill: { color: theme.accentColor },
-    line: { color: theme.accentColor },
+    line: { color: theme.accentColor, transparency: 100 },
   });
+  const textOptions = {
+    x: COVER_MARGIN_X,
+    w: COVER_W,
+    fontFace: theme.fontFace,
+    color: theme.groundMuted,
+    margin: 0,
+    fit: "shrink",
+  };
+  if (headline && title) {
+    slide.addText(title, { ...textOptions, y: 0.9, h: 0.3, fontSize: 14 });
+  }
+  slide.addText(headline || title || "Untitled", {
+    ...textOptions,
+    y: 1.5,
+    h: 2.2,
+    fontSize: 48,
+    bold: true,
+    color: theme.groundText,
+    valign: "mid",
+  });
+  if (subtitle) {
+    slide.addText(subtitle, { ...textOptions, y: 3.9, h: 0.65, fontSize: 16 });
+  }
+  if (meta) {
+    slide.addText(meta, { ...textOptions, y: 4.9, h: 0.3, fontSize: 12 });
+  }
 }
 
-function addAccentUnderline(slide, pptx, x, y, color) {
-  slide.addShape(pptx.ShapeType.rect, {
-    x,
-    y,
-    w: 1.5,
-    h: 0.035,
-    fill: { color },
-    line: { color },
+function renderStatement(slide, pptx, { headline, subtitle }, theme, ctx) {
+  addGround(slide, pptx, theme);
+  slide.addText(headline || "", {
+    x: COVER_MARGIN_X,
+    y: 1.9,
+    w: COVER_W,
+    h: 1.5,
+    fontSize: 48,
+    bold: true,
+    color: theme.groundText,
+    fontFace: theme.fontFace,
+    margin: 0,
+    fit: "shrink",
   });
+  if (subtitle) {
+    slide.addText(subtitle, {
+      x: COVER_MARGIN_X,
+      y: 3.6,
+      w: COVER_W,
+      h: 0.8,
+      fontSize: 18,
+      color: theme.groundMuted,
+      fontFace: theme.fontFace,
+      margin: 0,
+      fit: "shrink",
+    });
+  }
 }
 
-function addSlideFooter(slide, pptx, theme, slideNumber, totalSlides) {
-  slide.addShape(pptx.ShapeType.rect, {
-    x: MARGIN_X,
-    y: 5.0,
-    w: CONTENT_W,
-    h: 0.007,
-    fill: { color: theme.footerLineColor },
-    line: { color: theme.footerLineColor },
-  });
-
-  slide.addText(`${slideNumber}  /  ${totalSlides}`, {
-    x: MARGIN_X,
-    y: 5.07,
-    w: 1.2,
-    h: 0.25,
-    fontSize: 8,
-    color: theme.footerColor,
-    fontFace: theme.fontBody,
-    align: "left",
-  });
+function chartBaseOptions(theme, bg) {
+  return {
+    chartColors: [...theme.series],
+    showLegend: false,
+    showValue: true,
+    showTitle: false,
+    dataLabelFontSize: 11,
+    catAxisLabelFontSize: 12,
+    valAxisLabelFontSize: 11,
+    dataLabelFontFace: theme.fontFace,
+    catAxisLabelFontFace: theme.fontFace,
+    valAxisLabelFontFace: theme.fontFace,
+    legendFontFace: theme.fontFace,
+    legendFontSize: 11,
+    dataLabelColor: theme.bodyColor,
+    catAxisLabelColor: theme.subtitleColor,
+    valAxisLabelColor: theme.subtitleColor,
+    valGridLine: { style: "none" },
+    catGridLine: { style: "none" },
+    valAxisLineShow: false,
+    catAxisMajorTickMark: "none",
+    chartArea: { fill: { color: bg }, border: { color: bg, pt: 0 } },
+    plotArea: { fill: { color: bg }, border: { color: bg, pt: 0 } },
+  };
 }
 
 function renderTitleSlide(slide, pptx, { title, author }, theme) {
-  slide.background = { color: theme.titleSlideBackground };
-
-  slide.addText(title || "Untitled", {
-    x: 1.0,
-    y: 1.3,
-    w: 8.0,
-    h: 1.4,
-    fontSize: 36,
-    bold: true,
-    color: theme.titleSlideTitleColor,
-    fontFace: theme.fontTitle,
-    align: "center",
-    valign: "bottom",
-  });
-
-  addAccentUnderline(slide, pptx, 4.25, 2.9, theme.titleSlideAccentColor);
-
-  if (author) {
-    slide.addText(author, {
-      x: 1.5,
-      y: 3.15,
-      w: 7.0,
-      h: 0.45,
-      fontSize: 14,
-      color: theme.titleSlideSubtitleColor,
-      fontFace: theme.fontBody,
-      align: "center",
-      italic: true,
-    });
-  }
-
-  // Bottom accent strip
-  slide.addShape(pptx.ShapeType.rect, {
-    x: 0,
-    y: SLIDE_H - 0.1,
-    w: "100%",
-    h: 0.1,
-    fill: { color: theme.titleSlideAccentColor },
-    line: { color: theme.titleSlideAccentColor },
-  });
-
+  renderCover(slide, pptx, { title, meta: author }, theme);
 }
 
-function renderSectionSlide(
-  slide,
-  pptx,
-  slideData,
-  theme,
-  slideNumber,
-  totalSlides
-) {
-  slide.background = { color: theme.titleSlideBackground };
-
-  slide.addText(slideData.title || "", {
-    x: 1.0,
-    y: 1.5,
-    w: 8.0,
-    h: 1.2,
-    fontSize: 32,
-    bold: true,
-    color: theme.titleSlideTitleColor,
-    fontFace: theme.fontTitle,
-    align: "center",
-    valign: "bottom",
-  });
-
-  addAccentUnderline(slide, pptx, 4.25, 2.9, theme.titleSlideAccentColor);
-
-  if (slideData.subtitle) {
-    slide.addText(slideData.subtitle, {
-      x: 1.5,
-      y: 3.1,
-      w: 7.0,
-      h: 0.5,
-      fontSize: 16,
-      color: theme.titleSlideSubtitleColor,
-      fontFace: theme.fontBody,
-      align: "center",
-    });
-  }
-
-  const numColor = isDarkColor(theme.titleSlideBackground)
-    ? "FFFFFF"
-    : "000000";
-  slide.addText(`${slideNumber}  /  ${totalSlides}`, {
-    x: MARGIN_X,
-    y: 5.1,
-    w: 1.2,
-    h: 0.25,
-    fontSize: 8,
-    color: numColor,
-    transparency: 65,
-    fontFace: theme.fontBody,
-    align: "left",
-  });
-
-
+function renderSectionSlide(slide, pptx, slideData, theme, slideNumber, totalSlides) {
+  renderStatement(slide, pptx, {
+    headline: slideData.headline || slideData.title,
+    subtitle: slideData.subtitle,
+  }, theme, { slideNumber, totalSlides });
   if (slideData.notes) slide.addNotes(slideData.notes);
 }
 
-function renderContentSlide(
-  slide,
-  pptx,
-  slideData,
-  theme,
-  slideNumber,
-  totalSlides
-) {
+function renderContentSlide(slide, pptx, slideData, theme, slideNumber, totalSlides) {
   slide.background = { color: theme.background };
-
-  addTopAccentBar(slide, pptx, theme);
-
-  let contentStartY = 0.4;
-
-  if (slideData.title) {
-    slide.addText(slideData.title, {
+  let contentStartY = slideData.title
+    ? addActionTitle(slide, theme, slideData.title)
+    : 0.4;
+  if (slideData.subtitle) {
+    slide.addText(slideData.subtitle, {
       x: MARGIN_X,
-      y: 0.3,
+      y: contentStartY,
       w: CONTENT_W,
-      h: 0.65,
-      fontSize: 24,
-      bold: true,
-      color: theme.titleColor,
-      fontFace: theme.fontTitle,
-      valign: "bottom",
+      h: 0.3,
+      fontSize: 14,
+      color: theme.subtitleColor,
+      fontFace: theme.fontFace,
+      margin: 0,
+      fit: "shrink",
     });
-    contentStartY = 1.0;
-
-    if (slideData.subtitle) {
-      slide.addText(slideData.subtitle, {
-        x: MARGIN_X,
-        y: 1.0,
-        w: CONTENT_W,
-        h: 0.3,
-        fontSize: 13,
-        color: theme.subtitleColor,
-        fontFace: theme.fontBody,
-      });
-      contentStartY = 1.35;
-    }
-
-    addAccentUnderline(
-      slide,
-      pptx,
-      MARGIN_X,
-      contentStartY + 0.05,
-      theme.accentColor
-    );
-    contentStartY += 0.25;
+    contentStartY += 0.45;
   }
-
-  const footerY = 5.0;
-  const contentHeight = footerY - contentStartY - 0.15;
-
+  const contentHeight = FOOTER_Y - contentStartY - 0.15;
   if (slideData.table) {
     addTableContent(slide, pptx, slideData.table, theme, contentStartY);
   } else {
-    addBulletContent(
-      slide,
-      slideData.content,
-      theme,
-      contentStartY,
-      contentHeight
-    );
+    addBulletContent(slide, slideData.content, theme, contentStartY, contentHeight);
   }
-
-  addSlideFooter(slide, pptx, theme, slideNumber, totalSlides);
-
+  addFooter(slide, pptx, theme, { slideNumber, totalSlides, note: slideData.note });
   if (slideData.notes) slide.addNotes(slideData.notes);
 }
 
 function renderBlankSlide(slide, pptx, theme, slideNumber, totalSlides) {
   slide.background = { color: theme.background };
-  addSlideFooter(slide, pptx, theme, slideNumber, totalSlides);
+  addFooter(slide, pptx, theme, { slideNumber, totalSlides });
 }
 
 function addBulletContent(slide, content, theme, startY, maxHeight) {
@@ -240,7 +228,7 @@ function addBulletContent(slide, content, theme, startY, maxHeight) {
     options: {
       fontSize: 15,
       color: theme.bodyColor,
-      fontFace: theme.fontBody,
+      fontFace: theme.fontFace,
       bullet: { code: "25AA", color: theme.bulletColor },
       paraSpaceAfter: 10,
     },
@@ -252,6 +240,7 @@ function addBulletContent(slide, content, theme, startY, maxHeight) {
     w: CONTENT_W,
     h: maxHeight,
     valign: "top",
+    fontFace: theme.fontFace,
   });
 }
 
@@ -267,7 +256,7 @@ function addTableContent(slide, pptx, tableData, theme, startY) {
         options: {
           bold: true,
           fontSize: 12,
-          fontFace: theme.fontBody,
+          fontFace: theme.fontFace,
           color: theme.tableHeaderColor,
           fill: { color: theme.tableHeaderBg },
           align: "left",
@@ -285,7 +274,7 @@ function addTableContent(slide, pptx, tableData, theme, startY) {
           text: cell,
           options: {
             fontSize: 11,
-            fontFace: theme.fontBody,
+            fontFace: theme.fontFace,
             color: theme.bodyColor,
             fill: {
               color: idx % 2 === 1 ? theme.tableAltRowBg : theme.background,
@@ -307,6 +296,7 @@ function addTableContent(slide, pptx, tableData, theme, startY) {
     y: startY,
     w: CONTENT_W,
     colW: CONTENT_W / colCount,
+    fontFace: theme.fontFace,
     rowH: 0.4,
     border: { type: "solid", pt: 0.5, color: theme.tableBorderColor },
   });
@@ -314,9 +304,11 @@ function addTableContent(slide, pptx, tableData, theme, startY) {
 
 module.exports = {
   isDarkColor,
-  addTopAccentBar,
-  addAccentUnderline,
-  addSlideFooter,
+  addActionTitle,
+  addFooter,
+  renderCover,
+  renderStatement,
+  chartBaseOptions,
   renderTitleSlide,
   renderSectionSlide,
   renderContentSlide,

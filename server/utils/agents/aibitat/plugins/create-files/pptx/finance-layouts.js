@@ -1,9 +1,5 @@
 const JSZip = require("jszip");
-const {
-  addAccentUnderline,
-  addSlideFooter,
-  addTopAccentBar,
-} = require("./utils.js");
+const { addFooter } = require("./utils.js");
 
 const MARGIN_X = 0.7;
 const CONTENT_W = 8.6;
@@ -45,7 +41,6 @@ function addDeckFooter(slide, theme, footer = {}) {
 
 function addFinanceChrome(slide, pptx, section, theme, ctx) {
   slide.background = { color: theme.background };
-  addTopAccentBar(slide, pptx, theme);
   slide.addText(section.title, {
     x: MARGIN_X,
     y: 0.25,
@@ -73,14 +68,10 @@ function addFinanceChrome(slide, pptx, section, theme, ctx) {
     contentStartY = 1.65;
   }
 
-  addAccentUnderline(
-    slide,
-    pptx,
-    MARGIN_X,
-    contentStartY + 0.05,
-    theme.accentColor
-  );
-  addSlideFooter(slide, pptx, theme, ctx.slideNumber, ctx.totalSlides);
+  addFooter(slide, pptx, theme, {
+    slideNumber: ctx.slideNumber,
+    totalSlides: ctx.totalSlides,
+  });
   addDeckFooter(slide, theme, ctx.footer);
   if (section.notes) slide.addNotes(section.notes);
   return contentStartY + 0.25;
