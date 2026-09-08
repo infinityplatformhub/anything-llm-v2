@@ -533,3 +533,92 @@ describe("exec layouts", () => {
     expect(bad.errors.join(" ")).toMatch(/sections\[0\]\.data\.points/);
   });
 });
+
+test("finance fixture renders with no font below 11pt, no Calibri, no gridlines, action titles at 26pt", async () => {
+  const tool = setupTool();
+  const directory = path.join(storageDir, "generated-files");
+  const before = new Set(fs.existsSync(directory) ? fs.readdirSync(directory) : []);
+  await tool.call({ ...copy(fixture), filename: "restyle.pptx" });
+  const file = fs.readdirSync(directory).find((name) => !before.has(name) && name.endsWith(".pptx"));
+  expect(file).toBeDefined();
+  const zip = await JSZip.loadAsync(fs.readFileSync(path.join(directory, file)));
+  const parts = Object.keys(zip.files).filter((name) => /^ppt\/(slides\/slide|charts\/chart)\d+\.xml$/.test(name));
+  expect(parts.length).toBeGreaterThan(0);
+  for (const name of parts) {
+    const xml = await zip.file(name).async("string");
+    for (const match of xml.matchAll(/ sz="(\d+)"/g)) {
+      expect(Number(match[1])).toBeGreaterThanOrEqual(1100);
+    }
+    expect(xml).not.toMatch(/Calibri/);
+    expect(xml).not.toMatch(/<c:majorGridlines>/);
+  }
+  expect(await zip.file("ppt/slides/slide2.xml").async("string")).toMatch(/sz="2600" b="1"/);
+});
+
+describe("finance executive composition", () => {
+  const theme = getTheme("executive");
+
+  test("summary has one title/footer, complete source note, and readable comparisons below KPI tiles", async () => {
+    const section = copy(fixture.sections[0]);
+    section.data.metrics[0].delta = 0;
+    const xml = await buildDeck((slide, pptx) => RENDERERS.summary(
+      slide, pptx, section, theme,
+      { slideNumber: 2, totalSlides: 10, footer: fixture.footer, unit: fixture.unit }
+    ));
+    const shapes = xml.match(/<p:sp>[\s\S]*?<\/p:sp>/g);
+    expect(shapes.filter((shape) => shape.includes(section.title))).toHaveLength(1);
+    expect(shapes.filter((shape) => shape.includes("2 / 10"))).toHaveLength(1);
+    expect(xml).toContain(`${section.subtitle} · งวด ม.ค.–ส.ค. 2569 · แหล่งข้อมูล FlowAccount · จัดทำ 2026-09-07`);
+    const zero = shapes.find((shape) => /<a:t>0%<\/a:t>/.test(shape));
+    expect(zero).toContain('val="1E7A4B"');
+    const negative = shapes.find((shape) => shape.includes("-6.8%"));
+    expect(negative).toContain('val="B3261E"');
+    for (const metric of section.data.metrics) {
+      const note = shapes.find((shape) => shape.includes(metric.deltaLabel));
+      expect(note).toBeDefined();
+      const y = Number(note.match(/<a:off x="\d+" y="(\d+)"/)?.[1]) / 914400;
+      expect(y).toBeGreaterThanOrEqual(3.9);
+      expect(note).not.toContain("<a:normAutofit");
+    }
+  });
+
+  test("scorecard status dots are 0.14in and centred in their table cells", async () => {
+    const section = fixture.sections[1];
+    const xml = await buildDeck((slide, pptx) => RENDERERS.scorecard(
+      slide, pptx, section, theme, { slideNumber: 3, totalSlides: 10 }
+    ));
+    const widths = [...xml.matchAll(/<a:gridCol w="(\d+)"/g)].map((m) => Number(m[1]));
+    const rowHeights = [...xml.matchAll(/<a:tr h="(\d+)"/g)].map((m) => Number(m[1]));
+    const dots = (xml.match(/<p:sp>[\s\S]*?<\/p:sp>/g) || []).filter((shape) => shape.includes('prst="ellipse"'));
+    expect(dots).toHaveLength(section.data.rows.length);
+    let rowY = 1.45 * 914400 + rowHeights[0];
+    dots.forEach((dot, index) => {
+      const [, x, y, w, h] = dot.match(/<a:off x="(\d+)" y="(\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"\/>/).map(Number);
+      expect(w / 914400).toBeCloseTo(0.14, 5);
+      expect(h / 914400).toBeCloseTo(0.14, 5);
+      expect((x + w / 2) / 914400).toBeCloseTo(0.7 + (widths.reduce((a, b) => a + b, 0) - widths.at(-1) / 2) / 914400, 5);
+      expect((y + h / 2) / 914400).toBeCloseTo((rowY + rowHeights[index + 1] / 2) / 914400, 5);
+      rowY += rowHeights[index + 1];
+    });
+    expect(rowY / 914400).toBeLessThanOrEqual(5.05);
+    expect(xml).toContain('val="0F4C5C"');
+    expect(xml).toContain('val="D6D9DB"');
+  });
+});
+
+test("finance chart captions do not shrink below their explicit readable size", async () => {
+  for (const [layout, index, caption] of [
+    ["trend_bar", 2, "ช่วงแผน"],
+    ["trend_bar", 2, fixture.sections[2].data.annotation],
+    ["waterfall", 4, "โครงสร้าง"],
+  ]) {
+    const xml = await buildDeck((slide, pptx) => RENDERERS[layout](
+      slide, pptx, fixture.sections[index], getTheme("executive"),
+      { slideNumber: 1, totalSlides: 1, unit: fixture.unit }
+    ));
+    const shape = (xml.match(/<p:sp>[\s\S]*?<\/p:sp>/g) || []).find((part) => part.includes(`<a:t>${caption}`));
+    expect(shape).toBeDefined();
+    expect(shape).not.toContain("<a:normAutofit");
+    expect(shape).toContain('sz="1100"');
+  }
+});

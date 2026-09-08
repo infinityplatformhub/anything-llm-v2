@@ -393,7 +393,7 @@ describe("pptx-finance executive theme and layouts", () => {
     const [barXml, donutXml] = await getSlideChartXml(zip, 5);
 
     expect(barXml).toMatch(
-      /<c:dLbls>(?:(?!<\/c:dLbls>)[\s\S])*?<a:defRPr[^>]*sz="800"/
+      /<c:dLbls>(?:(?!<\/c:dLbls>)[\s\S])*?<a:defRPr[^>]*sz="1100"/
     );
     expect(donutXml).toContain('<c:showPercent val="1"/>');
     expect(donutXml).toContain('<c:showCatName val="0"/>');

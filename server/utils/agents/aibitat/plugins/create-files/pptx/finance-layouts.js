@@ -1,5 +1,6 @@
 const JSZip = require("jszip");
-const { addFooter } = require("./utils.js");
+const { addActionTitle, addFooter, chartBaseOptions } = require("./utils.js");
+const { EXEC_RENDERERS } = require("./exec-layouts.js");
 const { formatNumber, roundedAxisMax } = require("./format.js");
 
 const MARGIN_X = 0.7;
@@ -13,164 +14,123 @@ function formatPct(value) {
   })}%`;
 }
 
-function addDeckFooter(slide, theme, footer = {}) {
-  const parts = [];
-  if (footer.period) parts.push(`งวด ${footer.period}`);
-  if (footer.source) parts.push(`แหล่งข้อมูล ${footer.source}`);
-  if (footer.preparedOn) parts.push(`จัดทำ ${footer.preparedOn}`);
-  if (parts.length === 0) return;
+// Shared 10 × 5.625 in slide geometry, leaving the footer at 5.05 in clear.
+const CONTENT_TOP_Y = 1.45;
+const SUMMARY_TILES_Y = 2.35; // Reserves 0.9 in for the narrative and verdict.
+const SCORECARD_COL_W = [2.7, 1.45, 1.45, 2.05, 0.95]; // Full 8.6 in width; headers fit at 14pt.
+const SCORECARD_ROW_H = 0.38; // Header plus eight fixture rows fit above the footer.
+const STATUS_DOT_SIZE = 0.14; // Native shape keeps status marks independent of font glyphs.
 
-  slide.addText(parts.join(" · "), {
-    x: 2.0,
-    y: 5.07,
-    w: 5.6,
-    h: 0.25,
-    fontSize: 8,
-    color: theme.footerColor,
-    fontFace: theme.fontBody,
-    align: "left",
-  });
+function financeNote(section, ctx) {
+  const footer = ctx.footer || {};
+  return [
+    section.subtitle,
+    footer.period && `งวด ${footer.period}`,
+    footer.source && `แหล่งข้อมูล ${footer.source}`,
+    footer.preparedOn && `จัดทำ ${footer.preparedOn}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function addFinanceChrome(slide, pptx, section, theme, ctx) {
   slide.background = { color: theme.background };
-  slide.addText(section.title, {
-    x: MARGIN_X,
-    y: 0.25,
-    w: CONTENT_W,
-    h: 1.0,
-    fontSize: 22,
-    bold: true,
-    color: theme.titleColor,
-    fontFace: theme.fontTitle,
-    valign: "bottom",
-    fit: "shrink",
-  });
-
-  let contentStartY = 1.35;
-  if (section.subtitle) {
-    slide.addText(section.subtitle, {
-      x: MARGIN_X,
-      y: 1.3,
-      w: CONTENT_W,
-      h: 0.3,
-      fontSize: 13,
-      color: theme.subtitleColor,
-      fontFace: theme.fontBody,
-    });
-    contentStartY = 1.65;
-  }
-
+  const contentStartY = addActionTitle(slide, theme, section.title);
   addFooter(slide, pptx, theme, {
     slideNumber: ctx.slideNumber,
     totalSlides: ctx.totalSlides,
+    note: financeNote(section, ctx),
   });
-  addDeckFooter(slide, theme, ctx.footer);
   if (section.notes) slide.addNotes(section.notes);
-  return contentStartY + 0.25;
+  return contentStartY;
 }
 
 function renderSummary(slide, pptx, section, theme, ctx) {
-  const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
-  const narrativeHeight = 0.72;
+  // KPI owns the title and footer too; drawing finance chrome again duplicates both.
+  EXEC_RENDERERS.kpi(
+    slide,
+    pptx,
+    {
+      title: section.title,
+      data: {
+        kpis: section.data.metrics.map((metric) => ({
+          label: [metric.label, ctx.unit].filter(Boolean).join(" · "),
+          value: metric.value,
+          delta: formatPct(metric.delta),
+          status: metric.delta >= 0 ? "good" : "bad",
+        })),
+      },
+    },
+    theme,
+    {
+      ...ctx,
+      bg: theme.background,
+      note: financeNote(section, ctx),
+      y: SUMMARY_TILES_Y,
+    }
+  );
+  if (section.notes) slide.addNotes(section.notes);
+  // Comparison sentences cannot fit the KPI's narrow inline note at 12pt.
+  // Seat them below the single tile row instead of asking PowerPoint to shrink them.
+  const tileGap = 0.2;
+  const tileW =
+    (CONTENT_W - tileGap * (section.data.metrics.length - 1)) /
+    section.data.metrics.length;
+  section.data.metrics.forEach((metric, index) =>
+    slide.addText(metric.deltaLabel, {
+      x: MARGIN_X + index * (tileW + tileGap),
+      y: SUMMARY_TILES_Y + 1.65,
+      w: tileW,
+      h: 0.6,
+      fontSize: 12,
+      fontFace: theme.fontFace,
+      color: theme.subtitleColor,
+      margin: 0,
+      valign: "top",
+    })
+  );
 
   slide.addText(section.data.narrative, {
     x: MARGIN_X,
-    y: contentStartY,
-    w: CONTENT_W,
-    h: narrativeHeight,
-    fontSize: 15,
+    y: CONTENT_TOP_Y,
+    w: CONTENT_W - 1.85,
+    h: SUMMARY_TILES_Y - CONTENT_TOP_Y - 0.1,
+    fontSize: 16,
     color: theme.bodyColor,
-    fontFace: theme.fontBody,
-    breakLine: false,
+    fontFace: theme.fontFace,
+    margin: 0,
     valign: "mid",
   });
 
   const verdicts = {
-    on_plan: { text: "ตามแผน", color: theme.statusGreen },
-    below_plan: { text: "ต่ำกว่าแผน", color: theme.statusRed },
-    mixed: { text: "ผสม", color: theme.statusAmber },
+    on_plan: { text: "ตามแผน", color: theme.good },
+    below_plan: { text: "ต่ำกว่าแผน", color: theme.bad },
+    mixed: { text: "ผสม", color: theme.warn },
   };
   const verdict = verdicts[section.data.verdict];
-  const verdictY = contentStartY + narrativeHeight + 0.1;
+  const verdictX = MARGIN_X + CONTENT_W - 1.6;
+  const verdictY = CONTENT_TOP_Y + 0.2;
   slide.addShape(pptx.ShapeType.roundRect, {
-    x: MARGIN_X,
+    x: verdictX,
     y: verdictY,
     w: 1.6,
-    h: 0.34,
+    h: 0.4,
     rectRadius: 0.05,
-    fill: { color: verdict.color, transparency: 86 },
-    line: { color: verdict.color, pt: 0.8 },
+    fill: { color: theme.pillBg },
+    line: { color: theme.hairline, pt: 0.5 },
   });
   slide.addText(verdict.text, {
-    x: MARGIN_X,
-    y: verdictY + 0.04,
+    x: verdictX,
+    y: verdictY,
     w: 1.6,
-    h: 0.2,
-    fontSize: 10,
+    h: 0.4,
+    fontSize: 14,
     bold: true,
     color: verdict.color,
-    fontFace: theme.fontBody,
+    fontFace: theme.fontFace,
     align: "center",
     valign: "mid",
-  });
-
-  const tileW = 2.7;
-  const tilesY = verdictY + 0.58;
-  section.data.metrics.slice(0, 3).forEach((metric, index) => {
-    const x = MARGIN_X + index * 2.95;
-    const deltaColor =
-      metric.delta >= 0 ? theme.chartPositive : theme.chartNegative;
-    slide.addShape(pptx.ShapeType.rect, {
-      x,
-      y: tilesY,
-      w: tileW,
-      h: 0.06,
-      fill: { color: theme.accentColor },
-      line: { color: theme.accentColor },
-    });
-    slide.addText(metric.label, {
-      x,
-      y: tilesY + 0.2,
-      w: tileW,
-      h: 0.28,
-      fontSize: 10,
-      bold: true,
-      color: theme.subtitleColor,
-      fontFace: theme.fontBody,
-      charSpacing: 1.2,
-    });
-    slide.addText(formatNumber(metric.value, ctx.unit), {
-      x,
-      y: tilesY + 0.56,
-      w: tileW,
-      h: 0.55,
-      fontSize: 23,
-      bold: true,
-      color: theme.titleColor,
-      fontFace: theme.fontTitle,
-      fit: "shrink",
-    });
-    slide.addText(formatPct(metric.delta), {
-      x,
-      y: tilesY + 1.23,
-      w: 0.75,
-      h: 0.28,
-      fontSize: 12,
-      bold: true,
-      color: deltaColor,
-      fontFace: theme.fontBody,
-    });
-    slide.addText(metric.deltaLabel, {
-      x: x + 0.78,
-      y: tilesY + 1.23,
-      w: tileW - 0.78,
-      h: 0.42,
-      fontSize: 9,
-      color: theme.subtitleColor,
-      fontFace: theme.fontBody,
-      fit: "shrink",
-    });
+    margin: 0,
   });
 }
 
@@ -182,10 +142,10 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
       text: header,
       options: {
         bold: true,
-        fontSize: 10,
+        fontSize: 14,
         fontFace: theme.fontBody,
         color: theme.tableHeaderColor,
-        fill: { color: theme.tableHeaderBg },
+        fill: { color: theme.accentColor },
         align: index === 0 ? "left" : "right",
         valign: "middle",
         margin: [3, 6, 3, 6],
@@ -199,7 +159,7 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
       {
         text: row.label,
         options: {
-          fontSize: 10,
+          fontSize: 14,
           fontFace: theme.fontBody,
           color: theme.bodyColor,
           fill: { color: fill },
@@ -211,7 +171,7 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
       {
         text: formatNumber(row.current),
         options: {
-          fontSize: 10,
+          fontSize: 14,
           fontFace: theme.fontBody,
           color: theme.bodyColor,
           fill: { color: fill },
@@ -223,7 +183,7 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
       {
         text: formatNumber(row.compare),
         options: {
-          fontSize: 10,
+          fontSize: 14,
           fontFace: theme.fontBody,
           color: theme.subtitleColor,
           fill: { color: fill },
@@ -235,7 +195,7 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
       {
         text: formatPct(row.changePct),
         options: {
-          fontSize: 10,
+          fontSize: 14,
           fontFace: theme.fontBody,
           color: row.changePct >= 0 ? theme.chartPositive : theme.chartNegative,
           fill: { color: fill },
@@ -245,9 +205,9 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
         },
       },
       {
-        text: "●",
+        text: "",
         options: {
-          fontSize: 11,
+          fontSize: 14,
           fontFace: theme.fontBody,
           color:
             theme[`status${row.status[0].toUpperCase()}${row.status.slice(1)}`],
@@ -264,142 +224,128 @@ function renderScorecard(slide, pptx, section, theme, ctx) {
     x: MARGIN_X,
     y: contentStartY,
     w: CONTENT_W,
-    colW: [3.05, 1.45, 1.45, 1.45, 0.7],
-    rowH: 0.34,
-    border: { type: "solid", pt: 0.5, color: theme.tableBorderColor },
+    colW: SCORECARD_COL_W,
+    rowH: SCORECARD_ROW_H,
+    fontSize: 14,
+    fontFace: theme.fontFace,
+    border: { type: "solid", pt: 0.5, color: theme.hairline },
+  });
+  section.data.rows.forEach((row, index) => {
+    const color =
+      theme[`status${row.status[0].toUpperCase()}${row.status.slice(1)}`];
+    slide.addShape(pptx.ShapeType.ellipse, {
+      x:
+        MARGIN_X + CONTENT_W - SCORECARD_COL_W.at(-1) / 2 - STATUS_DOT_SIZE / 2,
+      y:
+        contentStartY +
+        SCORECARD_ROW_H * (index + 1) +
+        (SCORECARD_ROW_H - STATUS_DOT_SIZE) / 2,
+      w: STATUS_DOT_SIZE,
+      h: STATUS_DOT_SIZE,
+      fill: { color },
+      line: { color, transparency: 100 },
+    });
   });
 }
 
 function renderDecisions(slide, pptx, section, theme, ctx) {
   const contentStartY = addFinanceChrome(slide, pptx, section, theme, ctx);
   const items = section.data.items.slice(0, 3);
-  const gap = 0.22;
-  const cardW = (CONTENT_W - gap * 2) / 3;
-  const cardY = contentStartY;
-
+  // Three full-width cards give 18pt titles and 14pt decision detail room to wrap.
+  const rowH = 1.12;
+  const gap = 0.08;
+  const fields = [
+    {
+      label: "ต้นทุน",
+      x: 3.65,
+      w: 1.05,
+      value: (item) => formatNumber(item.cost, ctx.unit),
+    },
+    {
+      label: "ผลตอบแทนที่คาด",
+      x: 4.85,
+      w: 1.95,
+      value: (item) =>
+        typeof item.expectedReturn === "number"
+          ? formatNumber(item.expectedReturn, ctx.unit)
+          : item.expectedReturn,
+    },
+    {
+      label: "เงื่อนไขยกเลิก",
+      x: 6.95,
+      w: 2.35,
+      value: (item) => item.killCondition,
+    },
+  ];
   items.forEach((item, index) => {
-    const x = MARGIN_X + index * (cardW + gap);
+    const y = contentStartY + index * (rowH + gap);
     slide.addShape(pptx.ShapeType.roundRect, {
-      x,
-      y: cardY,
-      w: cardW,
-      h: 2.92,
+      x: MARGIN_X,
+      y,
+      w: CONTENT_W,
+      h: rowH,
       rectRadius: 0.05,
       fill: { color: theme.background },
-      line: { color: theme.tableBorderColor, pt: 0.8 },
+      line: { color: theme.hairline, pt: 0.5 },
     });
-    slide.addShape(pptx.ShapeType.rect, {
-      x,
-      y: cardY,
-      w: 0.08,
-      h: 2.92,
-      fill: { color: theme.accentColor },
-      line: { color: theme.accentColor },
-    });
+    if (index < items.length - 1)
+      slide.addShape(pptx.ShapeType.line, {
+        x: MARGIN_X,
+        y: y + rowH + gap / 2,
+        w: CONTENT_W,
+        h: 0,
+        line: { color: theme.hairline, pt: 0.5 },
+      });
     slide.addText(String(index + 1), {
-      x: x + 0.22,
-      y: cardY + 0.18,
-      w: 0.35,
-      h: 0.34,
-      fontSize: 17,
+      x: MARGIN_X,
+      y,
+      w: 0.4,
+      h: 0.5,
+      fontSize: 28,
       bold: true,
       color: theme.accentColor,
-      fontFace: theme.fontTitle,
+      fontFace: theme.fontFace,
+      margin: 0,
     });
     slide.addText(item.title, {
-      x: x + 0.22,
-      y: cardY + 0.58,
-      w: cardW - 0.42,
-      h: 0.62,
-      fontSize: 11.5,
+      x: MARGIN_X + 0.55,
+      y,
+      w: 2.2,
+      h: rowH,
+      fontSize: 18,
       bold: true,
       color: theme.titleColor,
-      fontFace: theme.fontBody,
-      fit: "shrink",
+      fontFace: theme.fontFace,
+      margin: 0,
       valign: "top",
-    });
-    slide.addText("ต้นทุน", {
-      x: x + 0.22,
-      y: cardY + 1.28,
-      w: cardW - 0.42,
-      h: 0.18,
-      fontSize: 8,
-      bold: true,
-      color: theme.subtitleColor,
-      fontFace: theme.fontBody,
-    });
-    slide.addText(formatNumber(item.cost, ctx.unit), {
-      x: x + 0.22,
-      y: cardY + 1.48,
-      w: cardW - 0.42,
-      h: 0.28,
-      fontSize: 12,
-      bold: true,
-      color: theme.bodyColor,
-      fontFace: theme.fontBody,
-    });
-    slide.addText("ผลตอบแทนที่คาด", {
-      x: x + 0.22,
-      y: cardY + 1.83,
-      w: cardW - 0.42,
-      h: 0.18,
-      fontSize: 8,
-      bold: true,
-      color: theme.subtitleColor,
-      fontFace: theme.fontBody,
-    });
-    slide.addText(
-      typeof item.expectedReturn === "number"
-        ? formatNumber(item.expectedReturn, ctx.unit)
-        : item.expectedReturn,
-      {
-        x: x + 0.22,
-        y: cardY + 2.04,
-        w: cardW - 0.42,
-        h: 0.32,
-        fontSize: 9.5,
-        color: theme.bodyColor,
-        fontFace: theme.fontBody,
-        fit: "shrink",
-      }
-    );
-    slide.addText("เงื่อนไขยกเลิก", {
-      x: x + 0.22,
-      y: cardY + 2.4,
-      w: cardW - 0.42,
-      h: 0.18,
-      fontSize: 8,
-      bold: true,
-      color: theme.subtitleColor,
-      fontFace: theme.fontBody,
-    });
-    slide.addText(item.killCondition, {
-      x: x + 0.22,
-      y: cardY + 2.6,
-      w: cardW - 0.42,
-      h: 0.24,
-      fontSize: 8.5,
-      color: theme.bodyColor,
-      fontFace: theme.fontBody,
       fit: "shrink",
+    });
+    fields.forEach((field) => {
+      slide.addText(field.label, {
+        x: field.x,
+        y,
+        w: field.w,
+        h: 0.24,
+        fontSize: 11,
+        bold: true,
+        color: theme.subtitleColor,
+        fontFace: theme.fontFace,
+        margin: 0,
+      });
+      slide.addText(field.value(item), {
+        x: field.x,
+        y: y + 0.28,
+        w: field.w,
+        h: rowH - 0.28,
+        fontSize: 14,
+        color: theme.bodyColor,
+        fontFace: theme.fontFace,
+        margin: 0,
+        valign: "top",
+        fit: "shrink",
+      });
     });
   });
-}
-
-function commonChartOptions(theme) {
-  return {
-    catAxisLabelColor: theme.subtitleColor,
-    catAxisLabelFontFace: theme.fontBody,
-    catAxisLabelFontSize: 9,
-    catGridLine: { style: "none" },
-    chartArea: { border: { color: theme.background, pt: 0 } },
-    plotArea: { border: { color: theme.background, pt: 0 } },
-    showTitle: false,
-    valAxisLabelColor: theme.subtitleColor,
-    valAxisLabelFontFace: theme.fontBody,
-    valAxisLabelFontSize: 8,
-    valGridLine: { color: theme.chartGrid, size: 0.5 },
-  };
 }
 
 function renderTrendBar(slide, pptx, section, theme, ctx) {
@@ -424,7 +370,7 @@ function renderTrendBar(slide, pptx, section, theme, ctx) {
       },
     ],
     {
-      ...commonChartOptions(theme),
+      ...chartBaseOptions(theme, theme.background),
       x: chartX,
       y: chartY,
       w: chartW,
@@ -459,12 +405,12 @@ function renderTrendBar(slide, pptx, section, theme, ctx) {
         x: chartX + 0.1,
         y: chartY + chartH + 0.03,
         w: chartW - 0.2,
-        h: 0.2,
-        fontSize: 8,
+        h: 0.3,
+        fontSize: 11,
         bold: true,
         color: theme.chartNeutral,
         fontFace: theme.fontBody,
-        fit: "shrink",
+        margin: 0,
       }
     );
   }
@@ -472,13 +418,13 @@ function renderTrendBar(slide, pptx, section, theme, ctx) {
   if (section.data.annotation) {
     slide.addText(section.data.annotation, {
       x: chartX + 0.1,
-      y: chartY + chartH + (section.data.planBand ? 0.23 : 0.03),
+      y: chartY + chartH + (section.data.planBand ? 0.38 : 0.03),
       w: chartW - 0.2,
-      h: 0.22,
-      fontSize: 8.5,
+      h: 0.3,
+      fontSize: 11,
       color: theme.chartNeutral,
       fontFace: theme.fontBody,
-      fit: "shrink",
+      margin: 0,
     });
   }
 }
@@ -496,14 +442,14 @@ function renderBarDonut(slide, pptx, section, theme, ctx) {
       },
     ],
     {
-      ...commonChartOptions(theme),
+      ...chartBaseOptions(theme, theme.background),
       x: MARGIN_X,
       y: contentStartY,
       w: 4.35,
       h: 2.92,
       barDir: "col",
       chartColors: [theme.chartColors[0]],
-      dataLabelFontSize: 8,
+      dataLabelFontSize: 11,
       dataLabelFormatCode: "#,##0",
       dataLabelPosition: "outEnd",
       showLegend: false,
@@ -520,24 +466,25 @@ function renderBarDonut(slide, pptx, section, theme, ctx) {
       },
     ],
     {
+      ...chartBaseOptions(theme, theme.background),
       x: 5.2,
       y: contentStartY,
       w: 4.05,
       h: 2.92,
-      chartArea: { border: { color: theme.background, pt: 0 } },
       chartColors: [...theme.chartColors],
       dataLabelColor: theme.bodyColor,
       dataLabelFontFace: theme.fontBody,
-      dataLabelFontSize: 8,
+      dataLabelFontSize: 11,
       holeSize: 55,
       dataLabelPosition: "ctr",
       legendColor: theme.subtitleColor,
       legendFontFace: theme.fontBody,
-      legendFontSize: 8,
+      legendFontSize: 11,
       legendPos: "r",
       showLabel: false,
       showLegend: true,
       showPercent: true,
+      showValue: false,
       showTitle: false,
     }
   );
@@ -594,7 +541,7 @@ function renderWaterfall(slide, pptx, section, theme, ctx) {
     Math.max(...cumulativeValues, section.data.end.value)
   );
   const options = {
-    ...commonChartOptions(theme),
+    ...chartBaseOptions(theme, theme.background),
     x: MARGIN_X,
     y: chartY,
     w: CONTENT_W,
@@ -648,8 +595,7 @@ function renderWaterfall(slide, pptx, section, theme, ctx) {
       align: "center",
       color: theme.bodyColor,
       fontFace: theme.fontBody,
-      fontSize: 7.5,
-      fit: "shrink",
+      fontSize: 11,
       margin: 0,
     });
   });
@@ -658,12 +604,12 @@ function renderWaterfall(slide, pptx, section, theme, ctx) {
       x: MARGIN_X + cellW * (index + 1),
       y: contentStartY + 2.65,
       w: cellW,
-      h: 0.22,
+      h: 0.3,
       align: "center",
       color: theme.chartNeutral,
       fontFace: theme.fontBody,
-      fontSize: 7.5,
-      fit: "shrink",
+      fontSize: 11,
+      margin: 0,
     });
   });
 }
@@ -686,7 +632,7 @@ function renderCash(slide, pptx, section, theme, ctx) {
       },
     ],
     {
-      ...commonChartOptions(theme),
+      ...chartBaseOptions(theme, theme.background),
       x: MARGIN_X,
       y: contentStartY,
       w: 5.3,
@@ -694,10 +640,11 @@ function renderCash(slide, pptx, section, theme, ctx) {
       chartColors: [theme.chartPositive, theme.chartNegative],
       legendColor: theme.subtitleColor,
       legendFontFace: theme.fontBody,
-      legendFontSize: 8,
+      legendFontSize: 11,
       legendPos: "b",
       lineDataSymbol: "none",
       lineSize: 2,
+      showValue: false,
       showLegend: true,
     }
   );
@@ -711,7 +658,7 @@ function renderCash(slide, pptx, section, theme, ctx) {
       },
     ],
     {
-      ...commonChartOptions(theme),
+      ...chartBaseOptions(theme, theme.background),
       x: 6.12,
       y: contentStartY,
       w: 3.08,
@@ -742,7 +689,7 @@ function renderCash(slide, pptx, section, theme, ctx) {
       bold: true,
       color: theme.subtitleColor,
       fontFace: theme.fontBody,
-      fontSize: 9,
+      fontSize: 11,
     });
     slide.addText(`${formatNumber(section.data.dso)} วัน`, {
       x: 7.05,
@@ -784,13 +731,12 @@ function renderRankedPair(slide, pptx, section, theme, ctx) {
         },
       ],
       {
-        ...commonChartOptions(theme),
+        ...chartBaseOptions(theme, theme.background),
         x,
         y: contentStartY + 0.3,
         w: 4.12,
         h: 2.6,
         barDir: "bar",
-        catAxisLabelFontSize: 8,
         catAxisOrientation: "maxMin",
         chartColors: [theme.chartColors[index]],
         dataLabelFormatCode: "#,##0",
@@ -810,7 +756,7 @@ function renderRisksOutlook(slide, pptx, section, theme, ctx) {
       text: header,
       options: {
         bold: true,
-        fontSize: 9,
+        fontSize: 11,
         fontFace: theme.fontBody,
         color: theme.tableHeaderColor,
         fill: { color: theme.tableHeaderBg },
@@ -827,7 +773,7 @@ function renderRisksOutlook(slide, pptx, section, theme, ctx) {
       [risk.risk, risk.owner, risk.mitigation].map((text) => ({
         text,
         options: {
-          fontSize: 8.5,
+          fontSize: 11,
           fontFace: theme.fontBody,
           color: theme.bodyColor,
           fill: { color: fill },
@@ -864,16 +810,17 @@ function renderRisksOutlook(slide, pptx, section, theme, ctx) {
       },
     ],
     {
-      ...commonChartOptions(theme),
+      ...chartBaseOptions(theme, theme.background),
       x: 6.05,
       y: contentStartY,
       w: 3.25,
       h: 2.9,
       chartColors: [theme.chartColors[0], theme.chartColors[1]],
       displayBlanksAs: "gap",
+      showValue: false,
       legendColor: theme.subtitleColor,
       legendFontFace: theme.fontBody,
-      legendFontSize: 8,
+      legendFontSize: 11,
       legendPos: "b",
       showLegend: true,
     }
@@ -987,7 +934,6 @@ const RENDERERS = {
 
 module.exports = {
   RENDERERS,
-  addDeckFooter,
   assertStackedLabelPosition,
   fixEmbeddedChartTables,
   formatNumber,
