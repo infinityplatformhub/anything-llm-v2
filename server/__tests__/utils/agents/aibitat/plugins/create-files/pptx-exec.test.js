@@ -758,3 +758,23 @@ test("truncated KPI number keeps its unit inside the value box", async () => {
   const em = [...text].reduce((sum, char) => sum + (/\d/.test(char) ? 0.62 : char === "," || char === " " ? 0.35 : char === "…" ? 0.8 : 0.75), 0);
   expect(em * 28).toBeLessThanOrEqual(width);
 });
+
+test.each([
+  ["THB/yr", "… THB/yr"],
+  ["THB/year", "…"],
+  ["THB/year per customer account", "…"],
+])("truncated KPI with wide unit %s always preserves a marker", async (unit, expected) => {
+  const { slideXml } = await renderOne("kpi", { kpis: [
+    { label: "Large amount", value: 1000000000000000, unit },
+    { label: "Other", value: 2 }, { label: "Third", value: 3 },
+  ] });
+  const shape = (slideXml.match(/<p:sp>[\s\S]*?<\/p:sp>/g) || [])
+    .find((part) => part.includes('sz="2800" b="1"'));
+  expect(shape).toContain(`<a:t>${expected}</a:t>`);
+  expect(shape).not.toContain("<a:normAutofit");
+  const width = Number(shape.match(/<a:ext cx="(\d+)"/)[1]) / 12700;
+  const em = [...expected].reduce((sum, char) => sum + (
+    char === "…" || char === "/" ? 0.8 : char === " " ? 0.35 : /[A-Z]/.test(char) ? 0.75 : 0.62
+  ), 0);
+  expect(em * 28).toBeLessThanOrEqual(width);
+});

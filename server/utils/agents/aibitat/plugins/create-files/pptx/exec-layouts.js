@@ -502,11 +502,10 @@ function renderKpi(slide, pptx, section, theme, ctx) {
       value = fitValue();
     }
     if (value !== rawValue && Number.isFinite(kpi.value) && kpi.unit) {
-      const unitWidth = (textWidthEm(kpi.unit) * valueFontSize) / 72;
-      if (unitWidth <= textW) {
-        const suffix = ` ${kpi.unit}`;
+      const suffix = ` ${kpi.unit}`;
+      const markerWidth = (textWidthEm(`…${suffix}`) * valueFontSize) / 72;
+      if (markerWidth <= textW) {
         const numberWidth = textW - (textWidthEm(suffix) * valueFontSize) / 72;
-        // An almost-full-width unit takes priority over the already-truncated number.
         value =
           numberWidth >= valueFontSize / 72
             ? boundText(formatNumber(kpi.value), {
@@ -514,15 +513,12 @@ function renderKpi(slide, pptx, section, theme, ctx) {
                 h: valueFontSize / 72,
                 fontSize: valueFontSize,
               }) + suffix
-            : kpi.unit;
+            : `…${suffix}`;
       } else {
-        // ponytail: if the unit itself exceeds the tile at 28pt, omit it and bound
-        // only the number. Units are lost in this exceptional case; shorten the unit to retain it.
-        value = boundText(formatNumber(kpi.value), {
-          w: textW,
-          h: valueFontSize / 72,
-          fontSize: valueFontSize,
-        });
+        // ponytail: an over-wide unit at 28pt loses its unit and numeric detail.
+        // If even marker + unit cannot fit, retain "…" alone, never a bare unit;
+        // shorten the unit to retain its meaning alongside the truncated figure.
+        value = "…";
       }
     }
     slide.addText(value, {
