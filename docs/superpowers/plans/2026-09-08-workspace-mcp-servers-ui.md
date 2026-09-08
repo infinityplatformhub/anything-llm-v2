@@ -70,10 +70,10 @@
 
 **Files:** `server/endpoints/workspaceMcpServers.js`, `server/endpoints/mcpServers.js` (list เท่านั้น), `server/index.js`, test `server/__tests__/endpoints/workspaceMcpServers.test.js`
 
-- [ ] **RED:** ตาม spec ตาราง API: GET list admin+manager(สมาชิก) masked; POST create form + `mcpServers` block (ตัวผิดรายงานแยก, 201), stdio 400, unknown_field 400, ชื่อชน global 409 `name_conflict`, ชื่อชน workspace-owned 409; PUT sentinel merge + `stopWorkspaceServer` ถูกเรียก; DELETE ลบ + stop; POST test ด้วย `{config}` ผ่าน validator (private IP → 400) และด้วย `{name}` saved; POST `:name/call` ผ่าน `callWorkspaceTool`, ผลลัพธ์ string ตัด 64 KB + `truncated:true`, ห้อง B → 404; manager ทุก mutate → 403/401 ตาม middleware; ซ้อน test/call เดียวกัน → 409 `busy`; error body ไม่มีค่า header
-- [ ] **RED:** `/mcp-servers/list?workspaceSlug=` คืน workspace-owned พร้อม `owner:"workspace"` และ global `owner:"global"` (เพิ่มเคสใน `workspaceMcpList.test.js`)
-- [ ] **GREEN** + register router
-- [ ] commit `feat(mcp): workspace MCP server endpoints with test and tool call (#51)`
+- [x] **RED:** ตาม spec ตาราง API: GET list admin+manager(สมาชิก) masked; POST create form + `mcpServers` block (ตัวผิดรายงานแยก, 201), stdio 400, unknown_field 400, ชื่อชน global 409 `name_conflict`, ชื่อชน workspace-owned 409; PUT sentinel merge + `stopWorkspaceServer` ถูกเรียก; DELETE ลบ + stop; POST test ด้วย `{config}` ผ่าน validator (private IP → 400) และด้วย `{name}` saved; POST `:name/call` ผ่าน `callWorkspaceTool`, ผลลัพธ์ string ตัด 64 KB + `truncated:true`, ห้อง B → 404; manager ทุก mutate → 403/401 ตาม middleware; ซ้อน test/call เดียวกัน → 409 `busy`; error body ไม่มีค่า header
+- [x] **RED:** `/mcp-servers/list?workspaceSlug=` คืน workspace-owned พร้อม `owner:"workspace"` และ global `owner:"global"` (เพิ่มเคสใน `workspaceMcpList.test.js`)
+- [x] **GREEN** + register router — focused 70/70; regression 230/230 across 9 suites with Node 26 `_polyfill` via `--setupFilesAfterEnv`; unshimmed run: 221 pass, 2 legacy suites fail to load; eslint clean.
+- [x] commit `feat(mcp): workspace MCP server endpoints with test and tool call (#51)` — `d10a7576`
 
 ## Task 4 — frontend per mockup
 
