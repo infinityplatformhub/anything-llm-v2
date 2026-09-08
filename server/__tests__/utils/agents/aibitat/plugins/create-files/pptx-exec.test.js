@@ -742,3 +742,19 @@ test("KPI values fit their serialized boxes, reducing size before ellipsizing at
   expect(sizes[1]).toBeLessThan(40);
   expect(sizes[2]).toBe(40);
 });
+
+test("truncated KPI number keeps its unit inside the value box", async () => {
+  const { slideXml } = await renderOne("kpi", { kpis: [
+    { label: "Large amount", value: 1000000000000000, unit: "THB" },
+    { label: "Other", value: 2 }, { label: "Third", value: 3 },
+  ] });
+  const value = (slideXml.match(/<p:sp>[\s\S]*?<\/p:sp>/g) || [])
+    .find((shape) => /<a:t>1,[^<]*<\/a:t>/.test(shape));
+  const text = value.match(/<a:t>([^<]+)<\/a:t>/)[1];
+  expect(text).toMatch(/^1,[\d,]*… THB$/);
+  expect(value).toContain('sz="2800"');
+  expect(value).not.toContain("<a:normAutofit");
+  const width = Number(value.match(/<a:ext cx="(\d+)"/)[1]) / 12700;
+  const em = [...text].reduce((sum, char) => sum + (/\d/.test(char) ? 0.62 : char === "," || char === " " ? 0.35 : char === "…" ? 0.8 : 0.75), 0);
+  expect(em * 28).toBeLessThanOrEqual(width);
+});

@@ -9,6 +9,7 @@
 
 const {
   boundText,
+  textWidthEm,
   addActionTitle,
   addFooter,
   renderStatement,
@@ -499,6 +500,30 @@ function renderKpi(slide, pptx, section, theme, ctx) {
     while (value !== rawValue && valueFontSize > KPI_VALUE_FONT_MIN) {
       valueFontSize -= 1;
       value = fitValue();
+    }
+    if (value !== rawValue && Number.isFinite(kpi.value) && kpi.unit) {
+      const unitWidth = (textWidthEm(kpi.unit) * valueFontSize) / 72;
+      if (unitWidth <= textW) {
+        const suffix = ` ${kpi.unit}`;
+        const numberWidth = textW - (textWidthEm(suffix) * valueFontSize) / 72;
+        // An almost-full-width unit takes priority over the already-truncated number.
+        value =
+          numberWidth >= valueFontSize / 72
+            ? boundText(formatNumber(kpi.value), {
+                w: numberWidth,
+                h: valueFontSize / 72,
+                fontSize: valueFontSize,
+              }) + suffix
+            : kpi.unit;
+      } else {
+        // ponytail: if the unit itself exceeds the tile at 28pt, omit it and bound
+        // only the number. Units are lost in this exceptional case; shorten the unit to retain it.
+        value = boundText(formatNumber(kpi.value), {
+          w: textW,
+          h: valueFontSize / 72,
+          fontSize: valueFontSize,
+        });
+      }
     }
     slide.addText(value, {
       x: textX,

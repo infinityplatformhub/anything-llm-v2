@@ -414,6 +414,7 @@ function addTableContent(slide, pptx, tableData, theme, startY) {
 }
 
 module.exports = {
+  textWidthEm,
   boundText,
   isDarkColor,
   addActionTitle,
