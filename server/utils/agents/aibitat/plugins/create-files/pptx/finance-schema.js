@@ -1,3 +1,5 @@
+const { validateExecSection } = require("./exec-layouts.js");
+
 const FINANCE_LAYOUTS = {
   summary: ["narrative", "metrics", "verdict"],
   scorecard: ["columns", "rows"],
@@ -8,6 +10,11 @@ const FINANCE_LAYOUTS = {
   ranked_pair: ["left", "right"],
   risks_outlook: ["risks", "forecast"],
   decisions: ["items"],
+  // Generic executive layouts, usable from finance mode and from the section agent.
+  kpi: ["kpis"],
+  chart: ["type", "categories", "series"],
+  "two-column": ["chart", "points"],
+  statement: ["headline"],
 };
 
 const LEGACY_LAYOUTS = ["content", "section", "blank"];
@@ -93,6 +100,13 @@ function validateSummary(data, path, errors) {
       requireNumber(metric.value, `${itemPath}.value`, errors);
       requireNumber(metric.delta, `${itemPath}.delta`, errors);
       requireString(metric.deltaLabel, `${itemPath}.deltaLabel`, errors);
+      if (
+        metric.polarity !== undefined &&
+        !["higher_is_better", "lower_is_better"].includes(metric.polarity)
+      )
+        errors.push(
+          `${itemPath}.polarity must be higher_is_better or lower_is_better`
+        );
     });
   }
   if (!SUMMARY_VERDICTS.includes(data.verdict))
@@ -308,6 +322,12 @@ function validateDecisions(data, path, errors) {
   });
 }
 
+/** Adapt an executive layout to the (data, path, errors) validator shape. */
+function execValidator(layout) {
+  return (data, path, errors) =>
+    validateExecSection({ layout, data }, path.replace(/\.data$/, ""), errors);
+}
+
 const VALIDATORS = {
   summary: validateSummary,
   scorecard: validateScorecard,
@@ -318,6 +338,10 @@ const VALIDATORS = {
   ranked_pair: validateRankedPair,
   risks_outlook: validateRisksOutlook,
   decisions: validateDecisions,
+  kpi: execValidator("kpi"),
+  chart: execValidator("chart"),
+  "two-column": execValidator("two-column"),
+  statement: execValidator("statement"),
 };
 
 function validateFinanceSections(sections) {

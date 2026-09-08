@@ -1,5 +1,4 @@
 const createFilesLib = require("../lib.js");
-const { applyBranding } = require("./utils.js");
 
 module.exports.CreatePdfFile = {
   name: "create-pdf-file",
@@ -87,15 +86,7 @@ module.exports.CreatePdfFile = {
               );
 
               const { markdownToPdf } = await import("@mintplex-labs/mdpdf");
-              const { PDFDocument, rgb, StandardFonts } = await import(
-                "pdf-lib"
-              );
-
-              const rawBuffer = await markdownToPdf(content);
-              const pdfDoc = await PDFDocument.load(rawBuffer);
-              await applyBranding(pdfDoc, { rgb, StandardFonts });
-
-              const buffer = await pdfDoc.save();
+              const buffer = await markdownToPdf(content);
               const bufferSizeKB = (buffer.length / 1024).toFixed(2);
               const displayFilename = filename.split("/").pop();
 

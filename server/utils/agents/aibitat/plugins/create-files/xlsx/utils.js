@@ -186,36 +186,6 @@ function inferCellType(value) {
 }
 
 /**
- * Applies AnythingLLM branding to an Excel workbook.
- * Adds a subtle "Created with AnythingLLM" text row below the data on each sheet.
- * @param {import('exceljs').Workbook} workbook - The ExcelJS workbook instance
- */
-function applyBranding(workbook) {
-  for (const worksheet of workbook.worksheets) {
-    const lastRow = worksheet.rowCount || 1;
-    const lastCol = worksheet.columnCount || 1;
-
-    const brandingRowNum = lastRow + 2;
-
-    if (lastCol > 1) {
-      worksheet.mergeCells(brandingRowNum, 1, brandingRowNum, lastCol);
-    }
-
-    const brandingCell = worksheet.getCell(brandingRowNum, 1);
-    brandingCell.value = "Created with AnythingLLM";
-    brandingCell.font = {
-      italic: true,
-      size: 9,
-      color: { argb: "FF999999" },
-    };
-    brandingCell.alignment = {
-      horizontal: "right",
-      vertical: "middle",
-    };
-  }
-}
-
-/**
  * Auto-fits column widths based on content.
  * @param {import('exceljs').Worksheet} worksheet - The worksheet to auto-fit
  * @param {number} [minWidth=8] - Minimum column width
@@ -325,7 +295,6 @@ module.exports = {
   validateCSVData,
   detectDelimiter,
   inferCellType,
-  applyBranding,
   autoFitColumns,
   applyHeaderStyle,
   applyZebraStriping,

@@ -1,9 +1,11 @@
-const createFilesLib = require("../lib.js");
-
 // All positioning assumes LAYOUT_16x9: 10 × 5.625 in.
-const MARGIN_X = 0.7;
-const CONTENT_W = 8.6; // 10 - 2 × MARGIN_X
+const SLIDE_W = 10;
 const SLIDE_H = 5.625;
+const MARGIN_X = 0.7;
+const CONTENT_W = SLIDE_W - 2 * MARGIN_X;
+const FOOTER_Y = 5.05; // Reserve the bottom strip for page numbers and sources.
+const COVER_MARGIN_X = 0.6;
+const COVER_W = SLIDE_W - 2 * COVER_MARGIN_X;
 
 function isDarkColor(hexColor) {
   const hex = (hexColor || "FFFFFF").replace("#", "");
@@ -13,138 +15,353 @@ function isDarkColor(hexColor) {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5;
 }
 
-function addBranding(slide, bgColor) {
-  const isDark = isDarkColor(bgColor);
-  const textColor = isDark ? "FFFFFF" : "000000";
-  const logo = createFilesLib.getLogo({
-    forDarkBackground: isDark,
-    format: "dataUri",
-  });
+// ponytail: conservative em-width budgeting, not font shaping. The factors below are
+// measured approximations for a UI sans (Leelawadee UI, Calibri), not real font metrics:
+//   - Thai consonants and inline vowels advance about as far as Latin lowercase.
+//   - Thai above/below vowels and tone marks (U+0E31, U+0E34-U+0E3A, U+0E47-U+0E4E,
+//     all of them Unicode Marks) stack on the character before them and advance zero.
+// Over-estimating ellipsizes text that would have fit; under-estimating overflows the
+// box, and nothing rescues it because shrink-to-fit stays off by design. Swap in a
+// shaping engine such as HarfBuzz if exact wrapping ever matters more than this.
+const THAI_BASE = /[\u0E00-\u0E7F]/;
+function textWidthEm(text) {
+  return [...text].reduce(
+    (sum, char) =>
+      sum +
+      (/\p{Mark}/u.test(char)
+        ? 0
+        : /\s/u.test(char)
+          ? 0.35
+          : /[il.,'|!:;]/.test(char)
+            ? 0.35
+            : /[MW@]/.test(char)
+              ? 1
+              : /[A-Z]/.test(char)
+                ? 0.75
+                : /[a-z0-9]/.test(char)
+                  ? 0.62
+                  : THAI_BASE.test(char)
+                    ? 0.62
+                    : 0.8),
+    0
+  );
+}
 
-  slide.addText("Created with", {
-    x: 7.85,
-    y: 5.06,
-    w: 1.85,
-    h: 0.12,
-    fontSize: 5.5,
-    color: textColor,
-    transparency: 78,
-    fontFace: "Calibri",
-    align: "center",
-    italic: true,
-  });
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+// ICU word segmentation is the break-candidate oracle. It keeps a number's digits and
+// separators in one segment, keeps a Thai mark with the character it sits on, and knows
+// Thai word boundaries, which is the only way to break Thai: it is written without spaces.
+const words = new Intl.Segmenter(undefined, { granularity: "word" });
+// Matches what tokenize() now produces: a figure with its sign and percent
+// attached, and a range of two such figures, so an over-wide one still takes
+// the cut-and-mark branch rather than the grapheme fallback that would wrap it
+// mid-number.
+const NUMBER_TOKEN = /^[+\u2212-]?[\d.,]+%?(?:[+\u2212-][\d.,]+%?)?$/;
 
-  if (logo) {
-    slide.addImage({
-      data: logo,
-      x: 8.025,
-      y: 5.17,
-      w: 1.5,
-      h: 0.24,
-      transparency: 78,
-    });
-  } else {
-    slide.addText("AnythingLLM", {
-      x: 7.85,
-      y: 5.17,
-      w: 1.85,
-      h: 0.24,
-      fontSize: 8,
-      color: textColor,
-      transparency: 78,
-      fontFace: "Calibri",
-      align: "center",
+function tokenize(text) {
+  const tokens = [];
+  for (const { segment } of words.segment(text)) {
+    const prev = tokens[tokens.length - 1];
+    // ICU already keeps "7,799,188" whole, but merging across every digit/separator
+    // seam keeps the never-break-a-number rule independent of ICU's locale data.
+    // The optional trailing sign carries a range dash across, so "2568-2569"
+    // rejoins as one token rather than reopening a line at "-2569".
+    if (prev && /[\d.,%][+\u2212-]?$/.test(prev) && /^[\d.,]/.test(segment))
+      tokens[tokens.length - 1] = prev + segment;
+    // A sign glued to the end of a figure is a range dash, not a sign: keep it
+    // with the figure before it, so the branch above can then rejoin the whole
+    // range. This runs before the sign branch below, which would otherwise
+    // claim the same hyphen as the second figure's sign.
+    else if (prev && /[\d.,%]$/.test(prev) && /^[+\u2212-]$/.test(segment))
+      tokens[tokens.length - 1] = prev + segment;
+    // ICU breaks a sign or a percent away from the figure it belongs to, so
+    // "-1,234,567" could wrap as "-" then the digits, reading as a gain. Merge
+    // only a sign that directly precedes a figure and a percent that directly
+    // follows one, which leaves standalone hyphens and "a - b" arithmetic alone.
+    else if (prev && /^[+\u2212-]$/.test(prev) && /^[\d.,]/.test(segment))
+      tokens[tokens.length - 1] = prev + segment;
+    else if (prev && /[\d.,]$/.test(prev) && segment === "%")
+      tokens[tokens.length - 1] = prev + segment;
+    else tokens.push(segment);
+  }
+  return tokens;
+}
+
+function boundText(text, { w, h, fontSize }) {
+  text = String(text ?? "");
+  const lineBudget = (w * 72) / fontSize;
+  if (!text.includes("\n") && textWidthEm(text) <= lineBudget) return text;
+  const maxLines = Math.max(1, Math.floor((h * 72) / (fontSize * 1.3)));
+  const ellipsisWidth = textWidthEm("\u2026");
+  const lines = [""];
+  let used = 0;
+  const append = (piece, width) => {
+    lines[lines.length - 1] += piece;
+    used += width;
+  };
+  // Trailing spaces are the break itself, never content: drop them from every line.
+  const finish = () => lines.map((line) => line.trimEnd()).join("\n");
+  // The ellipsis needs its own width on the last line, so give back whole graphemes
+  // until it fits. Giving back graphemes rather than tokens keeps as much of the last
+  // word as the box allows; the token that did not fit is already gone either way.
+  const ellipsize = () => {
+    let last = lines[lines.length - 1].trimEnd();
+    while (last && textWidthEm(last) + ellipsisWidth > lineBudget)
+      last = [...graphemes.segment(last)].slice(0, -1).map((g) => g.segment).join("").trimEnd();
+    lines[lines.length - 1] = last;
+    return finish().trimEnd() + "\u2026";
+  };
+  for (const token of tokenize(text)) {
+    if (token === "\n") {
+      if (lines.length === maxLines) return ellipsize();
+      lines.push("");
+      used = 0;
+      continue;
+    }
+    const width = textWidthEm(token);
+    if (used + width <= lineBudget) {
+      append(token, width);
+      continue;
+    }
+    if (used > 0) {
+      // The token does not fit here, so it moves whole to the next line. Truncating
+      // instead of wrapping drops the token entirely: the ellipsis lands on a break
+      // candidate, never mid-word and never mid-number.
+      if (lines.length === maxLines) return ellipsize();
+      lines.push("");
+      used = 0;
+      if (/^\s+$/.test(token)) continue; // The break consumed this space.
+      if (width <= lineBudget) {
+        append(token, width);
+        continue;
+      }
+    }
+    if (NUMBER_TOKEN.test(token)) {
+      // A number wider than a whole line can only be cut. Cut it here and mark the
+      // cut: "7,799,1..." reads as an incomplete figure, where wrapping it onto the
+      // next line would read as the two separate figures 7,799,1 and 88.
+      for (const { segment } of graphemes.segment(token)) {
+        const glyph = textWidthEm(segment);
+        if (used + glyph + ellipsisWidth > lineBudget) break;
+        append(segment, glyph);
+      }
+      return ellipsize();
+    }
+    // A single word wider than a line has no break candidate inside it. Grapheme
+    // segmentation is the fallback: it keeps each Thai mark with its base character,
+    // so a break never lands immediately after a combining mark.
+    for (const { segment } of graphemes.segment(token)) {
+      const glyph = textWidthEm(segment);
+      if (used + glyph > lineBudget && used > 0) {
+        if (lines.length === maxLines) return ellipsize();
+        lines.push("");
+        used = 0;
+      }
+      append(segment, glyph);
+    }
+  }
+  return finish();
+}
+
+function footerNote(note) {
+  const box = { w: 7.7, h: 0.25, fontSize: 11 };
+  let parts = String(note).split(" · ");
+  // Drop the least valuable segments first: subtitle, prepared date, source.
+  // Period is retained; even an oversized period is visibly ellipsized, never shrunk.
+  for (const remove of [
+    (part) => !/^(งวด |จัดทำ |แหล่งข้อมูล )/.test(part),
+    (part) => part.startsWith("จัดทำ "),
+    (part) => part.startsWith("แหล่งข้อมูล "),
+  ]) {
+    if (!boundText(parts.join(" · "), box).endsWith("…")) break;
+    // Non-finance source notes have no metadata segments: preserve their text.
+    if (!parts.some((part) => /^(งวด |จัดทำ |แหล่งข้อมูล )/.test(part))) break;
+    parts = parts.filter((part) => !remove(part));
+  }
+  return boundText(parts.join(" · "), box);
+}
+
+function addActionTitle(slide, theme, title, { y = 0.35 } = {}) {
+  slide.addText(boundText(title, { w: CONTENT_W, h: 0.95, fontSize: 26 }), {
+    x: MARGIN_X,
+    y,
+    w: CONTENT_W,
+    h: 0.95,
+    fontSize: 26,
+    bold: true,
+    color: theme.titleColor,
+    fontFace: theme.fontFace,
+    margin: 0,
+    valign: "mid",
+  });
+  return 1.45;
+}
+
+function addFooter(slide, pptx, theme, { slideNumber, totalSlides, note }) {
+  slide.addShape(pptx.ShapeType.rect, {
+    x: MARGIN_X,
+    y: FOOTER_Y,
+    w: CONTENT_W,
+    h: 0.007,
+    fill: { color: theme.hairline },
+    line: { color: theme.hairline, transparency: 100 },
+  });
+  slide.addText(`${slideNumber} / ${totalSlides}`, {
+    x: MARGIN_X,
+    y: 5.12,
+    w: 0.8,
+    h: 0.25,
+    fontSize: 11,
+    color: theme.footerColor,
+    fontFace: theme.fontFace,
+    align: "left",
+    margin: 0,
+  });
+  if (note) {
+    slide.addText(footerNote(note), {
+      x: 1.6,
+      y: 5.12,
+      w: 7.7,
+      h: 0.25,
+      fontSize: 11,
+      color: theme.footerColor,
+      fontFace: theme.fontFace,
+      align: "right",
+      margin: 0,
     });
   }
 }
 
-function addTopAccentBar(slide, pptx, theme) {
+function addGround(slide, pptx, theme) {
+  slide.background = { color: theme.ground };
   slide.addShape(pptx.ShapeType.rect, {
     x: 0,
     y: 0,
-    w: "100%",
-    h: 0.05,
+    w: SLIDE_W,
+    h: SLIDE_H,
+    fill: { color: theme.ground },
+    line: { color: theme.ground, transparency: 100 },
+  });
+}
+
+function renderCover(slide, pptx, { title, headline, subtitle, meta }, theme) {
+  addGround(slide, pptx, theme);
+  slide.addShape(pptx.ShapeType.rect, {
+    x: COVER_MARGIN_X,
+    y: 1.3,
+    w: 0.5,
+    h: 0.06,
     fill: { color: theme.accentColor },
-    line: { color: theme.accentColor },
+    line: { color: theme.accentColor, transparency: 100 },
   });
+  const textOptions = {
+    x: COVER_MARGIN_X,
+    w: COVER_W,
+    fontFace: theme.fontFace,
+    color: theme.groundMuted,
+    margin: 0,
+  };
+  if (headline && title) {
+    slide.addText(boundText(title, { w: COVER_W, h: 0.3, fontSize: 14 }), {
+      ...textOptions,
+      y: 0.9,
+      h: 0.3,
+      fontSize: 14,
+    });
+  }
+  slide.addText(
+    boundText(headline || title || "Untitled", {
+      w: COVER_W,
+      h: 2.2,
+      fontSize: 48,
+    }),
+    {
+      ...textOptions,
+      y: 1.5,
+      h: 2.2,
+      fontSize: 48,
+      bold: true,
+      color: theme.groundText,
+      valign: "mid",
+    }
+  );
+  if (subtitle) {
+    slide.addText(boundText(subtitle, { w: COVER_W, h: 0.65, fontSize: 16 }), {
+      ...textOptions,
+      y: 3.9,
+      h: 0.65,
+      fontSize: 16,
+    });
+  }
+  if (meta) {
+    slide.addText(boundText(meta, { w: COVER_W, h: 0.3, fontSize: 12 }), {
+      ...textOptions,
+      y: 4.9,
+      h: 0.3,
+      fontSize: 12,
+    });
+  }
 }
 
-function addAccentUnderline(slide, pptx, x, y, color) {
-  slide.addShape(pptx.ShapeType.rect, {
-    x,
-    y,
-    w: 1.5,
-    h: 0.035,
-    fill: { color },
-    line: { color },
+function renderStatement(slide, pptx, { headline, subtitle }, theme, ctx) {
+  addGround(slide, pptx, theme);
+  // Two 48pt lines at 1.3 spacing need 1.73in; the old 1.5in box capped the headline
+  // at one line, so any two-line headline was ellipsized rather than wrapped.
+  const headlineBox = { w: COVER_W, h: 1.75, fontSize: 48 };
+  slide.addText(boundText(headline || "", headlineBox), {
+    x: COVER_MARGIN_X,
+    y: 1.9,
+    w: headlineBox.w,
+    h: headlineBox.h,
+    fontSize: headlineBox.fontSize,
+    bold: true,
+    color: theme.groundText,
+    fontFace: theme.fontFace,
+    margin: 0,
   });
+  if (subtitle) {
+    const subtitleBox = { w: COVER_W, h: 0.8, fontSize: 18 };
+    slide.addText(boundText(subtitle, subtitleBox), {
+      x: COVER_MARGIN_X,
+      y: 3.75,
+      w: subtitleBox.w,
+      h: subtitleBox.h,
+      fontSize: subtitleBox.fontSize,
+      color: theme.groundMuted,
+      fontFace: theme.fontFace,
+      margin: 0,
+    });
+  }
 }
 
-function addSlideFooter(slide, pptx, theme, slideNumber, totalSlides) {
-  slide.addShape(pptx.ShapeType.rect, {
-    x: MARGIN_X,
-    y: 5.0,
-    w: CONTENT_W,
-    h: 0.007,
-    fill: { color: theme.footerLineColor },
-    line: { color: theme.footerLineColor },
-  });
-
-  slide.addText(`${slideNumber}  /  ${totalSlides}`, {
-    x: MARGIN_X,
-    y: 5.07,
-    w: 1.2,
-    h: 0.25,
-    fontSize: 8,
-    color: theme.footerColor,
-    fontFace: theme.fontBody,
-    align: "left",
-  });
+function chartBaseOptions(theme, bg) {
+  return {
+    chartColors: [...theme.series],
+    showLegend: false,
+    showValue: true,
+    showTitle: false,
+    dataLabelFontSize: 11,
+    catAxisLabelFontSize: 12,
+    valAxisLabelFontSize: 11,
+    dataLabelFontFace: theme.fontFace,
+    catAxisLabelFontFace: theme.fontFace,
+    valAxisLabelFontFace: theme.fontFace,
+    legendFontFace: theme.fontFace,
+    legendFontSize: 11,
+    dataLabelColor: theme.bodyColor,
+    catAxisLabelColor: theme.subtitleColor,
+    valAxisLabelColor: theme.subtitleColor,
+    valGridLine: { style: "none" },
+    catGridLine: { style: "none" },
+    valAxisLineShow: false,
+    catAxisMajorTickMark: "none",
+    chartArea: { fill: { color: bg }, border: { color: bg, pt: 0 } },
+    plotArea: { fill: { color: bg }, border: { color: bg, pt: 0 } },
+  };
 }
 
 function renderTitleSlide(slide, pptx, { title, author }, theme) {
-  slide.background = { color: theme.titleSlideBackground };
-
-  slide.addText(title || "Untitled", {
-    x: 1.0,
-    y: 1.3,
-    w: 8.0,
-    h: 1.4,
-    fontSize: 36,
-    bold: true,
-    color: theme.titleSlideTitleColor,
-    fontFace: theme.fontTitle,
-    align: "center",
-    valign: "bottom",
-  });
-
-  addAccentUnderline(slide, pptx, 4.25, 2.9, theme.titleSlideAccentColor);
-
-  if (author) {
-    slide.addText(author, {
-      x: 1.5,
-      y: 3.15,
-      w: 7.0,
-      h: 0.45,
-      fontSize: 14,
-      color: theme.titleSlideSubtitleColor,
-      fontFace: theme.fontBody,
-      align: "center",
-      italic: true,
-    });
-  }
-
-  // Bottom accent strip
-  slide.addShape(pptx.ShapeType.rect, {
-    x: 0,
-    y: SLIDE_H - 0.1,
-    w: "100%",
-    h: 0.1,
-    fill: { color: theme.titleSlideAccentColor },
-    line: { color: theme.titleSlideAccentColor },
-  });
-
-  addBranding(slide, theme.titleSlideBackground);
+  renderCover(slide, pptx, { title, meta: author }, theme);
 }
 
 function renderSectionSlide(
@@ -155,53 +372,16 @@ function renderSectionSlide(
   slideNumber,
   totalSlides
 ) {
-  slide.background = { color: theme.titleSlideBackground };
-
-  slide.addText(slideData.title || "", {
-    x: 1.0,
-    y: 1.5,
-    w: 8.0,
-    h: 1.2,
-    fontSize: 32,
-    bold: true,
-    color: theme.titleSlideTitleColor,
-    fontFace: theme.fontTitle,
-    align: "center",
-    valign: "bottom",
-  });
-
-  addAccentUnderline(slide, pptx, 4.25, 2.9, theme.titleSlideAccentColor);
-
-  if (slideData.subtitle) {
-    slide.addText(slideData.subtitle, {
-      x: 1.5,
-      y: 3.1,
-      w: 7.0,
-      h: 0.5,
-      fontSize: 16,
-      color: theme.titleSlideSubtitleColor,
-      fontFace: theme.fontBody,
-      align: "center",
-    });
-  }
-
-  const numColor = isDarkColor(theme.titleSlideBackground)
-    ? "FFFFFF"
-    : "000000";
-  slide.addText(`${slideNumber}  /  ${totalSlides}`, {
-    x: MARGIN_X,
-    y: 5.1,
-    w: 1.2,
-    h: 0.25,
-    fontSize: 8,
-    color: numColor,
-    transparency: 65,
-    fontFace: theme.fontBody,
-    align: "left",
-  });
-
-  addBranding(slide, theme.titleSlideBackground);
-
+  renderStatement(
+    slide,
+    pptx,
+    {
+      headline: slideData.headline || slideData.title,
+      subtitle: slideData.subtitle,
+    },
+    theme,
+    { slideNumber, totalSlides }
+  );
   if (slideData.notes) slide.addNotes(slideData.notes);
 }
 
@@ -214,51 +394,24 @@ function renderContentSlide(
   totalSlides
 ) {
   slide.background = { color: theme.background };
-
-  addTopAccentBar(slide, pptx, theme);
-
-  let contentStartY = 0.4;
-
-  if (slideData.title) {
-    slide.addText(slideData.title, {
+  let contentStartY = slideData.title
+    ? addActionTitle(slide, theme, slideData.title)
+    : 0.4;
+  if (slideData.subtitle) {
+    const subtitleBox = { w: CONTENT_W, h: 0.3, fontSize: 14 };
+    slide.addText(boundText(slideData.subtitle, subtitleBox), {
       x: MARGIN_X,
-      y: 0.3,
-      w: CONTENT_W,
-      h: 0.65,
-      fontSize: 24,
-      bold: true,
-      color: theme.titleColor,
-      fontFace: theme.fontTitle,
-      valign: "bottom",
+      y: contentStartY,
+      w: subtitleBox.w,
+      h: subtitleBox.h,
+      fontSize: subtitleBox.fontSize,
+      color: theme.subtitleColor,
+      fontFace: theme.fontFace,
+      margin: 0,
     });
-    contentStartY = 1.0;
-
-    if (slideData.subtitle) {
-      slide.addText(slideData.subtitle, {
-        x: MARGIN_X,
-        y: 1.0,
-        w: CONTENT_W,
-        h: 0.3,
-        fontSize: 13,
-        color: theme.subtitleColor,
-        fontFace: theme.fontBody,
-      });
-      contentStartY = 1.35;
-    }
-
-    addAccentUnderline(
-      slide,
-      pptx,
-      MARGIN_X,
-      contentStartY + 0.05,
-      theme.accentColor
-    );
-    contentStartY += 0.25;
+    contentStartY += 0.45;
   }
-
-  const footerY = 5.0;
-  const contentHeight = footerY - contentStartY - 0.15;
-
+  const contentHeight = FOOTER_Y - contentStartY - 0.15;
   if (slideData.table) {
     addTableContent(slide, pptx, slideData.table, theme, contentStartY);
   } else {
@@ -270,17 +423,17 @@ function renderContentSlide(
       contentHeight
     );
   }
-
-  addSlideFooter(slide, pptx, theme, slideNumber, totalSlides);
-  addBranding(slide, theme.background);
-
+  addFooter(slide, pptx, theme, {
+    slideNumber,
+    totalSlides,
+    note: slideData.note,
+  });
   if (slideData.notes) slide.addNotes(slideData.notes);
 }
 
 function renderBlankSlide(slide, pptx, theme, slideNumber, totalSlides) {
   slide.background = { color: theme.background };
-  addSlideFooter(slide, pptx, theme, slideNumber, totalSlides);
-  addBranding(slide, theme.background);
+  addFooter(slide, pptx, theme, { slideNumber, totalSlides });
 }
 
 function addBulletContent(slide, content, theme, startY, maxHeight) {
@@ -291,7 +444,7 @@ function addBulletContent(slide, content, theme, startY, maxHeight) {
     options: {
       fontSize: 15,
       color: theme.bodyColor,
-      fontFace: theme.fontBody,
+      fontFace: theme.fontFace,
       bullet: { code: "25AA", color: theme.bulletColor },
       paraSpaceAfter: 10,
     },
@@ -303,6 +456,7 @@ function addBulletContent(slide, content, theme, startY, maxHeight) {
     w: CONTENT_W,
     h: maxHeight,
     valign: "top",
+    fontFace: theme.fontFace,
   });
 }
 
@@ -318,7 +472,7 @@ function addTableContent(slide, pptx, tableData, theme, startY) {
         options: {
           bold: true,
           fontSize: 12,
-          fontFace: theme.fontBody,
+          fontFace: theme.fontFace,
           color: theme.tableHeaderColor,
           fill: { color: theme.tableHeaderBg },
           align: "left",
@@ -336,7 +490,7 @@ function addTableContent(slide, pptx, tableData, theme, startY) {
           text: cell,
           options: {
             fontSize: 11,
-            fontFace: theme.fontBody,
+            fontFace: theme.fontFace,
             color: theme.bodyColor,
             fill: {
               color: idx % 2 === 1 ? theme.tableAltRowBg : theme.background,
@@ -358,17 +512,21 @@ function addTableContent(slide, pptx, tableData, theme, startY) {
     y: startY,
     w: CONTENT_W,
     colW: CONTENT_W / colCount,
+    fontFace: theme.fontFace,
     rowH: 0.4,
     border: { type: "solid", pt: 0.5, color: theme.tableBorderColor },
   });
 }
 
 module.exports = {
+  textWidthEm,
+  boundText,
   isDarkColor,
-  addBranding,
-  addTopAccentBar,
-  addAccentUnderline,
-  addSlideFooter,
+  addActionTitle,
+  addFooter,
+  renderCover,
+  renderStatement,
+  chartBaseOptions,
   renderTitleSlide,
   renderSectionSlide,
   renderContentSlide,

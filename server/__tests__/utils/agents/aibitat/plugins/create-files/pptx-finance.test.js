@@ -223,7 +223,7 @@ describe("pptx-finance executive theme and layouts", () => {
     for (const themeName of getAvailableThemes()) {
       const theme = getTheme(themeName);
       const colorTokens = Object.entries(theme).flatMap(([key, value]) => {
-        if (key === "chartColors") return value;
+        if (Array.isArray(value)) return value;
         return /color|^chart|^status/i.test(key) ? [value] : [];
       });
 
@@ -272,8 +272,9 @@ describe("pptx-finance executive theme and layouts", () => {
     expect(summaryXml).toContain("18,420,000");
     const titleShape = summaryXml
       .match(/<p:sp>[\s\S]*?<\/p:sp>/g)
-      .find((shape) => shape.includes(fixture.sections[0].title));
-    expect(titleShape).toContain("<a:normAutofit");
+      .find((shape) => shape.includes(fixture.sections[0].title.slice(0, 15)));
+    expect(titleShape).not.toContain("<a:normAutofit");
+    expect(titleShape).toContain('sz="2600"');
     expect(scorecardXml).toContain("<a:tbl>");
     expect(risksXml).toContain("<a:tbl>");
     expect((decisionsXml.match(/roundRect/g) || []).length).toBeGreaterThanOrEqual(
@@ -393,7 +394,7 @@ describe("pptx-finance executive theme and layouts", () => {
     const [barXml, donutXml] = await getSlideChartXml(zip, 5);
 
     expect(barXml).toMatch(
-      /<c:dLbls>(?:(?!<\/c:dLbls>)[\s\S])*?<a:defRPr[^>]*sz="800"/
+      /<c:dLbls>(?:(?!<\/c:dLbls>)[\s\S])*?<a:defRPr[^>]*sz="1100"/
     );
     expect(donutXml).toContain('<c:showPercent val="1"/>');
     expect(donutXml).toContain('<c:showCatName val="0"/>');

@@ -141,7 +141,6 @@ async function generateThemePreview(themeName, themeConfig, options = {}) {
         date: currentDate,
         theme: themeConfig,
         margins: marginConfig,
-        logoBuffer: null,
       })
     );
 
@@ -155,7 +154,7 @@ async function generateThemePreview(themeName, themeConfig, options = {}) {
         default: createRunningHeader(docx, title, themeConfig),
       },
       footers: {
-        default: createRunningFooter(docx, null, themeConfig),
+        default: createRunningFooter(docx, themeConfig),
       },
     });
   } else {
@@ -165,7 +164,7 @@ async function generateThemePreview(themeName, themeConfig, options = {}) {
       },
       children: docElements,
       footers: {
-        default: createRunningFooter(docx, null, themeConfig),
+        default: createRunningFooter(docx, themeConfig),
       },
     });
   }

@@ -4,7 +4,6 @@ const {
   validateCSVData,
   detectDelimiter,
   inferCellType,
-  applyBranding,
   autoFitColumns,
   applyHeaderStyle,
   applyZebraStriping,
@@ -311,8 +310,6 @@ module.exports.CreateExcelFile = {
                   freezePanes(worksheet, 1, 0);
                 }
               }
-
-              applyBranding(workbook);
 
               const buffer = await workbook.xlsx.writeBuffer();
               const bufferSizeKB = (buffer.length / 1024).toFixed(2);

@@ -5,19 +5,21 @@ const SECTION_BUILDER_PROMPT = `You are a focused presentation section builder. 
 You have access to web search and web scraping tools, but only use them when the topic genuinely requires up-to-date information you don't already know (e.g., current statistics, recent events, specific company data). For general knowledge topics, create slides directly from your existing knowledge.
 
 RULES:
-- Create 2-5 slides for this section (no more)
-- Each content slide should have 3-6 concise bullet points
-- Be specific and data-driven when possible
-- Include speaker notes with key talking points
-- Do NOT add a title slide - only section content
+- 1 to 3 slides for this section. One idea per slide. The slide title IS the conclusion — a full sentence that contains the key number (e.g. "รายได้ต่ำกว่าแผน 5 ใน 8 เดือน"), never a topic label.
+- Any 3+ numbers over time or categories MUST be a "chart" slide. 2–4 headline metrics MUST be a "kpi" slide. Bullets are for arguments only: max 3 per slide, ≤ 12 words each.
+- Never emit a "statement" slide that only repeats the next slide's title. Use "statement" only for a section verdict that stands alone.
+- Put source / period / caveat in "note" (one line), not in bullets.
+- Numbers in chart/kpi data are raw numbers, never formatted strings.
 
 When finished, you MUST call the submit-section-slides tool with your slides. Do not respond with raw JSON - always use the tool.
 
 Available slide layouts:
-- "section": Divider slide with title + optional subtitle
+- "kpi": 2-4 headline metrics. data: { "kpis": [{ "label", "value" (number), "unit"?, "delta"? (formatted string, e.g. "-36.5%"), "status"? ("good" | "warn" | "bad", colours the delta pill), "note"? }] }
+- "chart": 3+ numbers over time or categories. data: { "type": "column" | "bar" | "line" | "pie" | "doughnut", "categories": ["..."], "series": [{ "name", "values": [numbers] }], "unit"?, "note"? }
+- "two-column": a chart beside its argument. data: { "chart": { same shape as a chart slide }, "points": ["..."], "note"? }
+- "statement": a section verdict that stands alone. data: { "headline", "subtitle"? }
 - "content": Bullet points with title + content array + optional notes
-  - May include "table": { "headers": ["Col1", "Col2"], "rows": [["a", "b"]] }
-- "blank": Empty slide`;
+  - May include "table": { "headers": ["Col1", "Col2"], "rows": [["a", "b"]] }`;
 
 /**
  * Spawns a focused child AIbitat agent to build slides for a single presentation section.
@@ -85,7 +87,7 @@ async function runSectionAgent({
             properties: {
               layout: {
                 type: "string",
-                enum: ["section", "content", "blank"],
+                enum: ["statement", "content", "kpi", "chart", "two-column"],
                 description: "The slide layout type",
               },
               title: {
@@ -94,7 +96,7 @@ async function runSectionAgent({
               },
               subtitle: {
                 type: "string",
-                description: "Optional subtitle (for section layout)",
+                description: "Optional subtitle (for statement layout)",
               },
               content: {
                 type: "array",
@@ -104,6 +106,16 @@ async function runSectionAgent({
               notes: {
                 type: "string",
                 description: "Speaker notes for this slide",
+              },
+              data: {
+                type: "object",
+                description:
+                  "Structured data for the kpi, chart, two-column, and statement layouts.",
+              },
+              note: {
+                type: "string",
+                description:
+                  "One-line source, period, or caveat shown in the slide footer.",
               },
               table: {
                 type: "object",
@@ -224,7 +236,7 @@ function buildSectionPrompt({
   }
 
   parts.push(
-    `\nCreate 2-5 detailed slides and submit them using the submit-section-slides tool. Only use web search/scraping if you genuinely lack the information needed.`
+    `\nCreate 1-3 detailed slides and submit them using the submit-section-slides tool. Only use web search/scraping if you genuinely lack the information needed.`
   );
 
   return parts.join("\n");
@@ -236,9 +248,12 @@ function buildSectionPrompt({
 function buildFallbackSlides(section) {
   const slides = [
     {
-      layout: "section",
+      layout: "statement",
       title: section.title,
-      subtitle: section.subtitle || "",
+      data: {
+        headline: section.title,
+        ...(section.subtitle ? { subtitle: section.subtitle } : {}),
+      },
     },
   ];
 
