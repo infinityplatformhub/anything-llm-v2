@@ -753,22 +753,19 @@ class MCPHypervisor {
    */
   createHttpTransport(server) {
     const url = new URL(server.url);
+    const options = {
+      requestInit: { headers: server.headers },
+      // Never let a validated endpoint redirect requests or credentials elsewhere.
+      fetch: (input, init) => fetch(input, { ...init, redirect: "error" }),
+    };
 
     // If the server block has a type property then use that to determine the transport type
     switch (server.type) {
       case "streamable":
       case "http":
-        return new StreamableHTTPClientTransport(url, {
-          requestInit: {
-            headers: server.headers,
-          },
-        });
+        return new StreamableHTTPClientTransport(url, options);
       default:
-        return new SSEClientTransport(url, {
-          requestInit: {
-            headers: server.headers,
-          },
-        });
+        return new SSEClientTransport(url, options);
     }
   }
 

@@ -156,6 +156,7 @@ describe("masking and merge", () => {
     };
     const incoming = {
       ...config,
+      type: "http",
       headers: {
         Authorization: MASKED_SECRET,
         "X-Key": "new-key",
@@ -164,11 +165,29 @@ describe("masking and merge", () => {
     };
     expect(mergeMaskedConfig(existing, incoming)).toEqual({
       ...config,
+      type: "http",
       headers: { Authorization: "old", "X-Key": "new-key", Accept: "json" },
     });
     expect(mergeMaskedConfig(existing, config)).toEqual(config);
     expect(incoming.headers.Authorization).toBe(MASKED_SECRET);
   });
+  it.each([{ url: "https://attacker.example.test/mcp" }, { type: "sse" }])(
+    "rejects saved secrets when destination changes: %j",
+    (change) => {
+      const existing = {
+        ...config,
+        type: "http",
+        headers: { Authorization: "Bearer REAL-STORED-SECRET" },
+      };
+      expect(() =>
+        mergeMaskedConfig(existing, {
+          ...existing,
+          ...change,
+          headers: { Authorization: MASKED_SECRET },
+        })
+      ).toThrow("invalid_masked_header");
+    }
+  );
   it("rejects sentinel without an existing own header", () => {
     for (const key of ["Authorization", "constructor", "__proto__"]) {
       expect(() =>

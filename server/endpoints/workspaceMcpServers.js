@@ -7,6 +7,7 @@ const {
   validateWorkspaceServerName,
   validateWorkspaceServerConfig,
   maskConfig,
+  serverEndpointChanged,
   mergeMaskedConfig,
   parseMcpServersBlock,
 } = require("../utils/MCP/serverConfig");
@@ -95,6 +96,38 @@ function boundedResult(value) {
   return { result: bytes.subarray(0, end).toString("utf8"), truncated: true };
 }
 
+// Global file entries bypass workspace validation. Expose only catalog metadata.
+function globalCatalogConfig(server) {
+  const config = {
+    type: ["http", "streamable", "sse"].includes(server.type)
+      ? server.type
+      : server.command
+        ? "stdio"
+        : "sse",
+    anythingllm: server.anythingllm
+      ? {
+          perWorkspaceAuth: server.anythingllm.perWorkspaceAuth === true,
+          suppressedTools: Array.isArray(server.anythingllm.suppressedTools)
+            ? server.anythingllm.suppressedTools.filter(
+                (tool) => typeof tool === "string"
+              )
+            : [],
+        }
+      : null,
+  };
+  try {
+    const url = new URL(server.url);
+    if (["http:", "https:"].includes(url.protocol)) {
+      url.username = "";
+      url.password = "";
+      config.url = url.href;
+    }
+  } catch {
+    // Invalid legacy URLs are omitted, never echoed in an error or response.
+  }
+  return config;
+}
+
 function workspaceMcpServersEndpoints(app) {
   if (!app) return;
   const root = "/workspace/:slug/mcp-servers";
@@ -137,6 +170,10 @@ function workspaceMcpServersEndpoints(app) {
       ];
       const servers = await Promise.all(
         catalog.map(async ({ name, server, owner }) => {
+          const config =
+            owner === "global"
+              ? globalCatalogConfig(server)
+              : maskConfig(server);
           const connection = await WorkspaceMcpConnection.find(
             workspace.id,
             name
@@ -146,8 +183,8 @@ function workspaceMcpServersEndpoints(app) {
             owner,
             config:
               response.locals.user?.role === ROLES.manager
-                ? { anythingllm: server.anythingllm ?? null }
-                : maskConfig(server),
+                ? { anythingllm: config.anythingllm ?? null }
+                : config,
             enabled: connection?.enabled === true,
             connected: !!connection?.access_token,
             needsReauth:
@@ -213,6 +250,9 @@ function workspaceMcpServersEndpoints(app) {
         bodyOf(request)?.config
       );
       validateWorkspaceServerConfig(config);
+      // Fail closed: never publish a new destination while old grants remain.
+      if (serverEndpointChanged(existing.config, config))
+        await WorkspaceMcpConnection.clearTokens(workspace.id, name);
       await WorkspaceMcpServer.update(workspace.id, name, config);
       await mcp.stopWorkspaceServer(workspace.id, name);
       return response.status(200).json({

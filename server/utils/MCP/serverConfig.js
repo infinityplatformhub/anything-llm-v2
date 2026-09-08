@@ -100,6 +100,10 @@ function maskConfig(config) {
   };
 }
 
+function serverEndpointChanged(existing, incoming) {
+  return existing.url !== incoming.url || existing.type !== incoming.type;
+}
+
 function mergeMaskedConfig(existing, incoming) {
   if (!isObject(incoming)) throw new Error("invalid_config");
   if (!Object.hasOwn(incoming, "headers")) return { ...incoming };
@@ -109,7 +113,11 @@ function mergeMaskedConfig(existing, incoming) {
     headers: Object.fromEntries(
       Object.entries(incoming.headers).map(([key, value]) => {
         if (value !== MASKED_SECRET) return [key, value];
-        if (!existing.headers || !Object.hasOwn(existing.headers, key))
+        if (
+          serverEndpointChanged(existing, incoming) ||
+          !existing.headers ||
+          !Object.hasOwn(existing.headers, key)
+        )
           throw new Error("invalid_masked_header");
         return [key, existing.headers[key]];
       })
@@ -145,6 +153,7 @@ module.exports = {
   validateWorkspaceServerName,
   validateWorkspaceServerConfig,
   maskConfig,
+  serverEndpointChanged,
   mergeMaskedConfig,
   parseMcpServersBlock,
   MASKED_SECRET,

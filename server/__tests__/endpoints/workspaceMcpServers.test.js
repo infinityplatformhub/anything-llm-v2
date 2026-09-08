@@ -11,7 +11,11 @@ jest.mock("../../models/workspaceMcpServer", () => ({
   },
 }));
 jest.mock("../../models/workspaceMcpConnection", () => ({
-  WorkspaceMcpConnection: { find: jest.fn(), isAllowed: jest.fn() },
+  WorkspaceMcpConnection: {
+    find: jest.fn(),
+    isAllowed: jest.fn(),
+    clearTokens: jest.fn(),
+  },
 }));
 jest.mock("../../utils/MCP", () => jest.fn());
 jest.mock("../../models/systemSettings");
@@ -155,6 +159,64 @@ describe("workspace MCP server endpoints", () => {
     });
     expect(JSON.stringify(response.body)).not.toContain("secret");
   });
+  it.each(["admin", "manager"])(
+    "never exposes raw global config to %s",
+    async (role) => {
+      mcp.mcpServerConfigs = [
+        {
+          name: "shared",
+          server: {
+            url: "https://user:password-secret@mcp.example.com/mcp",
+            type: "http",
+            headers: { "Custom-Credential": "header-secret" },
+            anythingllm: {
+              perWorkspaceAuth: true,
+              suppressedTools: ["write"],
+              credential: "option-secret",
+            },
+          },
+        },
+        {
+          name: "local",
+          server: {
+            command: "node",
+            args: ["--token=arg-secret"],
+            env: { API_KEY: "env-secret-value" },
+          },
+        },
+      ];
+      const response = await invoke("get", root, undefined, { role });
+      expect(response.statusCode).toBe(200);
+      const globals = response.body.servers.filter(
+        ({ owner }) => owner === "global"
+      );
+      expect(JSON.stringify(globals)).not.toContain("secret");
+      expect(globals[0].config.anythingllm).toEqual({
+        perWorkspaceAuth: true,
+        suppressedTools: ["write"],
+      });
+      if (role === "admin") {
+        expect(globals[0].config).toEqual({
+          url: "https://mcp.example.com/mcp",
+          type: "http",
+          anythingllm: { perWorkspaceAuth: true, suppressedTools: ["write"] },
+        });
+        expect(globals[1].config).toEqual({ type: "stdio", anythingllm: null });
+      } else {
+        expect(globals[0].config).not.toHaveProperty("url");
+      }
+      expect(mcp.mcpServerConfigs[0].server.url).toContain("password-secret");
+    }
+  );
+  it("omits malformed global URL rather than returning credential input", async () => {
+    mcp.mcpServerConfigs = [
+      { name: "broken", server: { url: "password-secret:not a URL" } },
+    ];
+    const response = await invoke("get");
+    expect(response.statusCode).toBe(200);
+    expect(response.body.servers[1].config).not.toHaveProperty("url");
+    expect(JSON.stringify(response.body.servers[1])).not.toContain("secret");
+  });
   it("shadows global names with owned configs", async () => {
     mcp.mcpServerConfigs.push({
       name: "erp",
@@ -229,6 +291,61 @@ describe("workspace MCP server endpoints", () => {
       owner: "workspace",
       config: incoming,
     });
+  });
+  it.each([
+    { url: "https://attacker.example.test/mcp" },
+    { url: "https://mcp.example.com/other" },
+    { type: "sse" },
+    { type: undefined },
+  ])("rejects masked headers when endpoint changes: %j", async (change) => {
+    WorkspaceMcpServer.find.mockResolvedValue({ config });
+    const response = await invoke("put", `${root}/:name`, {
+      config: {
+        ...config,
+        ...change,
+        headers: { Authorization: MASKED_SECRET },
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body.error).toBe("invalid_masked_header");
+    expect(WorkspaceMcpServer.update).not.toHaveBeenCalled();
+    expect(WorkspaceMcpConnection.clearTokens).not.toHaveBeenCalled();
+  });
+  it.each([
+    { url: "https://attacker.example.test/mcp" },
+    { url: "https://mcp.example.com/other" },
+    { type: "sse" },
+  ])("clears tokens before saving changed endpoint: %j", async (change) => {
+    WorkspaceMcpServer.find.mockResolvedValue({ config });
+    const incoming = { ...config, ...change, headers: {} };
+    const response = await invoke("put", `${root}/:name`, { config: incoming });
+    expect(response.statusCode).toBe(200);
+    expect(WorkspaceMcpConnection.clearTokens).toHaveBeenCalledWith(5, "erp");
+    expect(
+      WorkspaceMcpConnection.clearTokens.mock.invocationCallOrder[0]
+    ).toBeLessThan(WorkspaceMcpServer.update.mock.invocationCallOrder[0]);
+    expect(WorkspaceMcpServer.update).toHaveBeenCalledWith(5, "erp", incoming);
+    expect(mcp.stopWorkspaceServer).toHaveBeenCalledWith(5, "erp");
+  });
+  it("preserves OAuth connection on unchanged endpoint edit", async () => {
+    WorkspaceMcpServer.find.mockResolvedValue({ config });
+    const response = await invoke("put", `${root}/:name`, {
+      config: { ...config, headers: { Authorization: MASKED_SECRET } },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(WorkspaceMcpConnection.clearTokens).not.toHaveBeenCalled();
+  });
+  it("does not save new destination when token clearing fails", async () => {
+    WorkspaceMcpServer.find.mockResolvedValue({ config });
+    WorkspaceMcpConnection.clearTokens.mockRejectedValue(
+      new Error("db-secret")
+    );
+    const response = await invoke("put", `${root}/:name`, {
+      config: { ...config, url: "https://other.example/mcp", headers: {} },
+    });
+    expect(response.statusCode).toBe(500);
+    expect(response.body.error).toBe("operation_failed");
+    expect(WorkspaceMcpServer.update).not.toHaveBeenCalled();
   });
   it("stops before deleting owned server", async () => {
     WorkspaceMcpServer.find.mockResolvedValue({ config });

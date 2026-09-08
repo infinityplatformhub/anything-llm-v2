@@ -118,6 +118,51 @@ afterEach(() => {
   jest.useRealTimers();
   jest.restoreAllMocks();
 });
+describe("HTTP transport redirect policy", () => {
+  it.each(["http", "streamable", "sse", undefined])(
+    "refuses redirects before reaching internal service for %s",
+    async (type) => {
+      const http = require("http");
+      let internalRequests = 0;
+      const internal = http.createServer((_req, res) => {
+        internalRequests++;
+        res.end("internal-secret");
+      });
+      const redirector = http.createServer((_req, res) => {
+        res.writeHead(302, {
+          Location: `http://127.0.0.1:${internal.address().port}/private`,
+        });
+        res.end();
+      });
+      const listen = (server) =>
+        new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const close = (server) =>
+        new Promise((resolve) => {
+          server.close(resolve);
+          server.closeAllConnections();
+        });
+      try {
+        await listen(internal);
+        await listen(redirector);
+        const url = `http://127.0.0.1:${redirector.address().port}/mcp`;
+        layer.createHttpTransport({ url, type });
+        const constructor =
+          type === "http" || type === "streamable"
+            ? Transport
+            : SSEClientTransport;
+        const options = constructor.mock.calls[0][1];
+        const send = options.fetch ?? fetch;
+        await expect(
+          send(url, { redirect: "follow", signal: AbortSignal.timeout(2000) })
+        ).rejects.toThrow();
+        expect(internalRequests).toBe(0);
+      } finally {
+        await Promise.all([close(redirector), close(internal)]);
+      }
+    }
+  );
+});
+
 describe("workspace-owned MCP runtime", () => {
   it("lists decrypted configs with ownership", async () => {
     expect(await layer.workspaceServerConfigs(7)).toEqual([
