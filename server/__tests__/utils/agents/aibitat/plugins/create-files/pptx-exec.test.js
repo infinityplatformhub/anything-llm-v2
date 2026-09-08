@@ -988,3 +988,70 @@ describe("outline mode text safety", () => {
     }
   });
 });
+
+describe("Thai text measurement and token-safe bounding", () => {
+  const { textWidthEm, boundText } = require("../../../../../../utils/agents/aibitat/plugins/create-files/pptx/utils.js");
+  const theme = getTheme("executive");
+  // The exact headlines from the executive theme preview deck that were being ellipsized.
+  const COVER_HEADLINE = "รายได้ยังไม่ฟื้น ต้องเร่งปิดช่องว่างก่อนสิ้นปี";
+  const CLOSING_HEADLINE = "เร่งรายได้ Q4 ให้ถึงเป้า";
+  const runs = (xml) => [...xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((m) => m[1]);
+
+  test("Thai cover and statement headlines render in full at 48pt without an ellipsis", async () => {
+    const cover = await buildDeck((s, p) => renderCover(s, p, { headline: COVER_HEADLINE }, theme));
+    const statement = await buildDeck((s, p) => renderStatement(s, p, { headline: CLOSING_HEADLINE }, theme));
+    for (const [xml, headline] of [[cover, COVER_HEADLINE], [statement, CLOSING_HEADLINE]]) {
+      const text = runs(xml).join("");
+      expect(text).toContain(headline);
+      expect(text).not.toContain("…");
+      expect(xml).toMatch(/sz="4800"/);
+      expect(xml).not.toContain("<a:normAutofit");
+    }
+  });
+
+  test("a statement headline with an explicit line break keeps both lines", async () => {
+    const headline = "\u0e40\u0e23\u0e48\u0e07\u0e23\u0e32\u0e22\u0e44\u0e14\u0e49\n\u0e04\u0e38\u0e21\u0e04\u0e48\u0e32\u0e1a\u0e23\u0e34\u0e01\u0e32\u0e23 \u0e23\u0e31\u0e01\u0e29\u0e32\u0e01\u0e33\u0e44\u0e23";
+    const xml = await buildDeck((s, p) => renderStatement(s, p, { headline }, theme));
+    expect(runs(xml)).toEqual(headline.split("\n"));
+    expect(xml).not.toContain("\u2026");
+  });
+
+  test("a 40-character Thai headline fits two lines at 48pt", () => {
+    const headline = COVER_HEADLINE.slice(0, 40);
+    const bounded = boundText(headline, { w: 8.8, h: 2.2, fontSize: 48 });
+    expect(bounded).not.toContain("…");
+    // Thai wraps at word boundaries that carry no space, so lines rejoin without one.
+    expect(bounded.replace(/\s/g, "")).toBe(headline.replace(/\s/g, ""));
+    expect(bounded.split("\n")).toHaveLength(2);
+  });
+
+  test("two-column points never split a number across runs", async () => {
+    const { slideXml } = await renderOne("two-column", {
+      chart: { type: "column", categories: ["ม.ค."], series: [{ name: "รายได้", values: [1] }] },
+      points: [
+        "ค่าบริการทั่วไป 7,799,188 บาท เป็นต้นทุนหลักที่ต้องทบทวนสัญญา",
+        "ค่าพนักงาน 4,255,441 บาท เป็นรายการใหญ่อันดับสอง",
+      ],
+    });
+    const texts = runs(slideXml);
+    for (const number of ["7,799,188", "4,255,441"]) {
+      expect(texts.filter((text) => text.includes(number))).toHaveLength(1);
+      // Any run holding part of the number must hold all of it: no digit or comma
+      // of the figure may appear in a run that lacks the whole figure.
+      for (const text of texts) {
+        const partial = new RegExp(`(?<!${number.slice(0, -1)})${number.slice(0, 3)}`);
+        if (partial.test(text)) expect(text).toContain(number);
+      }
+    }
+    expect(slideXml).not.toContain("<a:normAutofit");
+  });
+
+  test("Thai combining marks add zero advance width", () => {
+    const COMBINING = /[ัิ-ฺ็-๎]/g;
+    for (const text of ["รายได้ยังไม่ฟื้น", "เร่งรายได้ Q4 ให้ถึงเป้า", "ค่าบริการทั่วไป"]) {
+      const bare = text.replace(COMBINING, "");
+      expect(bare).not.toBe(text);
+      expect(textWidthEm(text)).toBeCloseTo(textWidthEm(bare), 10);
+    }
+  });
+});

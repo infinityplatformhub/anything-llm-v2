@@ -15,9 +15,15 @@ function isDarkColor(hexColor) {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5;
 }
 
-// ponytail: conservative em-width budgeting, not font shaping. Explicit line breaks
-// and ellipsis keep fixed-size text in its box; use a shaping engine if exact wrap is needed.
-const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+// ponytail: conservative em-width budgeting, not font shaping. The factors below are
+// measured approximations for a UI sans (Leelawadee UI, Calibri), not real font metrics:
+//   - Thai consonants and inline vowels advance about as far as Latin lowercase.
+//   - Thai above/below vowels and tone marks (U+0E31, U+0E34-U+0E3A, U+0E47-U+0E4E,
+//     all of them Unicode Marks) stack on the character before them and advance zero.
+// Over-estimating ellipsizes text that would have fit; under-estimating overflows the
+// box, and nothing rescues it because shrink-to-fit stays off by design. Swap in a
+// shaping engine such as HarfBuzz if exact wrapping ever matters more than this.
+const THAI_BASE = /[\u0E00-\u0E7F]/;
 function textWidthEm(text) {
   return [...text].reduce(
     (sum, char) =>
@@ -34,30 +40,107 @@ function textWidthEm(text) {
                 ? 0.75
                 : /[a-z0-9]/.test(char)
                   ? 0.62
-                  : 0.8),
+                  : THAI_BASE.test(char)
+                    ? 0.62
+                    : 0.8),
     0
   );
 }
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+// ICU word segmentation is the break-candidate oracle. It keeps a number's digits and
+// separators in one segment, keeps a Thai mark with the character it sits on, and knows
+// Thai word boundaries, which is the only way to break Thai: it is written without spaces.
+const words = new Intl.Segmenter(undefined, { granularity: "word" });
+const NUMBER_TOKEN = /^[\d.,]+$/;
+
+function tokenize(text) {
+  const tokens = [];
+  for (const { segment } of words.segment(text)) {
+    const prev = tokens[tokens.length - 1];
+    // ICU already keeps "7,799,188" whole, but merging across every digit/separator
+    // seam keeps the never-break-a-number rule independent of ICU's locale data.
+    if (prev && /[\d.,]$/.test(prev) && /^[\d.,]/.test(segment))
+      tokens[tokens.length - 1] = prev + segment;
+    else tokens.push(segment);
+  }
+  return tokens;
+}
+
 function boundText(text, { w, h, fontSize }) {
-  const lineBudget = (w * 72) / fontSize;
   text = String(text ?? "");
+  const lineBudget = (w * 72) / fontSize;
   if (!text.includes("\n") && textWidthEm(text) <= lineBudget) return text;
   const maxLines = Math.max(1, Math.floor((h * 72) / (fontSize * 1.3)));
+  const ellipsisWidth = textWidthEm("\u2026");
   const lines = [""];
   let used = 0;
-  for (const { segment } of graphemes.segment(String(text ?? ""))) {
-    const width = textWidthEm(segment);
-    if (segment === "\n" || used + width > lineBudget - 1) {
-      if (lines.length === maxLines) return lines.join("\n").trimEnd() + "…";
+  const append = (piece, width) => {
+    lines[lines.length - 1] += piece;
+    used += width;
+  };
+  // Trailing spaces are the break itself, never content: drop them from every line.
+  const finish = () => lines.map((line) => line.trimEnd()).join("\n");
+  // The ellipsis needs its own width on the last line, so give back whole graphemes
+  // until it fits. Giving back graphemes rather than tokens keeps as much of the last
+  // word as the box allows; the token that did not fit is already gone either way.
+  const ellipsize = () => {
+    let last = lines[lines.length - 1].trimEnd();
+    while (last && textWidthEm(last) + ellipsisWidth > lineBudget)
+      last = [...graphemes.segment(last)].slice(0, -1).map((g) => g.segment).join("").trimEnd();
+    lines[lines.length - 1] = last;
+    return finish().trimEnd() + "\u2026";
+  };
+  for (const token of tokenize(text)) {
+    if (token === "\n") {
+      if (lines.length === maxLines) return ellipsize();
       lines.push("");
       used = 0;
-      if (segment === "\n") continue;
+      continue;
     }
-    lines[lines.length - 1] += segment;
-    used += width;
+    const width = textWidthEm(token);
+    if (used + width <= lineBudget) {
+      append(token, width);
+      continue;
+    }
+    if (used > 0) {
+      // The token does not fit here, so it moves whole to the next line. Truncating
+      // instead of wrapping drops the token entirely: the ellipsis lands on a break
+      // candidate, never mid-word and never mid-number.
+      if (lines.length === maxLines) return ellipsize();
+      lines.push("");
+      used = 0;
+      if (/^\s+$/.test(token)) continue; // The break consumed this space.
+      if (width <= lineBudget) {
+        append(token, width);
+        continue;
+      }
+    }
+    if (NUMBER_TOKEN.test(token)) {
+      // A number wider than a whole line can only be cut. Cut it here and mark the
+      // cut: "7,799,1..." reads as an incomplete figure, where wrapping it onto the
+      // next line would read as the two separate figures 7,799,1 and 88.
+      for (const { segment } of graphemes.segment(token)) {
+        const glyph = textWidthEm(segment);
+        if (used + glyph + ellipsisWidth > lineBudget) break;
+        append(segment, glyph);
+      }
+      return ellipsize();
+    }
+    // A single word wider than a line has no break candidate inside it. Grapheme
+    // segmentation is the fallback: it keeps each Thai mark with its base character,
+    // so a break never lands immediately after a combining mark.
+    for (const { segment } of graphemes.segment(token)) {
+      const glyph = textWidthEm(segment);
+      if (used + glyph > lineBudget && used > 0) {
+        if (lines.length === maxLines) return ellipsize();
+        lines.push("");
+        used = 0;
+      }
+      append(segment, glyph);
+    }
   }
-  return lines.join("\n");
+  return finish();
 }
 
 function footerNote(note) {
@@ -202,7 +285,9 @@ function renderCover(slide, pptx, { title, headline, subtitle, meta }, theme) {
 
 function renderStatement(slide, pptx, { headline, subtitle }, theme, ctx) {
   addGround(slide, pptx, theme);
-  const headlineBox = { w: COVER_W, h: 1.5, fontSize: 48 };
+  // Two 48pt lines at 1.3 spacing need 1.73in; the old 1.5in box capped the headline
+  // at one line, so any two-line headline was ellipsized rather than wrapped.
+  const headlineBox = { w: COVER_W, h: 1.75, fontSize: 48 };
   slide.addText(boundText(headline || "", headlineBox), {
     x: COVER_MARGIN_X,
     y: 1.9,
@@ -218,7 +303,7 @@ function renderStatement(slide, pptx, { headline, subtitle }, theme, ctx) {
     const subtitleBox = { w: COVER_W, h: 0.8, fontSize: 18 };
     slide.addText(boundText(subtitle, subtitleBox), {
       x: COVER_MARGIN_X,
-      y: 3.6,
+      y: 3.75,
       w: subtitleBox.w,
       h: subtitleBox.h,
       fontSize: subtitleBox.fontSize,
