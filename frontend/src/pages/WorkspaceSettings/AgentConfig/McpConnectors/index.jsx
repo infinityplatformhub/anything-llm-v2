@@ -51,7 +51,7 @@ export default function McpConnectors({ workspace, canManage }) {
     }
   }, [slug, canManage]);
 
-  const hasExpiry = connections.some((connection) => connection.expiresAt);
+  const hasExpiry = servers.some((server) => server.expiresAt);
   useEffect(() => {
     if (!hasExpiry) return;
     setNow(Date.now());
@@ -221,9 +221,10 @@ export default function McpConnectors({ workspace, canManage }) {
       ) : (
         <div className="flex flex-col gap-4">
           {servers.map((server) => {
-            const connection = connections.find(
-              (item) => item.serverName === server.name
-            );
+            const connection = {
+              ...connections.find((item) => item.serverName === server.name),
+              ...server,
+            };
             const oauth = server.config?.anythingllm?.perWorkspaceAuth === true;
             const expiry = connection?.expiresAt
               ? new Date(connection.expiresAt)
