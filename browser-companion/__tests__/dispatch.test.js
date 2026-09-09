@@ -4,6 +4,7 @@ import {
   COMMANDS,
   GATE_KINDS,
   GATE_RESOLVERS,
+  SEARCH_SHAPED_GATES,
   assertCommandTable,
   withDefaults,
 } from "../src/background/dispatch.js";
@@ -373,6 +374,69 @@ describe("the allowlist gate cannot be bypassed by any command", () => {
     );
   });
 
+  // A review added a second matchedTab-gated command without `opaqueDenial`.
+  // Two tests went red, both generic new-command ones, and the first said "add
+  // an ARGS fixture" — so adding the fixture, the obvious next step, produced a
+  // GREEN suite with the oracle fully reopened. `opaqueDenial` was honoured-if-
+  // present, which made it the silent opt-out this module refuses to have for
+  // `gate`. It is now required at LOAD, and the error names the missing field.
+  it("refuses to load a search-shaped command that declares no opaqueDenial", () => {
+    expect(() =>
+      assertCommandTable({
+        find: { gate: "matchedTab", run: async () => ({}) },
+      })
+    ).toThrow(/opaqueDenial/);
+    // And the message has to say WHY, or the next developer deletes the field
+    // rather than filling it in.
+    expect(() =>
+      assertCommandTable({
+        find: { gate: "matchedTab", run: async () => ({}) },
+      })
+    ).toThrow(/enumeration oracle/i);
+  });
+
+  it("accepts a search-shaped command that declares one", () => {
+    expect(() =>
+      assertCommandTable({
+        find: {
+          gate: "matchedTab",
+          opaqueDenial: "denied: nothing matched.",
+          run: async () => ({}),
+        },
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses an opaqueDenial that is not a string", () => {
+    expect(() =>
+      assertCommandTable({
+        find: {
+          gate: "matchedTab",
+          opaqueDenial: { toString: () => "denied" },
+          run: async () => ({}),
+        },
+      })
+    ).toThrow(/non-string opaqueDenial/);
+  });
+
+  it("requires opaqueDenial for every search-shaped gate, enumerated", () => {
+    // Reads the real set rather than naming matchedTab, so a future searching
+    // resolver added to SEARCH_SHAPED_GATES is covered without editing this.
+    for (const gate of SEARCH_SHAPED_GATES) {
+      expect(() =>
+        assertCommandTable({ probe: { gate, run: async () => ({}) } })
+      ).toThrow(/opaqueDenial/);
+    }
+  });
+
+  it("declares every search-shaped gate that a resolver actually searches", () => {
+    // The set is hand-maintained, so this pins the one entry that exists and
+    // will fail if matchedTab is ever dropped from it.
+    expect(SEARCH_SHAPED_GATES.has("matchedTab")).toBe(true);
+    for (const gate of SEARCH_SHAPED_GATES)
+      expect([gate, GATE_KINDS.includes(gate)]).toEqual([gate, true]);
+  });
+
   it("offers no gate kind that skips the allowlist", () => {
     // There is no `gate: "none"` to reach for. If one is ever added, this fails
     // and whoever added it has to justify it in review.
@@ -734,6 +798,119 @@ describe("per-command gate subjects", () => {
     expect(second.error).toBe(third.error);
   });
 
+  // @edge — THE RESIDUAL CHANNEL. Making both denials byte-identical closed the
+  // message leak and left a second one underneath: `find` took the FIRST match,
+  // so the ok flag itself answered "does a forbidden tab containing <needle>
+  // sit earlier in tab order than mine?". The agent can arrange that comparison
+  // because page_navigate is gated on the HOST while path and query are
+  // attacker-chosen — park the needle in your own allowed url, switch on it,
+  // read the flag. A review amplified it character by character with only
+  // permitted calls and recovered a forbidden tab's full path in ~1,200 round
+  // trips.
+  //
+  // The property that closes it: the reply must not depend on forbidden tabs AT
+  // ALL — not on their presence, their contents, or their position.
+  it("gives the same answer no matter where a forbidden tab sits in tab order", async () => {
+    // The needle MUST appear in both urls, or the ordering is never exercised
+    // and the test passes for the wrong reason. (It did, on the first draft:
+    // the needle was absent from the secret url, so `find` never reached it and
+    // removing the pre-filter left the test green. Caught by sabotage.)
+    const needle = "chase";
+    const mine = {
+      id: 1,
+      url: `https://www.linkedin.com/s?q=${needle}`,
+      title: "Mine",
+    };
+    const secret = {
+      id: 2,
+      url: `https://${needle}.example/accounts/9021`,
+      title: "S",
+    };
+    const ask = (tabs) =>
+      handle(
+        { requestId: "r_ord", cmd: "switch", url: needle },
+        deps({ listAgentTabs: async () => tabs })
+      );
+
+    // The four worlds the review distinguished. Before the fix, the second
+    // returned ok:false and the rest ok:true — one clean bit per query.
+    const aloneResult = await ask([mine]);
+    const secretFirst = await ask([secret, mine]);
+    const secretLast = await ask([mine, secret]);
+    const secretNoMatch = await ask([
+      { id: 3, url: "https://unrelated.example/x", title: "S" },
+      mine,
+    ]);
+
+    for (const out of [aloneResult, secretFirst, secretLast, secretNoMatch])
+      expect(out.ok).toBe(true);
+    // Identical replies, not merely identical flags.
+    const json = (o) => JSON.stringify({ ...o, requestId: null });
+    expect(json(secretFirst)).toBe(json(aloneResult));
+    expect(json(secretLast)).toBe(json(aloneResult));
+    expect(json(secretNoMatch)).toBe(json(aloneResult));
+  });
+
+  it("cannot be made to answer a question about a tab it may not see", async () => {
+    // The oracle reduced to its primitive: same needle, same allowed tabs, the
+    // ONLY difference being what forbidden tabs exist. Every reply must match.
+    const mine = { id: 1, url: "https://www.linkedin.com/s?q=chase", title: "M" };
+    const worlds = [
+      [mine],
+      [{ id: 9, url: "https://chase.example/accounts/9021", title: "A" }, mine],
+      [{ id: 9, url: "https://chase.example/", title: "B" }, mine],
+      [{ id: 9, url: "https://internal.acme.test/hr/chase", title: "C" }, mine],
+      [{ id: 9, url: "https://unrelated.test/", title: "D" }, mine],
+    ];
+    const replies = [];
+    for (const tabs of worlds) {
+      const out = await handle(
+        { requestId: "r_prim", cmd: "switch", url: "chase" },
+        deps({ listAgentTabs: async () => tabs })
+      );
+      replies.push(JSON.stringify(out));
+    }
+    expect(new Set(replies).size).toBe(1);
+  });
+
+  it("switches to the agent's own tab even when a forbidden tab matches first", async () => {
+    // The fix must not merely equalise by denying everything: the legitimate
+    // switch still has to work, and must land on the allowed tab.
+    const d = deps({
+      listAgentTabs: async () => [
+        { id: 9, url: "https://chase.example/accounts/9021", title: "S" },
+        { id: 1, url: "https://www.linkedin.com/jobs/", title: "Mine" },
+      ],
+    });
+    const out = await handle(
+      { requestId: "r_ord2", cmd: "switch", url: "linkedin.com/jobs" },
+      d
+    );
+    expect(out.ok).toBe(true);
+    expect(d.switchToTab).toHaveBeenCalledWith(1);
+    expect(d.switchToTab).not.toHaveBeenCalledWith(9);
+  });
+
+  it("searches exactly the tabs page_tabs would show", async () => {
+    // The two commands must share one view of the world; a divergence between
+    // them is where this class of bug lives.
+    const tabs = [
+      { id: 9, url: "https://chase.example/accounts", title: "S" },
+      { id: 1, url: "https://www.linkedin.com/feed/", title: "F" },
+    ];
+    const d = deps({ listAgentTabs: async () => tabs });
+    const listed = await handle({ requestId: "r_v1", cmd: "tabs" }, d);
+    const visibleIds = listed.data.tabs.map((t) => t.id);
+
+    for (const tab of tabs) {
+      const out = await handle(
+        { requestId: `r_v_${tab.id}`, cmd: "switch", url: tab.url },
+        deps({ listAgentTabs: async () => tabs })
+      );
+      expect([tab.id, out.ok]).toEqual([tab.id, visibleIds.includes(tab.id)]);
+    }
+  });
+
   it("records a no-match switch as 'no page', not as an allowlist refusal", async () => {
     // The REPLY for these two cases is deliberately identical (the oracle fix),
     // which means the audit log is now the only place the distinction survives
@@ -752,10 +929,21 @@ describe("per-command gate subjects", () => {
     );
   });
 
-  it("still records the real url of a denied switch in the LOCAL audit log", async () => {
-    // The oracle fix withholds the url from the REPLY, which crosses the
-    // network. The audit log is the user's own record on their own machine and
-    // must keep it, or the denial becomes unauditable.
+  it("records a denied switch without a url, because it never looked at one", async () => {
+    // THIS TEST CHANGED WITH THE TAB-ORDER FIX, and the change is the point.
+    //
+    // It previously asserted the matched tab's real url reached the audit log —
+    // true when forbidden tabs were searched and then refused. They are no
+    // longer searched at all, so there is no matched url to record: the denial
+    // is "nothing you may act on matched", which is the honest entry.
+    //
+    // The cost is named rather than hidden: the audit log no longer shows WHICH
+    // forbidden tab a probe brushed against, because the code no longer knows.
+    // That is the price of not looking, and not looking is what closes the
+    // channel. The user's own record of their own tabs is `page_tabs` and the
+    // browser itself; what the log must capture is that the agent probed, which
+    // it still does — every attempt lands as a denial with the command and the
+    // needle's outcome.
     const d = deps({
       listAgentTabs: async () => [
         { id: 392, url: "https://mail.google.com/mail/u/0/#inbox", title: "M" },
@@ -766,9 +954,13 @@ describe("per-command gate subjects", () => {
       expect.objectContaining({
         cmd: "switch",
         outcome: "denied",
-        url: "https://mail.google.com/mail/u/0/#inbox",
+        detail: "no page to act on",
       })
     );
+    // And the forbidden url is nowhere in the log either — the agent must not
+    // be able to launder it through the record it can later be shown.
+    const logged = d.record.mock.calls.map(([e]) => JSON.stringify(e)).join(" ");
+    expect(logged).not.toMatch(/mail\.google/);
   });
 
   // @edge — page_tabs must not become a way to enumerate the user's browsing

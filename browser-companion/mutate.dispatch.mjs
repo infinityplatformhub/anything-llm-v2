@@ -37,11 +37,20 @@ const DI = "src/background/dispatch.js";
 const CD = "src/background/cdp.js";
 const PS = "src/background/pageState.js";
 const FILES = [DI, CD, PS];
-// The WHOLE suite, not just this task's three files. Two reasons: the other
-// modules' tests are green again (the earlier narrowing was for a tree that was
-// transiently red from another agent's in-flight edits), and the
-// KILLED-AT-LOAD baseline is only meaningful against a stable total.
-const TESTS = [];
+// SCOPED to this task's three files, and the reason is the baseline rather than
+// convenience: task 8 is editing socket.js/background.test.js in this same
+// worktree right now, so the full-suite total moves between runs (474/483/484
+// observed minutes apart). A KILLED-AT-LOAD check compares against a baseline
+// total, so a total that drifts underneath it turns another agent's edit into a
+// phantom kill. Narrowing to files nobody else is touching is what keeps the
+// instrument honest.
+//
+// Widen this back to [] once the branch is quiet.
+const TESTS = [
+  "__tests__/dispatch.test.js",
+  "__tests__/cdp.test.js",
+  "__tests__/pageState.test.js",
+];
 
 const originals = new Map(FILES.map((f) => [f, readFileSync(f, "utf8")]));
 const restore = () => {
@@ -218,8 +227,8 @@ mutate("gate-subject", "matchedTab returns a url even when nothing matched", DI,
   "return { urls: match ? [match.url] : [], target: match };",
   "return { urls: [match?.url], target: match };");
 mutate("gate-subject", "tabs no longer filters the list it returns", DI,
-  "const visible = tabs.filter((tab) => isAllowed(tab?.url, allowlist));",
-  "const visible = tabs;");
+  "      const visible = tabs.filter((tab) => isAllowed(tab?.url, allowlist));\n      const withheld = tabs.length - visible.length;",
+  "      const visible = tabs;\n      const withheld = tabs.length - visible.length;");
 
 // --- axis: same-origin ------------------------------------------------------
 mutate("same-origin", "same-origin check removed", DI,
@@ -281,7 +290,18 @@ mutate("bound", "a browser error is echoed unbounded", DI,
   "    const detail = String(error?.message ?? error);");
 
 // --- axis: the page_switch enumeration oracle (review HIGH 1) ---------------
-mutate("oracle", "the allowlist denial quotes the matched tab's url again", DI,
+// THESE TWO NOW SURVIVE, AND THAT IS THE FIX WORKING — verified, not assumed.
+// Instrumenting the allowlist-denial branch shows `switch` reaches it ZERO
+// times across every world (forbidden tab alone, forbidden + allowed, no tabs),
+// while a control `navigate` to a forbidden url hits it once. With forbidden
+// tabs filtered out BEFORE the search, matchedTab can only ever yield an
+// ALLOWED url, so that branch is unreachable for this command and mutating its
+// message is unobservable by construction.
+//
+// They are kept rather than deleted: the branch is still live for every other
+// command, and if a future change lets `switch` reach it again these start
+// failing, which is exactly when someone should look.
+mutate("oracle", "the allowlist denial quotes the matched tab's url again [UNREACHABLE for switch since the pre-filter]", DI,
   "        error:\n          spec.opaqueDenial ??\n          `denied: ${echo(url)} is not in the allowlist",
   "        error:\n          `denied: ${echo(url)} is not in the allowlist");
 mutate("oracle", "the no-match denial becomes distinguishable", DI,
@@ -294,12 +314,46 @@ mutate("oracle", "page_switch stops declaring an opaque denial", DI,
 // leaks nothing — it survived while testing nothing, the same inert-textual-
 // change trap as the duplicate `gate` key. It now makes the denial actually
 // carry the matched url, which is the property under test.
-mutate("oracle", "the opaque denial leaks the url in its text", DI,
+// Survives for the same verified reason as the mutation above: this edits the
+// allowlist-denial branch, which `switch` no longer reaches.
+mutate("oracle", "the opaque denial leaks the url in its text [UNREACHABLE for switch since the pre-filter]", DI,
   "        error:\n          spec.opaqueDenial ??\n          `denied: ${echo(url)} is not in the allowlist",
   "        error:\n          (spec.opaqueDenial ? `${spec.opaqueDenial} (${echo(url)})` : null) ??\n          `denied: ${echo(url)} is not in the allowlist");
 mutate("oracle", "the denied switch is no longer recorded with its real url", DI,
   "        url: typeof url === \"string\" ? echo(url) : null,",
   "        url: null,");
+
+// --- axis: the tab-order side channel (re-review HIGH 1, residual) ----------
+// Identical replies do not close a side channel if the CHOICE between them
+// still depends on the secret. These perturb the CHOICE, not the message.
+mutate("side-channel", "forbidden tabs are searched again (find takes the first match)", DI,
+  "    const visible = tabs.filter((tab) => isAllowed(tab?.url, allowlist));\n    const match = visible.find((tab) => tab.url.includes(needle));",
+  "    const match = tabs.find(\n      (tab) => typeof tab?.url === \"string\" && tab.url.includes(needle)\n    );");
+mutate("side-channel", "the filter is applied AFTER the search, not before", DI,
+  "    const visible = tabs.filter((tab) => isAllowed(tab?.url, allowlist));\n    const match = visible.find((tab) => tab.url.includes(needle));",
+  "    const found = tabs.find((tab) => typeof tab?.url === \"string\" && tab.url.includes(needle));\n    const match = isAllowed(found?.url, allowlist) ? found : undefined;");
+mutate("side-channel", "the filter admits every tab", DI,
+  "    const visible = tabs.filter((tab) => isAllowed(tab?.url, allowlist));\n    const match = visible.find((tab) => tab.url.includes(needle));",
+  "    const visible = tabs.filter((tab) => typeof tab?.url === \"string\");\n    const match = visible.find((tab) => tab.url.includes(needle));");
+// EQUIVALENT, verified by running it: `handle` always passes a real allowlist,
+// so the default never applies — the probe switched to the agent's own allowed
+// tab exactly as unmutated. Kept as documentation that the parameter is
+// mandatory in practice; if a caller ever omits it, this stops being equivalent
+// and the empty default would deny everything (fail closed, not open).
+mutate("side-channel", "the resolver stops receiving the allowlist [EQUIVALENT: handle always passes one]", DI,
+  "  async matchedTab({ command, deps, allowlist }) {",
+  "  async matchedTab({ command, deps, allowlist = [] }) {");
+
+// --- axis: opaqueDenial must be declared (re-review MEDIUM) -----------------
+mutate("must-declare", "the opaqueDenial requirement is dropped", DI,
+  "    if (SEARCH_SHAPED_GATES.has(spec.gate) && !spec.opaqueDenial) {",
+  "    if (false) {");
+mutate("must-declare", "the search-shaped gate set is emptied", DI,
+  'const SEARCH_SHAPED_GATES = new Set(["matchedTab"]);',
+  "const SEARCH_SHAPED_GATES = new Set([]);");
+mutate("must-declare", "a non-string opaqueDenial is accepted", DI,
+  '    if (spec.opaqueDenial !== undefined && typeof spec.opaqueDenial !== "string")',
+  "    if (false)");
 
 // --- axis: fabricated CDP success (review HIGH 2) ---------------------------
 mutate("fabricated", "a resolved undefined is accepted as success", CD,

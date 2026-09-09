@@ -97,13 +97,14 @@ function sleep(ms) {
  * reported to the agent as `ok: true`. An agent told a click succeeded when
  * nothing happened will act on that, which is worse than any error message.
  *
- * A resolved `undefined` is treated as a failure for every method. That is a
- * deliberate trade with one cost, named because it is not free: a CDP method
- * whose success genuinely carries no result would now throw. None of the
- * methods this module sends is such a method — `Input.*` and `Runtime.evaluate`
- * all resolve an object — so the trade buys a real guard for no present loss.
- * Adding a void-returning method here means revisiting this line, not deleting
- * it.
+ * A resolved `undefined` is treated as a failure for every method, and that is
+ * safe rather than a trade — an earlier version of this comment called it a
+ * trade against future void-returning methods, which was wrong. A CDP command
+ * that returns no data still resolves an EMPTY OBJECT, `{}`, not `undefined`;
+ * `{}` passes both checks below and is returned untouched. `undefined` is not
+ * "this method has no return value", it is "no reply came back". The methods
+ * this module sends (`Input.dispatchMouseEvent`, `Input.insertText`,
+ * `Input.dispatchKeyEvent`, `Runtime.evaluate`) were checked against that.
  *
  * @param {number} tabId
  * @param {string} method a CDP method name

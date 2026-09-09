@@ -160,18 +160,57 @@ const GATE_RESOLVERS = Object.freeze({
    * The indistinguishability is now enforced by `opaqueDenial` on the command
    * spec, and by a test comparing the two error STRINGS rather than just their
    * `ok` flags, which is what let the gap hide.
+   *
+   * IDENTICAL REPLIES ARE NOT ENOUGH: THE SEARCH ITSELF IS THE CHANNEL.
+   *
+   * Making both denials byte-identical closed the message leak and left a
+   * second one underneath, because the CHOICE between success and denial still
+   * depended on the secret. `find` takes the FIRST match, so with forbidden
+   * tabs in the collection the ok flag answers "does a forbidden tab containing
+   * <needle> sit earlier in tab order than mine?" — and the agent can arrange
+   * the comparison, since `page_navigate` is gated on the destination HOST
+   * while the path and query are attacker-chosen. Park a needle in your own
+   * allowlisted url, switch on it, read the flag. A review amplified that
+   * character by character using only permitted calls and recovered a
+   * forbidden tab's full path and query in ~1,200 round trips, every one of
+   * which looks like an ordinary denial in the audit log.
+   *
+   * So the fix is not a better message. Forbidden tabs are removed BEFORE the
+   * search, so they cannot influence which tab is found, in what order, or
+   * whether one is found at all. `page_switch` now searches exactly the set
+   * `page_tabs` would show — the two commands finally have the same view of
+   * the world — and the reply stops varying with what the user has open.
+   *
+   * The remaining gate check below is deliberately NOT redundant: this
+   * narrowing is a resolver deciding what to search, and the decision about
+   * whether a url may be acted on stays in one place, for every command.
    */
-  async matchedTab({ command, deps }) {
+  async matchedTab({ command, deps, allowlist }) {
     const needle = requireString(command.url, "url");
     const tabs = (await deps.listAgentTabs()) ?? [];
-    const match = tabs.find(
-      (tab) => typeof tab?.url === "string" && tab.url.includes(needle)
-    );
+    // Filtered first, then searched. Order is the entire point.
+    const visible = tabs.filter((tab) => isAllowed(tab?.url, allowlist));
+    const match = visible.find((tab) => tab.url.includes(needle));
     return { urls: match ? [match.url] : [], target: match };
   },
 });
 
 const GATE_KINDS = Object.freeze(Object.keys(GATE_RESOLVERS));
+
+/**
+ * Gates whose subject is DISCOVERED by searching the user's browser, rather
+ * than named outright by the command.
+ *
+ * A command on one of these can be asked a question about tabs it may not see,
+ * and every observable difference in the answer — the message, the ok flag,
+ * which tab was chosen — is a bit about the user's browsing. `assertCommandTable`
+ * therefore requires such a command to declare an `opaqueDenial`, at load.
+ *
+ * Kept beside `GATE_RESOLVERS` on purpose: adding a resolver that searches
+ * anything means adding its name here, and the two sit in the same screen so
+ * the omission is visible rather than remembered.
+ */
+const SEARCH_SHAPED_GATES = new Set(["matchedTab"]);
 
 /* ------------------------------------------------------------------------- */
 /* The command table                                                          */
@@ -400,6 +439,28 @@ function assertCommandTable(table) {
     }
     if (typeof spec.run !== "function")
       throw new Error(`dispatch: command "${cmd}" has no run().`);
+
+    // A search-shaped gate discovers its subject by looking through the user's
+    // tabs, so its denial must say nothing about what was found. `opaqueDenial`
+    // was previously honoured-if-present (`spec.opaqueDenial ?? …`), which made
+    // it exactly the silent opt-out this module refuses to offer for `gate`: a
+    // review added a second `matchedTab` command without it, the two failing
+    // tests both said "add an ARGS fixture" and neither mentioned the field, so
+    // adding the fixture — the obvious next step — produced a green suite with
+    // the oracle fully reopened at runtime.
+    //
+    // Required at LOAD for the same reason `gate` is: a rule only a test
+    // enforces is a rule a rushed branch removes, and the failure has to name
+    // the thing that is missing.
+    if (SEARCH_SHAPED_GATES.has(spec.gate) && !spec.opaqueDenial) {
+      throw new Error(
+        `dispatch: command "${cmd}" uses the search-shaped gate "${spec.gate}" but declares no opaqueDenial. A command that finds its subject by searching the user's tabs must deny with a constant that reveals nothing about what was found — otherwise its denial is an enumeration oracle for the tabs the user has open.`
+      );
+    }
+    if (spec.opaqueDenial !== undefined && typeof spec.opaqueDenial !== "string")
+      throw new Error(
+        `dispatch: command "${cmd}" declares a non-string opaqueDenial.`
+      );
   }
   return table;
 }
@@ -550,10 +611,18 @@ export async function handle(command, deps) {
   try {
     // ---- THE GATE. Unconditional, before any tab is resolved or attached. ---
     const allowlist = await d.loadAllowlist();
+    // `allowlist` is passed to the resolver, but ONLY so a search-shaped
+    // resolver can narrow what it searches — never so a resolver can decide
+    // whether a url is permitted. That judgement stays below, in one place, for
+    // every command. See `matchedTab`, which is the whole reason this argument
+    // exists: a resolver that searches the user's tabs must not have forbidden
+    // tabs in the collection it searches, or the CHOICE it makes leaks them
+    // even when every reply is identical.
     const { urls, target } = await GATE_RESOLVERS[spec.gate]({
       command,
       deps: d,
       currentUrl,
+      allowlist,
     });
 
     // An empty list is a denial, never a vacuous pass. See the header, point 4.
@@ -674,6 +743,7 @@ export {
   COMMANDS,
   GATE_RESOLVERS,
   GATE_KINDS,
+  SEARCH_SHAPED_GATES,
   CommandError,
   assertCommandTable,
   // Exported for one assertion: that dependency defaulting never INVENTS a
