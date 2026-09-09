@@ -100,6 +100,22 @@ function agentWebsocket(app) {
         return;
       });
 
+      // Defence in depth. The primary guard is at the express-ws bootstrap
+      // (utils/boot/bootWebSockets.js), which covers every socket the server
+      // makes - including the unauthenticated, route-less ones this listener can
+      // never see. BE CLEAR ABOUT WHAT THIS ADDS: with that guard in place this
+      // listener is not what keeps the process alive, and removing it alone
+      // leaves every test green. It is kept so this route stays safe on its own
+      // terms if it is ever mounted on a ws server booted some other way, and so
+      // the log names the invocation rather than only the path.
+      socket.on("error", (error) => {
+        console.error(
+          `[agentWebsocket] Socket error on invocation ${String(request.params.uuid)}:`,
+          error
+        );
+        socket.close();
+      });
+
       await Telemetry.sendTelemetry("agent_chat_started");
       await agentHandler.createAIbitat({ socket });
       // Socket can close while aibitat is being built - don't start a session nobody is listening to.

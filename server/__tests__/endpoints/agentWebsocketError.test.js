@@ -113,6 +113,17 @@ function connect(port, uuid = UUID) {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Waits for the child's stderr to match. The exit code is observable the moment
+ * the process dies, but stderr is piped and arrives asynchronously, so asserting
+ * on it right after a fixed delay races the flush.
+ */
+async function waitForStderr(h, pattern, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !pattern.test(h.stderr)) await delay(25);
+  return h.stderr;
+}
+
 afterEach(() => {
   for (const socket of clients.splice(0)) socket.terminate();
   harness?.child.kill("SIGKILL");
@@ -132,11 +143,14 @@ describe("agent websocket hostile input", () => {
 
     expect(harness.exit).toBeNull();
     expect(bystander.readyState).toBe(WebSocket.OPEN);
-    // Contained, not swallowed: the cause must still be diagnosable from logs.
-    // The guard lives at the express-ws bootstrap, not on this route, so the
-    // tag is [WebSocket] - see __tests__/utils/boot/bootWebSockets.test.js.
-    expect(harness.stderr).toMatch(/\[WebSocket\]/);
-    expect(harness.stderr).toMatch(/WS_ERR_INVALID_OPCODE/);
+    // Contained, not swallowed: the cause must stay diagnosable from logs.
+    // Either guard may be the one that logs it - the bootstrap listener
+    // (utils/boot/bootWebSockets.js) normally wins the race, the route listener
+    // is defence in depth - so accept either tag. What must not happen is a
+    // silent swallow.
+    const logged = await waitForStderr(harness, /WS_ERR_INVALID_OPCODE/);
+    expect(logged).toMatch(/\[(WebSocket|agentWebsocket)\]/);
+    expect(logged).toMatch(/WS_ERR_INVALID_OPCODE/);
   });
 
   it("runs the close cleanup exactly once for the socket it kills", async () => {

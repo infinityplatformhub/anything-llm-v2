@@ -104,6 +104,19 @@ function connect(port, route) {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Waits for the child's stderr to match. A fixed delay is not enough: the exit
+ * code is observable the moment the process dies, but stderr is piped and
+ * arrives asynchronously, so asserting on it right after a delay races the
+ * flush. Polls until it matches or the deadline passes, then returns whatever
+ * arrived so the assertion reports the real content on failure.
+ */
+async function waitForStderr(h, pattern, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !pattern.test(h.stderr)) await delay(25);
+  return h.stderr;
+}
+
 afterEach(() => {
   for (const socket of clients.splice(0)) socket.terminate();
   harness?.child.kill("SIGKILL");
@@ -124,8 +137,9 @@ describe("websocket bootstrap under hostile frames", () => {
 
     expect(harness.exit).toBeNull();
     // Contained, not swallowed: the cause must stay diagnosable from logs.
-    expect(harness.stderr).toMatch(/\[WebSocket\]/);
-    expect(harness.stderr).toMatch(/WS_ERR_INVALID_OPCODE/);
+    const logged = await waitForStderr(harness, /WS_ERR_INVALID_OPCODE/);
+    expect(logged).toMatch(/\[WebSocket\]/);
+    expect(logged).toMatch(/WS_ERR_INVALID_OPCODE/);
   });
 
   it("keeps other connected clients alive when one sends a malformed frame", async () => {
@@ -163,7 +177,9 @@ describe("websocket bootstrap under hostile frames", () => {
     await delay(SETTLE_MS);
 
     expect(harness.exit).toBeNull();
-    expect(harness.stderr).toMatch(/WS_ERR_INVALID_OPCODE/);
+    expect(await waitForStderr(harness, /WS_ERR_INVALID_OPCODE/)).toMatch(
+      /WS_ERR_INVALID_OPCODE/
+    );
   });
 
   it("still serves normal traffic after absorbing a malformed frame", async () => {
