@@ -465,14 +465,10 @@ describe("browser-companion plugin", () => {
       );
     });
 
-    // Every tool that CHANGES the page invalidates the [id] map page_state
-    // built, and the model reads only these descriptions — so each one has to
-    // say so where the model will see it. Without this, a model calls
-    // page_state once at the start of a turn, scrolls, and then clicks an id
-    // that now points at something else.
-    //
-    // The name is asserted, not a sentence: a rewording that still directs the
-    // model back to page_state passes, and one that drops the direction fails.
+    // Token presence for the four map-invalidating tools. Kept as the weakest
+    // and most obvious statement of the property — the allowlist below subsumes
+    // it, but this one names the tools, so a dropped tool reads as "page_scroll
+    // stopped mentioning page_state" rather than as a regex miss.
     it("tells the model to re-run page_state after anything that changes the page", () => {
       const aibitat = aibitatWith({ user_id: 7 });
       for (const name of [
@@ -485,18 +481,85 @@ describe("browser-companion plugin", () => {
       }
     });
 
-    // Substring checks alone cannot tell "call page_state again" from "you do
-    // not need to call page_state again" — both contain the token. The exact
-    // inversion of this property, told to the model as fact, is the failure
-    // this guards: a description asserting that ids survive is a correctness
-    // change wearing a docs-change disguise, and it must not pass.
+    // ALLOWLIST, not a blocklist — this is the load-bearing guard.
     //
-    // Phrased as a negation guard rather than as required prose, so ordinary
-    // copy-editing stays green and only a reversal of the claim goes red.
+    // A blocklist of "ids persist" phrasings cannot work here, and that is not
+    // a gap to be closed by adding phrasings. Two of the evasions that beat the
+    // previous blocklist state nothing false at all:
+    //
+    //   "Re-running page_state before each click wastes a turn"
+    //   "prefer an [id] you already have over spending another call"
+    //
+    // Both are true sentences that steer the model straight into the stale-map
+    // failure. No vocabulary list can catch a true sentence, so the assertion
+    // has to be that the required INSTRUCTION is present, not that forbidden
+    // words are absent. An allowlist cannot be evaded by inventing new words
+    // for the wrong claim, because the wrong claim will not contain the right
+    // instruction.
+    //
+    // Deliberate failure direction: if an honest rewrite uses a directive verb
+    // this list lacks, the test goes RED and someone widens ACCEPTED_DIRECTIVE.
+    // That is a false alarm on a good edit — annoying, and the safe way round.
+    // A blocklist fails the other way: silent green on a bad edit.
+    const ACCEPTED_DIRECTIVE =
+      /\b(call|re-?call|re-?run|rerun|re-?read|reread|refresh|redo|repeat|request|ask for|get|grab|take|capture|update|renew|check|list|query)\b[^.;:]{0,40}\bpage_state\b/i;
+
+    // Ordering words that put the page_state call BEFORE the action. "in the
+    // same turn" counts: it is the phrasing the shipped description uses and it
+    // carries the same instruction.
+    const ORDERING =
+      /\b(before|beforehand|first|prior to|same turn|each time|every time|again)\b/i;
+
+    // Every tool that changes the page invalidates the [id] map, and the model
+    // reads only these descriptions. Each must positively instruct the re-read.
+    it("requires every page-changing tool to instruct a fresh page_state call", () => {
+      const aibitat = aibitatWith({ user_id: 7 });
+      for (const name of [
+        "page_scroll",
+        "page_key",
+        "page_switch",
+        "page_navigate",
+      ]) {
+        const description = aibitat.functions.get(name).description;
+        expect(`${name}: ${description}`).toMatch(ACCEPTED_DIRECTIVE);
+      }
+    });
+
+    // The acting tools need the instruction AND the ordering: "call page_state"
+    // with no "before/first/same turn" leaves the model free to call it after.
+    it("requires page_click and page_type to instruct a page_state call up front", () => {
+      const aibitat = aibitatWith({ user_id: 7 });
+      for (const name of ["page_click", "page_type"]) {
+        const description = aibitat.functions.get(name).description;
+        expect(`${name}: ${description}`).toMatch(ACCEPTED_DIRECTIVE);
+        expect(`${name}: ${description}`).toMatch(ORDERING);
+      }
+    });
+
+    // page_state itself has no directive to carry — it IS the tool being
+    // directed to. What it must assert is the limited lifetime of what it
+    // returns, which is the fact every other description depends on. A rewrite
+    // saying the ids last the session cannot state this and passes nothing.
+    it("requires page_state to say its ids are only good for the current page", () => {
+      const aibitat = aibitatWith({ user_id: 7 });
+      const description = aibitat.functions.get("page_state").description;
+      expect(description).toMatch(/page_click|page_type/);
+      expect(description).toMatch(
+        /\b(stale|only valid|no longer valid|invalidat\w*|right now|as it is now|out of date|outdated)\b/i
+      );
+    });
+
+    // Cheap second line, kept deliberately: it catches the two reversals a
+    // careless edit actually produces — they are the natural way to write the
+    // mistake — before the allowlist has to reason about them. It is NOT relied
+    // on to be complete; the allowlist above is what holds when someone invents
+    // new vocabulary. Extended with the wording families that beat its first
+    // version (stable, deterministic, carry over, survives, shared between,
+    // does not shift, untouched).
     it("never tells the model that element ids stay valid", () => {
       const aibitat = aibitatWith({ user_id: 7 });
       const CONTRADICTS_INVALIDATION =
-        /(do|does|don't|do not|need not|no need)[^.]{0,40}\bcall page_state\b|\bstays? valid\b|\bstay valid\b|\bremain valid\b|\breuse the same\b|\bcached\b|\bonly (?:need|call) (?:this|it) once\b|\bforever\b/i;
+        /(do|does|don't|do not|need not|no need)[^.]{0,40}\bcall page_state\b|\bstays? valid\b|\bstay valid\b|\bremain valid\b|\breuse the same\b|\bcached\b|\bonly (?:need|call) (?:this|it) once\b|\bforever\b|\bstable identifier\b|\bdeterministic\b|\bdoes not shift\b|\bcarry over\b|\bcarries over\b|\bsurvives?\b|\buntouched\b|\bshared between\b|\brest of the session\b|\bnever renumbers?\b|\bwastes a turn\b|\bsecond time\b/i;
       for (const [name, fn] of aibitat.functions) {
         expect(
           `${name}: ${fn.description}`.match(CONTRADICTS_INVALIDATION)
