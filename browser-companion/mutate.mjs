@@ -191,23 +191,52 @@ mutate("audit", "chain poisoned by a failed write", AU,
 mutate("audit", "no entry cap", AU, "entries.slice(-MAX_ENTRIES)", "entries");
 mutate("audit", "cap keeps the oldest instead of the newest", AU,
   "entries.slice(-MAX_ENTRIES)", "entries.slice(0, MAX_ENTRIES)");
-mutate("audit", "no field is ever truncated", AU,
-  "return text.length > limit ? `${text.slice(0, limit)}…[truncated]` : text;",
-  "return text;");
 mutate("audit", "every field is always truncated", AU,
-  "return text.length > limit ?", "return true ?");
+  "  if (serialisedBytes(text) <= limitBytes) return text;",
+  "  if (false) return text;");
 
 // --- axis: uncapped fields (the reviewed MEDIUM finding) --------------------
 mutate("cap", "url is left uncapped", AU,
-  "url: cap(url, MAX_URL_CHARS),", "url,");
+  "url: cap(url, MAX_URL_BYTES),", "url,");
 mutate("cap", "cmd is left uncapped", AU,
-  "cmd: cap(cmd, MAX_LABEL_CHARS),", "cmd,");
+  "cmd: cap(cmd, MAX_LABEL_BYTES),", "cmd,");
 mutate("cap", "outcome is left uncapped", AU,
-  "outcome: cap(outcome, MAX_LABEL_CHARS),", "outcome,");
+  "outcome: cap(outcome, MAX_LABEL_BYTES),", "outcome,");
 mutate("cap", "url cap raised to a useless size", AU,
-  "const MAX_URL_CHARS = 2048;", "const MAX_URL_CHARS = 50_000_000;");
+  "const MAX_URL_BYTES = 2048;", "const MAX_URL_BYTES = 50_000_000;");
 mutate("cap", "label cap raised to a useless size", AU,
-  "const MAX_LABEL_CHARS = 128;", "const MAX_LABEL_CHARS = 50_000_000;");
+  "const MAX_LABEL_BYTES = 128;", "const MAX_LABEL_BYTES = 50_000_000;");
+
+// --- axis: byte budgeting vs character counting (F-M2a) ---------------------
+mutate("bytes", "budget counts UTF-16 units, not serialised bytes", AU,
+  "  return encoder.encode(JSON.stringify(text)).length - 2;",
+  "  return text.length;");
+mutate("bytes", "measures raw UTF-8, ignoring JSON escaping", AU,
+  "  return encoder.encode(JSON.stringify(text)).length - 2;",
+  "  return encoder.encode(text).length;");
+mutate("bytes", "truncates by UTF-16 slice, splitting astral chars", AU,
+  "  let kept = \"\";\n  let used = 0;\n  for (const char of text) {\n    const cost = serialisedBytes(char);\n    if (used + cost > limitBytes) break;\n    kept += char;\n    used += cost;\n  }\n  return `${kept}…[truncated]`;",
+  "  return `${text.slice(0, limitBytes)}…[truncated]`;");
+mutate("bytes", "over-budget check inverted, nothing is ever capped", AU,
+  "  if (serialisedBytes(text) <= limitBytes) return text;",
+  "  return text;");
+
+// --- axis: saveAllowlist failure visibility (F-M2b) -------------------------
+mutate("save", "swallows a rejected write, as before the fix", AL,
+  "  try {\n    await chrome.storage.local.set({ [STORAGE_KEY]: list });\n  } catch (error) {",
+  "  try {\n    await chrome.storage.local.set({ [STORAGE_KEY]: list });\n  } catch (ignored) {\n    return;\n  }\n  if (false) {\n    const error = null;");
+mutate("save", "no console signal on a failed save", AL,
+  "    console.error(\n      \"[AnythingLLM Companion] failed to save the allowlist; the previous \" +",
+  "    String(\n      \"[AnythingLLM Companion] failed to save the allowlist; the previous \" +");
+mutate("save", "does not read back, so a lost write looks saved", AL,
+  "  const stored = await loadAllowlist();\n  const matches =\n    stored.length === list.length && stored.every((v, i) => v === list[i]);\n  if (!matches) {",
+  "  const stored = await loadAllowlist();\n  const matches = true;\n  if (!matches) {");
+mutate("save", "read-back compares length only", AL,
+  "    stored.length === list.length && stored.every((v, i) => v === list[i]);",
+  "    stored.length === list.length;");
+mutate("save", "accepts a non-array, emptying the gate", AL,
+  "  if (!Array.isArray(list)) {\n    throw new TypeError(\"saveAllowlist expects an array of host entries\");\n  }",
+  "");
 
 // --- axis: quota failure observability --------------------------------------
 mutate("quota", "quota failure swallowed, never surfaced", AU,

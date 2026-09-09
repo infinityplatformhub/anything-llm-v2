@@ -21,19 +21,38 @@ const MAX_ENTRIES = 500;
 // a URL that was never allowlisted, never visited, and chosen entirely by the
 // peer. Capping `detail` alone left a 5MB url producing a 4.77MB stored entry.
 //
+// The budgets are in SERIALISED BYTES, not string length, because that is what
+// storage charges and the attacker picks the characters. Counting UTF-16 units
+// is off by up to 6x: `JSON.stringify` renders a control character as a
+// six-byte escape for one counted unit, a quote or backslash as 2, CJK as 3
+// bytes. A 2048-*unit* cap therefore admitted a 12KB field, and the log as a
+// whole reached a measured 12.4MB -- above the quota the cap existed to stay
+// under. Measured per-unit costs: ascii 1.00, quote/backslash/newline 2.00,
+// astral emoji 2.00, CJK 3.00, control 6.00.
+//
 // 2048 is the classic interop ceiling for a URL and is far above any real one;
 // truncation here costs a little forensic detail and buys a hard bound.
-const MAX_URL_CHARS = 2048;
+const MAX_URL_BYTES = 2048;
 // `cmd` and `outcome` are enum-like labels -- the longest real command is
 // `page_navigate` at 13 characters. A generous cap still rejects a payload.
-const MAX_LABEL_CHARS = 128;
-const MAX_DETAIL_CHARS = 2000;
+const MAX_LABEL_BYTES = 128;
+const MAX_DETAIL_BYTES = 2000;
 
-// With all four fields capped, one entry cannot exceed roughly
-// 2048 + 128 + 128 + 2000 + timestamp + JSON overhead ~= 4.4KB, so the whole
-// log is bounded at about 2.2MB against chrome.storage.local's ~10MB default.
-// That arithmetic is the actual fix: it puts quota exhaustion by this module
-// out of reach, rather than relying on the recovery path below to cope with it.
+// With all four fields budgeted in bytes, one entry cannot exceed
+// 2048 + 128 + 128 + 2000 + timestamp + JSON overhead ~= 4.4KB REGARDLESS of
+// the characters chosen, so the whole log is bounded near 2.2MB against
+// chrome.storage.local's ~10MB default.
+//
+// What that arithmetic does NOT cover, and why the recovery path below is still
+// load-bearing rather than a formality:
+//   - The quota is for the WHOLE extension. This module's ~2.2MB is bounded,
+//     but the space actually available to it depends on data it cannot see
+//     (the allowlist, the server URL and key, anything a later task stores).
+//   - `TextEncoder` measures the UTF-8 bytes of the JSON text. Chrome's own
+//     accounting includes the key name and internal overhead, so the real
+//     charge is a little higher than what is budgeted here.
+// So the bound is a ceiling on this module's own contribution, not a guarantee
+// that a write will succeed.
 
 // Ceiling on how much history a recovery write tries to keep. It is only a
 // ceiling: recovery halves from what was actually in the failed write, so it
@@ -60,20 +79,49 @@ const RECOVERY_ENTRIES = 50;
  */
 let writeChain = Promise.resolve();
 
+const encoder = new TextEncoder();
+
 /**
- * Reduce any field to a bounded string.
+ * Serialised size of a string, in the bytes storage will charge for it.
+ *
+ * `JSON.stringify` is what turns a control character into six bytes, so the
+ * measurement has to include that escaping rather than the raw UTF-8 length.
+ *
+ * @param {string} text
+ * @returns {number} bytes, excluding the surrounding quotes
+ */
+function serialisedBytes(text) {
+  return encoder.encode(JSON.stringify(text)).length - 2;
+}
+
+/**
+ * Reduce any field to a string of bounded serialised size.
  *
  * @param {unknown} value
- * @param {number} limit
+ * @param {number} limitBytes budget in serialised bytes, not characters
  * @returns {string|null}
  */
-function cap(value, limit) {
+function cap(value, limitBytes) {
   if (value === null || value === undefined) return null;
   // JSON.stringify returns undefined for a function or a symbol, so the result
   // is re-checked rather than assumed to be a string.
   const text = typeof value === "string" ? value : JSON.stringify(value);
   if (typeof text !== "string") return null;
-  return text.length > limit ? `${text.slice(0, limit)}…[truncated]` : text;
+  if (serialisedBytes(text) <= limitBytes) return text;
+
+  // Accumulate by code POINT (`for...of`), never by UTF-16 index. Slicing at a
+  // unit boundary can cut an astral character in half and leave a lone
+  // surrogate, which `JSON.stringify` then escapes to `\udXXX` -- six bytes of
+  // mojibake in place of the character it was trying to bound.
+  let kept = "";
+  let used = 0;
+  for (const char of text) {
+    const cost = serialisedBytes(char);
+    if (used + cost > limitBytes) break;
+    kept += char;
+    used += cost;
+  }
+  return `${kept}…[truncated]`;
 }
 
 /**
@@ -124,10 +172,10 @@ export async function record({ cmd, url = null, outcome, detail = null }) {
       at: new Date().toISOString(),
       // Capped here rather than at the call sites: this is the trust boundary
       // for the log, and a caller that forgot would be an unbounded write.
-      cmd: cap(cmd, MAX_LABEL_CHARS),
-      url: cap(url, MAX_URL_CHARS),
-      outcome: cap(outcome, MAX_LABEL_CHARS),
-      detail: cap(detail, MAX_DETAIL_CHARS),
+      cmd: cap(cmd, MAX_LABEL_BYTES),
+      url: cap(url, MAX_URL_BYTES),
+      outcome: cap(outcome, MAX_LABEL_BYTES),
+      detail: cap(detail, MAX_DETAIL_BYTES),
     });
     const trimmed = entries.slice(-MAX_ENTRIES);
 
@@ -187,7 +235,7 @@ async function handleWriteFailure(error, entries) {
     detail: cap(
       `storage write failed (${message}); older entries were dropped to ` +
         `recover. The audit log is incomplete before this point.`,
-      MAX_DETAIL_CHARS
+      MAX_DETAIL_BYTES
     ),
   };
 
@@ -237,8 +285,8 @@ export async function clear() {
 export {
   STORAGE_KEY,
   MAX_ENTRIES,
-  MAX_DETAIL_CHARS,
-  MAX_URL_CHARS,
-  MAX_LABEL_CHARS,
+  MAX_DETAIL_BYTES,
+  MAX_URL_BYTES,
+  MAX_LABEL_BYTES,
   RECOVERY_ENTRIES,
 };

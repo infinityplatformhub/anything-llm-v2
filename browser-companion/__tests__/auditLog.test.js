@@ -7,9 +7,9 @@ import {
   resetWriteFailure,
   STORAGE_KEY,
   MAX_ENTRIES,
-  MAX_DETAIL_CHARS,
-  MAX_URL_CHARS,
-  MAX_LABEL_CHARS,
+  MAX_DETAIL_BYTES,
+  MAX_URL_BYTES,
+  MAX_LABEL_BYTES,
   RECOVERY_ENTRIES,
 } from "../src/background/auditLog.js";
 
@@ -190,7 +190,7 @@ describe("bounds", () => {
     // no fixed size; unbounded it would eat the whole extension quota.
     await record({ cmd: "page_read", outcome: "allowed", detail: "x".repeat(50_000) });
     const [entry] = await readAll();
-    expect(entry.detail.length).toBeLessThan(MAX_DETAIL_CHARS + 100);
+    expect(entry.detail.length).toBeLessThan(MAX_DETAIL_BYTES + 100);
     expect(entry.detail).toMatch(/\[truncated\]$/);
   });
 
@@ -205,10 +205,10 @@ describe("bounds", () => {
   // path, before any check has passed — so the attacker-reachable path must be
   // the bounded one. Capping `detail` alone let a 5MB url through.
   it.each([
-    ["url", "url", MAX_URL_CHARS],
-    ["cmd", "cmd", MAX_LABEL_CHARS],
-    ["outcome", "outcome", MAX_LABEL_CHARS],
-    ["detail", "detail", MAX_DETAIL_CHARS],
+    ["url", "url", MAX_URL_BYTES],
+    ["cmd", "cmd", MAX_LABEL_BYTES],
+    ["outcome", "outcome", MAX_LABEL_BYTES],
+    ["detail", "detail", MAX_DETAIL_BYTES],
   ])("caps an oversized %s", async (_label, field, limit) => {
     await record({
       cmd: "page_navigate",
@@ -219,6 +219,68 @@ describe("bounds", () => {
     const entry = (await readAll())[0];
     expect(entry[field].length).toBeLessThanOrEqual(limit + "…[truncated]".length);
     expect(entry[field]).toMatch(/\[truncated\]$/);
+  });
+
+  // The cap budgets SERIALISED bytes, not string length, because storage
+  // charges bytes and the attacker picks the characters. A control character
+  // costs 6 bytes per counted UTF-16 unit; counting units let one 2048-unit
+  // field reach ~12KB and the whole log a measured 12.4MB — above the quota the
+  // cap existed to stay under.
+  it.each([
+    ["ascii", "x", 1],
+    ["quotes", '"', 2],
+    ["backslashes", "\\", 2],
+    ["newlines", "\n", 2],
+    ["control chars", "", 6],
+    ["CJK", "中", 3],
+    ["astral emoji", "\u{1F600}", 2],
+  ])("bounds a url of %s by bytes, not characters", async (_label, ch, _cost) => {
+    await record({
+      cmd: "page_navigate",
+      url: ch.repeat(20_000),
+      outcome: "denied",
+    });
+    const { url } = (await readAll())[0];
+    const bytes =
+      new TextEncoder().encode(JSON.stringify(url)).length - 2;
+    // The marker suffix is counted outside the budget, hence the slack.
+    expect(bytes).toBeLessThanOrEqual(MAX_URL_BYTES + 40);
+    expect(url).toMatch(/\[truncated\]$/);
+  });
+
+  it("never splits an astral character into a lone surrogate", async () => {
+    // Slicing by UTF-16 index can cut an emoji in half; JSON.stringify then
+    // escapes the orphan to \udXXX — six bytes of mojibake in place of the
+    // character the cap was trying to bound.
+    await record({
+      cmd: "page_navigate",
+      url: "\u{1F600}".repeat(20_000),
+      outcome: "denied",
+    });
+    const { url } = (await readAll())[0];
+    // `\p{Surrogate}` with the `u` flag matches only UNPAIRED surrogates — a
+    // well-formed emoji is a surrogate pair and must not trip this. Asserting on
+    // the raw \uD800-\uDFFF range instead would flag every valid emoji and the
+    // test would fail against correct code.
+    expect(url).not.toMatch(/\p{Surrogate}/u);
+    expect(url.startsWith("\u{1F600}")).toBe(true);
+  });
+
+  it("bounds the whole log near its stated ceiling under the worst payload", async () => {
+    // The arithmetic in the module comment, checked against the payload an
+    // attacker would actually choose rather than against ASCII.
+    for (let i = 0; i < 20; i += 1) {
+      await record({
+        cmd: "".repeat(5000),
+        url: "".repeat(50_000),
+        outcome: "".repeat(5000),
+        detail: "".repeat(50_000),
+      });
+    }
+    const stored = JSON.stringify(await readAll());
+    const bytesPerEntry =
+      new TextEncoder().encode(stored).length / (await readAll()).length;
+    expect(bytesPerEntry).toBeLessThan(5000);
   });
 
   it("bounds the whole stored entry, not just one field of it", async () => {
@@ -343,6 +405,15 @@ describe("a full store — the failure that must not be silent", () => {
     // the entry list the failed write was carrying, so that record is not lost
     // just because the write that would have stored it failed.
     expect(entries.at(-2).url).toContain(`/${written}`);
+  });
+
+  it("marks the failure as recovered when the marker was stored", async () => {
+    // F-M2c: `recovered` is what distinguishes "history dropped but a trace
+    // survives" from "nothing could be written at all", and TASK 9 CONSUMES IT.
+    // Nothing pinned it at true, so a mutation fixing it at false survived.
+    await fillUntilFull();
+    expect(getWriteFailure().recovered).toBe(true);
+    expect((await readAll()).at(-1).outcome).toBe("write_failed");
   });
 
   it("can record again after recovering space", async () => {

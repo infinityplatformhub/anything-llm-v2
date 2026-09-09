@@ -214,11 +214,66 @@ export async function loadAllowlist() {
 }
 
 /**
+ * Persist the allowlist, or throw.
+ *
+ * WHY THIS IS NOT A BARE `set`
+ *
+ * The storage quota covers the WHOLE extension, so a full store makes this
+ * write fail while everything else still looks healthy. A bare `set` swallowed
+ * nothing, but it also proved nothing: the caller could not tell a saved list
+ * from a rejected one, and `isAllowed` would carry on enforcing whatever list
+ * was already in storage.
+ *
+ * Measured, and it narrows the threat usefully: a pure REMOVAL shrinks the
+ * stored JSON, so if the current list fits then the shorter one does too -- at
+ * zero headroom a revocation still succeeded. The quota alone therefore cannot
+ * produce "I removed it but it is still live". What remains reachable is an
+ * edit that GROWS the list, and any failure that is not about size at all.
+ *
+ * The rule is therefore that NO storage failure may be mistaken for a saved
+ * list. The write is verified by reading back what was actually stored, and any
+ * failure throws. Throwing rather than returning false is deliberate: a caller
+ * that forgets to check a boolean silently reintroduces the bug, whereas one
+ * that forgets to catch gets a visible error. Task 9's popup must catch this
+ * and tell the user the change did NOT take effect.
+ *
  * @param {string[]} list
- * @returns {Promise<void>}
+ * @returns {Promise<void>} resolves only if storage now holds exactly `list`
+ * @throws {Error} if the write was rejected or did not take effect
  */
 export async function saveAllowlist(list) {
-  await chrome.storage.local.set({ [STORAGE_KEY]: list });
+  if (!Array.isArray(list)) {
+    throw new TypeError("saveAllowlist expects an array of host entries");
+  }
+
+  try {
+    await chrome.storage.local.set({ [STORAGE_KEY]: list });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Observable even if the caller swallows the throw, and it needs no storage
+    // of its own -- the same reasoning as the audit log's console signal.
+    console.error(
+      "[AnythingLLM Companion] failed to save the allowlist; the previous " +
+        "list is still in effect:",
+      message
+    );
+    throw new Error(`allowlist not saved: ${message}`);
+  }
+
+  // Read back rather than trusting the write. `set` resolving is not proof the
+  // value landed as given, and this is the one write in the extension where
+  // believing a lie can mean believing access was revoked when it was not.
+  const stored = await loadAllowlist();
+  const matches =
+    stored.length === list.length && stored.every((v, i) => v === list[i]);
+  if (!matches) {
+    console.error(
+      "[AnythingLLM Companion] the allowlist read back differently from " +
+        "what was saved; the gate is enforcing:",
+      stored
+    );
+    throw new Error("allowlist not saved: storage did not retain the new list");
+  }
 }
 
 export { STORAGE_KEY, parseEntry };
