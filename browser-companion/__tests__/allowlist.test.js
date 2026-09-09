@@ -260,6 +260,13 @@ describe("entry parsing — a malformed entry must never widen the gate", () => 
     ["a star as a whole label", "*.*.com"],
     ["a star inside a name", "link*.com"],
     ["a trailing star", "linkedin.*"],
+    // A star with no following dot. Pins `startsWith("*.")` against being
+    // loosened to `startsWith("*")`, which would read `*xlinkedin.com` as a
+    // wildcard for linkedin.com — authorising the real site from a typo.
+    ["a star with no following dot", "*linkedin.com"],
+    ["a star before a lookalike label", "*xlinkedin.com"],
+    ["a star then a space", "* linkedin.com"],
+    ["a star then a dash", "*-linkedin.com"],
     ["an empty entry", ""],
     ["whitespace only", "   "],
     ["a lone dot", "."],

@@ -38,11 +38,30 @@ function runSuite() {
   // harness used it and so found no summary on a PASSING run -- reporting every
   // real survivor as an "error". That is the same class of lying gate this file
   // exists to detect, caught by its own negative control.
-  const done = spawnSync(process.execPath, ["../node_modules/jest/bin/jest.js"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, NODE_OPTIONS: "--experimental-vm-modules" },
-  });
+  // Scoped to this task's four suites. Task 7's tests land in the same package
+  // while in flight, and a mutation to allowlist.js can turn THOSE red for
+  // reasons that say nothing about this suite's coverage -- which would count as
+  // a kill here and hide a real survivor.
+  const done = spawnSync(
+    process.execPath,
+    [
+      "../node_modules/jest/bin/jest.js",
+      "__tests__/allowlist.test.js",
+      "__tests__/allowlistStorage.test.js",
+      "__tests__/auditLog.test.js",
+      "__tests__/manifest.test.js",
+    ],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      // A mutation can make a suite fail loudly enough to overflow the default
+      // 1MB pipe buffer, which surfaces as ENOBUFS and kills the whole run
+      // rather than reporting that mutation. Only the "Tests:" line is read, but
+      // the buffer has to hold everything printed before it.
+      maxBuffer: 64 * 1024 * 1024,
+      env: { ...process.env, NODE_OPTIONS: "--experimental-vm-modules" },
+    }
+  );
   if (done.error) throw done.error;
   const output = `${done.stdout ?? ""}${done.stderr ?? ""}`;
   const summary = output.match(/^Tests:\s+(.*)$/m);
@@ -172,10 +191,50 @@ mutate("audit", "chain poisoned by a failed write", AU,
 mutate("audit", "no entry cap", AU, "entries.slice(-MAX_ENTRIES)", "entries");
 mutate("audit", "cap keeps the oldest instead of the newest", AU,
   "entries.slice(-MAX_ENTRIES)", "entries.slice(0, MAX_ENTRIES)");
-mutate("audit", "detail is never truncated", AU,
-  "return text.length > MAX_DETAIL_CHARS", "return false");
-mutate("audit", "detail is always truncated", AU,
-  "text.length > MAX_DETAIL_CHARS", "true");
+mutate("audit", "no field is ever truncated", AU,
+  "return text.length > limit ? `${text.slice(0, limit)}…[truncated]` : text;",
+  "return text;");
+mutate("audit", "every field is always truncated", AU,
+  "return text.length > limit ?", "return true ?");
+
+// --- axis: uncapped fields (the reviewed MEDIUM finding) --------------------
+mutate("cap", "url is left uncapped", AU,
+  "url: cap(url, MAX_URL_CHARS),", "url,");
+mutate("cap", "cmd is left uncapped", AU,
+  "cmd: cap(cmd, MAX_LABEL_CHARS),", "cmd,");
+mutate("cap", "outcome is left uncapped", AU,
+  "outcome: cap(outcome, MAX_LABEL_CHARS),", "outcome,");
+mutate("cap", "url cap raised to a useless size", AU,
+  "const MAX_URL_CHARS = 2048;", "const MAX_URL_CHARS = 50_000_000;");
+mutate("cap", "label cap raised to a useless size", AU,
+  "const MAX_LABEL_CHARS = 128;", "const MAX_LABEL_CHARS = 50_000_000;");
+
+// --- axis: quota failure observability --------------------------------------
+mutate("quota", "quota failure swallowed, never surfaced", AU,
+  "      await handleWriteFailure(error, trimmed);\n      throw error;",
+  "      throw error;");
+mutate("quota", "failure flag never set", AU,
+  "    writeFailure = { at: new Date().toISOString(), message, recovered: false };",
+  "    writeFailure = null;");
+mutate("quota", "failure flag overwritten by each later failure", AU,
+  "  if (!writeFailure) {", "  if (true) {");
+mutate("quota", "no console signal on write failure", AU,
+  "  console.error(\n    \"[AnythingLLM Companion] audit log write failed; \" +",
+  "  String(\n    \"[AnythingLLM Companion] audit log write failed; \" +");
+// Shrinks by one instead of halving, rather than not shrinking at all: a mutant
+// that truly never shrinks spins forever and OOMs the runner, which the harness
+// reports as ERROR (correctly -- a crash is not evidence of coverage) but which
+// costs a minute per run. This still models "recovery does not shrink fast
+// enough to escape a full store".
+mutate("quota", "recovery shrinks too slowly to escape a full store", AU,
+  "      keep = Math.floor(keep / 2);", "      keep = keep - 1;");
+mutate("quota", "recovery drops all history, not just the excess", AU,
+  "[...entries.slice(entries.length - keep), marker]", "[marker]");
+mutate("quota", "recovery writes no durable marker", AU,
+  "[...entries.slice(entries.length - keep), marker]",
+  "[...entries.slice(entries.length - keep)]");
+mutate("quota", "recovery gives up before writing anything", AU,
+  "  let keep = Math.min(RECOVERY_ENTRIES, entries.length);", "  let keep = 0;\n  return;");
 mutate("audit", "non-string detail coerced with String()", AU,
   'typeof value === "string" ? value : JSON.stringify(value)', "String(value)");
 mutate("audit", "clear is not queued behind pending writes", AU,
@@ -185,7 +244,8 @@ mutate("audit", "readAll returns the raw stored value", AU,
   "return Array.isArray(stored?.[STORAGE_KEY]) ? stored[STORAGE_KEY] : [];\n}\n\n/** @returns {Promise<void>} */",
   "return stored?.[STORAGE_KEY];\n}\n\n/** @returns {Promise<void>} */");
 mutate("audit", "timestamp is a fixed string, not a date", AU,
-  "at: new Date().toISOString(),", 'at: "later",');
+  "      at: new Date().toISOString(),\n      // Capped here rather than at the call sites",
+  '      at: "later",\n      // Capped here rather than at the call sites');
 
 // --- negative control -------------------------------------------------------
 // Without this the whole run is worthless: a suite that failed for an unrelated

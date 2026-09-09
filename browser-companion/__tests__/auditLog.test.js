@@ -3,14 +3,19 @@ import {
   record,
   readAll,
   clear,
+  getWriteFailure,
+  resetWriteFailure,
   STORAGE_KEY,
   MAX_ENTRIES,
   MAX_DETAIL_CHARS,
+  MAX_URL_CHARS,
+  MAX_LABEL_CHARS,
+  RECOVERY_ENTRIES,
 } from "../src/background/auditLog.js";
 
 // `chrome` is the one thing that genuinely cannot run here — it is the browser,
-// not a library. So this fake is written to behave like the real API in the ways
-// the code depends on, and the ways it differs are named:
+// not a library. So this fake behaves like the real API in the ways the code
+// depends on, and the ways it still differs are named:
 //
 //   - get/set/remove are async and resolve on a later microtask, which is what
 //     makes read-modify-write interleave in the real service worker. A fake that
@@ -18,11 +23,32 @@ import {
 //   - values are round-tripped through JSON, because chrome.storage serialises
 //     via the structured clone algorithm and does not hand back a live object.
 //     Without this, a mutation bug would be invisible.
+//   - `quotaBytes` models the ONE property of the real quota the code reacts to:
+//     a `set` whose stored value would exceed the budget rejects, with a message
+//     matching Chrome's. That makes the quota path executable rather than
+//     asserted.
 //
-// It does NOT model the quota, so the truncation test asserts the size of what
-// is written rather than a quota error being avoided.
-function installFakeChrome() {
+// WHAT THE QUOTA FAKE STILL DOES NOT MODEL — it is itself a double, and these
+// gaps are why it must not be read as proof the extension is quota-safe:
+//   - Chrome budgets the WHOLE extension's storage, across every key and every
+//     other part of the extension. This fake charges only this module's key, so
+//     it cannot show the audit log being starved by someone else's data.
+//   - Real byte accounting is over the serialised representation including keys
+//     and internal overhead, not `JSON.stringify(value).length`; and JS string
+//     length is UTF-16 units, so non-ASCII costs more bytes than counted here.
+//     Sizes here are therefore indicative, not exact.
+//   - `QUOTA_BYTES_PER_ITEM`, write-rate limits (MAX_WRITE_OPERATIONS_PER_HOUR),
+//     and eviction are not modelled at all.
+//   - The real API reports some failures via `chrome.runtime.lastError` rather
+//     than a rejection, depending on call style. The code uses the promise form,
+//     which does reject, so this fake matches that path only.
+function installFakeChrome({ quotaBytes = Infinity } = {}) {
   const backing = new Map();
+  const used = () => {
+    let total = 0;
+    for (const [key, value] of backing) total += key.length + value.length;
+    return total;
+  };
   const fake = {
     storage: {
       local: {
@@ -36,9 +62,20 @@ function installFakeChrome() {
         },
         async set(items) {
           await null;
+          const pending = new Map(backing);
           for (const [key, value] of Object.entries(items)) {
-            backing.set(key, JSON.stringify(value));
+            pending.set(key, JSON.stringify(value));
           }
+          let total = 0;
+          for (const [key, value] of pending) total += key.length + value.length;
+          if (total > quotaBytes) {
+            // Chrome's real message, so a test asserting on it is asserting on
+            // something the extension would actually see.
+            throw new Error(
+              "QUOTA_BYTES quota exceeded. Failed to set the value."
+            );
+          }
+          for (const [key, value] of pending) backing.set(key, value);
         },
         async remove(keys) {
           await null;
@@ -48,16 +85,17 @@ function installFakeChrome() {
     },
   };
   globalThis.chrome = fake;
-  return { backing, fake };
+  return { backing, fake, used };
 }
 
 let backing;
 beforeEach(async () => {
   ({ backing } = installFakeChrome());
-  // The module holds a write chain across tests; drain it so one test's pending
-  // write cannot land inside the next.
+  // The module holds a write chain and a sticky failure flag across tests; drain
+  // and clear both so one test's state cannot leak into the next.
   await clear();
   backing.clear();
+  resetWriteFailure();
 });
 
 describe("record", () => {
@@ -124,7 +162,7 @@ describe("concurrent writes", () => {
     const realSet = chrome.storage.local.set;
     chrome.storage.local.set = jest
       .fn()
-      .mockRejectedValueOnce(new Error("QUOTA_BYTES quota exceeded"));
+      .mockRejectedValue(new Error("QUOTA_BYTES quota exceeded"));
 
     await expect(record({ cmd: "boom", outcome: "allowed" })).rejects.toThrow(
       "QUOTA_BYTES"
@@ -163,9 +201,213 @@ describe("bounds", () => {
     expect((await readAll())[0].detail).toBe("short reason");
   });
 
+  // Every field is server-controlled and every one is written on the DENIED
+  // path, before any check has passed — so the attacker-reachable path must be
+  // the bounded one. Capping `detail` alone let a 5MB url through.
+  it.each([
+    ["url", "url", MAX_URL_CHARS],
+    ["cmd", "cmd", MAX_LABEL_CHARS],
+    ["outcome", "outcome", MAX_LABEL_CHARS],
+    ["detail", "detail", MAX_DETAIL_CHARS],
+  ])("caps an oversized %s", async (_label, field, limit) => {
+    await record({
+      cmd: "page_navigate",
+      url: "https://evil.test/",
+      outcome: "denied",
+      [field]: "x".repeat(5_000_000),
+    });
+    const entry = (await readAll())[0];
+    expect(entry[field].length).toBeLessThanOrEqual(limit + "…[truncated]".length);
+    expect(entry[field]).toMatch(/\[truncated\]$/);
+  });
+
+  it("bounds the whole stored entry, not just one field of it", async () => {
+    // The arithmetic that actually closes the finding: with all four fields
+    // capped, a maximally hostile record cannot approach the storage quota.
+    await record({
+      cmd: "x".repeat(5_000_000),
+      url: "x".repeat(5_000_000),
+      outcome: "x".repeat(5_000_000),
+      detail: "x".repeat(5_000_000),
+    });
+    const stored = JSON.stringify(await readAll());
+    expect(stored.length).toBeLessThan(10_000);
+  });
+
+  it("leaves normal-sized fields of every kind untouched", async () => {
+    // Negative control for the cap table: caps that truncated everything would
+    // satisfy it while destroying the log's usefulness.
+    const url = "https://linkedin.com/feed/?ref=abc";
+    await record({
+      cmd: "page_navigate",
+      url,
+      outcome: "denied",
+      detail: "not in allowlist",
+    });
+    expect(await readAll()).toEqual([
+      expect.objectContaining({
+        cmd: "page_navigate",
+        url,
+        outcome: "denied",
+        detail: "not in allowlist",
+      }),
+    ]);
+  });
+
   it("serialises a non-string detail rather than storing [object Object]", async () => {
     await record({ cmd: "page_type", outcome: "denied", detail: { code: 42 } });
     expect((await readAll())[0].detail).toBe('{"code":42}');
+  });
+});
+
+describe("a full store — the failure that must not be silent", () => {
+  // These run against the fake's quota model, so the failure path EXECUTES
+  // rather than being asserted about. See the fake's header for what it still
+  // does not model: whole-extension budgeting, exact byte accounting,
+  // per-item limits, write-rate limits and eviction.
+  let quotaChrome;
+  beforeEach(async () => {
+    resetWriteFailure();
+    // Room for a handful of entries, so the store fills within a short test.
+    quotaChrome = installFakeChrome({ quotaBytes: 3000 });
+    backing = quotaChrome.backing;
+  });
+
+  /** Fill until a write is rejected. Returns how many succeeded. */
+  async function fillUntilFull(limit = 200) {
+    for (let i = 0; i < limit; i += 1) {
+      try {
+        await record({
+          cmd: "page_click",
+          url: `https://linkedin.com/${"p".repeat(100)}/${i}`,
+          outcome: "allowed",
+        });
+      } catch {
+        return i;
+      }
+    }
+    throw new Error("store never filled; the quota fake is not applying");
+  }
+
+  it("rejects the write rather than pretending it stored", async () => {
+    const written = await fillUntilFull();
+    // If this were 0 the test would be vacuous — nothing was ever stored, so a
+    // later failure would prove nothing about a FULL store.
+    expect(written).toBeGreaterThan(0);
+  });
+
+  it("reports the failure through getWriteFailure instead of swallowing it", async () => {
+    expect(getWriteFailure()).toBeNull();
+    await fillUntilFull();
+    const failure = getWriteFailure();
+    // The finding was not the size — it was that `writeChain.catch` made a full
+    // store indistinguishable from a working one. This is the observable signal.
+    expect(failure).not.toBeNull();
+    expect(failure.message).toMatch(/QUOTA_BYTES/);
+    expect(Number.isNaN(Date.parse(failure.at))).toBe(false);
+  });
+
+  it("logs the failure to the console, the one signal that needs no storage", async () => {
+    const spy = jest.spyOn(console, "error").mockImplementation(() => {});
+    await fillUntilFull();
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0].join(" ")).toMatch(/audit log write failed/i);
+    spy.mockRestore();
+  });
+
+  it("leaves a durable marker in the log saying history was dropped", async () => {
+    // The flag above dies with the ~30s service-worker teardown, so a user
+    // investigating later would see a silently short log. This marker is the
+    // part that survives: a visible gap beats an invisible one.
+    await fillUntilFull();
+    const entries = await readAll();
+    const marker = entries.at(-1);
+    expect(marker.outcome).toBe("write_failed");
+    expect(marker.detail).toMatch(/incomplete/i);
+  });
+
+  it("keeps recent history rather than dropping the whole log", async () => {
+    const written = await fillUntilFull();
+    const entries = await readAll();
+    // More than just the marker survived, so recovery is not a disguised wipe.
+    expect(entries.length).toBeGreaterThan(1);
+    expect(entries.length).toBeLessThanOrEqual(RECOVERY_ENTRIES + 1);
+    // And it genuinely SHRANK. Recovery halves until it fits rather than
+    // trusting a fixed count: asking for RECOVERY_ENTRIES when only 13 fit made
+    // the recovery write bigger than the one that had just failed, so it failed
+    // too and nothing durable was stored.
+    expect(entries.length).toBeLessThan(written + 1);
+    // The surviving entries are the most recent ones — the part a user
+    // investigating an incident actually wants. `written` is the index of the
+    // record whose write was rejected, and it is retained: recovery re-writes
+    // the entry list the failed write was carrying, so that record is not lost
+    // just because the write that would have stored it failed.
+    expect(entries.at(-2).url).toContain(`/${written}`);
+  });
+
+  it("can record again after recovering space", async () => {
+    await fillUntilFull();
+    // Recovery is only worth having if the log actually resumes.
+    await record({ cmd: "page_read", outcome: "allowed" });
+    expect((await readAll()).map((e) => e.cmd)).toContain("page_read");
+  });
+
+  it("keeps the failure sticky, so a later success cannot hide the gap", async () => {
+    await fillUntilFull();
+    const first = getWriteFailure();
+    await record({ cmd: "page_read", outcome: "allowed" });
+    // Clearing on success would let a burst of failures vanish the moment one
+    // small write lands — precisely the window an attacker would aim for.
+    expect(getWriteFailure()).toEqual(first);
+  });
+
+  it("keeps the FIRST failure, not the most recent one", async () => {
+    // The first failure is the one that marks where the log stopped being
+    // trustworthy. Overwriting it on each later failure would keep moving the
+    // timestamp forward, hiding how long the gap has been open.
+    const spy = jest.spyOn(console, "error").mockImplementation(() => {});
+    resetWriteFailure();
+    chrome.storage.local.set = jest
+      .fn()
+      .mockRejectedValue(new Error("QUOTA_BYTES first"));
+    await expect(record({ cmd: "one", outcome: "allowed" })).rejects.toThrow();
+    const first = getWriteFailure();
+
+    chrome.storage.local.set = jest
+      .fn()
+      .mockRejectedValue(new Error("QUOTA_BYTES second"));
+    await expect(record({ cmd: "two", outcome: "allowed" })).rejects.toThrow();
+
+    expect(getWriteFailure()).toEqual(first);
+    expect(getWriteFailure().message).toMatch(/first/);
+    spy.mockRestore();
+  });
+
+  it("does not report a failure when writes are succeeding", async () => {
+    // Negative control for this whole block. A flag that was always set would
+    // pass every test above while telling the user nothing.
+    installFakeChrome();
+    resetWriteFailure();
+    await record({ cmd: "page_click", outcome: "allowed" });
+    expect(getWriteFailure()).toBeNull();
+  });
+
+  it("still surfaces the failure when even the recovery write fails", async () => {
+    // The worst case: nothing durable is possible. The flag and the console
+    // line must still fire, or the log goes dark in total silence.
+    const spy = jest.spyOn(console, "error").mockImplementation(() => {});
+    resetWriteFailure();
+    chrome.storage.local.set = jest
+      .fn()
+      .mockRejectedValue(new Error("QUOTA_BYTES quota exceeded"));
+
+    await expect(record({ cmd: "boom", outcome: "allowed" })).rejects.toThrow(
+      "QUOTA_BYTES"
+    );
+    expect(getWriteFailure()).not.toBeNull();
+    expect(getWriteFailure().recovered).toBe(false);
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
   });
 });
 
