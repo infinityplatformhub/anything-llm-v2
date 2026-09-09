@@ -32,13 +32,41 @@ function report(event, fields = {}) {
   process.stdout.write(JSON.stringify({ event, ...fields }) + "\n");
 }
 
+/**
+ * Boots express-ws on a port already in use, so the HTTP server emits
+ * EADDRINUSE and ws re-emits it onto the ws.Server. Reports the port only to
+ * keep the harness protocol uniform; the test cares about the exit code.
+ */
+function portConflict(express, net) {
+  const squatter = net.createServer();
+  squatter.listen(0, "127.0.0.1", () => {
+    const port = squatter.address().port;
+    const app = express();
+    const { bootWebSockets } = require(
+      path.join(SERVER_DIR, "utils/boot/bootWebSockets")
+    );
+    bootWebSockets(app);
+    const server = app.listen(port, "127.0.0.1");
+    // The product attaches its own HTTP-server error handling (catchSigTerms).
+    // Present here so the test proves the ws.Server re-emit is NOT covered by it.
+    server.on("error", () => {});
+    report("listening", { port });
+  });
+}
+
 function main() {
   const mode = String(process.env.HARNESS_MODE || "no-route");
   const express = require("express");
   const http = require("http");
+  const net = require("net");
   const { bootWebSockets } = require(
     path.join(SERVER_DIR, "utils/boot/bootWebSockets")
   );
+
+  // Boot-time port conflict: ws re-emits the HTTP server error onto the
+  // ws.Server object, which is a different emitter than the HTTP server, so an
+  // http-level handler does not contain it. Occupies a port, then listens on it.
+  if (mode === "port-conflict") return portConflict(express, net);
 
   const app = express();
   let server = null;

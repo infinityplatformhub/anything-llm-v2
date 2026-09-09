@@ -182,6 +182,21 @@ describe("websocket bootstrap under hostile frames", () => {
     );
   });
 
+  // NOT a remote-DoS case, and deliberately labelled so. ws re-emits the HTTP
+  // server's own error onto the ws.Server object, which has no error listener of
+  // its own, so an unlistened error there is rethrown as an uncaughtException.
+  // Reachability is boot-time only - a port conflict - because Node emits
+  // clientError, not error, for a malformed request.
+  it("survives a boot-time port conflict instead of dying on the ws.Server error re-emit", async () => {
+    harness = await startHarness("port-conflict");
+    await delay(SETTLE_MS);
+
+    expect(harness.exit).toBeNull();
+    // An HTTP-server error handler is attached in this mode and does not cover
+    // the re-emit, so seeing the cause means the ws.Server listener logged it.
+    expect(await waitForStderr(harness, /EADDRINUSE/)).toMatch(/EADDRINUSE/);
+  });
+
   it("still serves normal traffic after absorbing a malformed frame", async () => {
     harness = await startHarness("with-route");
     const attacker = await connect(harness.port, "/api/some-route");

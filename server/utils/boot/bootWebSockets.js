@@ -29,6 +29,22 @@ function bootWebSockets(app, httpServer = null) {
     httpServer ?? undefined
   );
 
+  // NOT a remote-DoS fix, and must not be read as one. `ws` re-emits the HTTP
+  // server's own `error` onto the ws.Server object
+  // (ws/lib/websocket-server.js:105, `error: this.emit.bind(this, "error")`),
+  // and that object has no error listener of its own, so an unlistened `error`
+  // there is rethrown as an `uncaughtException`. A listener on the HTTP server
+  // does not help - the re-emit is a separate emitter. Measured: with an HTTP
+  // `error` handler attached, an EADDRINUSE still killed the process; this one
+  // line makes it survive and report the real cause.
+  //
+  // Reachability is boot-time only, e.g. a port conflict. Node emits
+  // `clientError`, not `error`, for a malformed request, so no client can
+  // trigger this.
+  instance.getWss().on("error", (error) => {
+    console.error("[WebSocket] WebSocket server error:", error);
+  });
+
   instance.getWss().on("connection", (socket, request) => {
     // Attached on `connection`, so it is in place before any frame can be read
     // and before the route handler (which is async and may still be awaiting

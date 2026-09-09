@@ -9,14 +9,20 @@ const {
 const { safeJsonParse } = require("../utils/http");
 
 /**
- * Runs one socket message handler with both of its failure modes contained.
- * `ws` calls the "message" listener from an EventEmitter, so a synchronous
- * throw out of here becomes an `uncaughtException`, and a rejected promise
- * returned from an async handler becomes an `unhandledRejection` - either one
- * kills the whole server process under Node's default
- * `--unhandled-rejections=throw`. The handlers run on raw client input and not
- * all of them parse it defensively (the websocket plugin's `handleFeedback`
- * opens with a bare `JSON.parse`), so a bad frame must not travel past here.
+ * Contains what a socket message handler RETURNS: a synchronous throw, and a
+ * rejected promise it returns. `ws` calls the "message" listener from an
+ * EventEmitter, so an escaping throw becomes an `uncaughtException` and an
+ * escaping rejection becomes an `unhandledRejection` - either one kills the
+ * whole server process under Node's default `--unhandled-rejections=throw`.
+ * The handlers run on raw client input and not all of them parse it
+ * defensively (the websocket plugin's `handleFeedback` opens with a bare
+ * `JSON.parse`), which is what this catches.
+ *
+ * WHAT IT DOES NOT CATCH, so nobody trusts it further than it goes: a handler
+ * that launches a promise and returns something else. `handleToolToggle` does
+ * exactly that - it starts an async chain and returns `true` - so a rejection
+ * in that chain is floating and never passes through here. Containing it would
+ * have to happen inside that handler, not at this dispatch point.
  * @param {function} handler - the socket handler to invoke
  * @param {string} name - handler name, for the log line
  * @param {*} message - the raw frame from the client
@@ -100,14 +106,20 @@ function agentWebsocket(app) {
         return;
       });
 
-      // Defence in depth. The primary guard is at the express-ws bootstrap
-      // (utils/boot/bootWebSockets.js), which covers every socket the server
-      // makes - including the unauthenticated, route-less ones this listener can
-      // never see. BE CLEAR ABOUT WHAT THIS ADDS: with that guard in place this
-      // listener is not what keeps the process alive, and removing it alone
-      // leaves every test green. It is kept so this route stays safe on its own
-      // terms if it is ever mounted on a ws server booted some other way, and so
-      // the log names the invocation rather than only the path.
+      // Defence in depth, and READ THE CONDITION BEFORE DELETING THIS.
+      //
+      // With the bootstrap guard present (utils/boot/bootWebSockets.js, which
+      // covers every socket the server makes, including the unauthenticated
+      // route-less ones this listener can never see) this listener is redundant
+      // - removing it alone leaves every test green. That greenness is not
+      // permission to delete it.
+      //
+      // It is kept because it is the ONLY guard if this route is ever mounted on
+      // a ws server booted another way, and on that surface it alone keeps the
+      // process alive: measured with the bootstrap guard removed, a malformed
+      // frame here left the process up, other clients connected, and the close
+      // cleanup run exactly once. It also names the invocation, which the
+      // bootstrap can only see as a path.
       socket.on("error", (error) => {
         console.error(
           `[agentWebsocket] Socket error on invocation ${String(request.params.uuid)}:`,
