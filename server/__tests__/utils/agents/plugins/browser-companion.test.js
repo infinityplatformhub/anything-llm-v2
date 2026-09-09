@@ -75,6 +75,35 @@ function reply(socket, body) {
   });
 }
 
+/**
+ * Let the event loop turn over, not just the microtask queue.
+ *
+ * `await somePromise` drains microtasks only, so a second send issued from a
+ * timer, a retry or anything else that goes through the event loop lands AFTER
+ * the assertions and is invisible. Awaiting a `setTimeout` puts the assertions
+ * behind the macrotask queue, where such a duplicate has already arrived.
+ * Measured: without this, a `setTimeout(…, 0)` duplicate shows 1 frame and
+ * pendingCount 0; with it, 2 frames and pendingCount 2.
+ */
+function drainMacrotasks() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** Every tool, with arguments valid for it and the wire verb it must send. */
+const TOOL_CALLS = [
+  { name: "page_state", cmd: "state", args: {} },
+  { name: "page_click", cmd: "click", args: { id: 12 } },
+  { name: "page_type", cmd: "type", args: { id: 4, text: "hello" } },
+  { name: "page_read", cmd: "read", args: {} },
+  { name: "page_scroll", cmd: "scroll", args: { direction: "down" } },
+  { name: "page_key", cmd: "key", args: { key: "Enter" } },
+  { name: "page_tabs", cmd: "tabs", args: {} },
+  { name: "page_switch", cmd: "switch", args: { url: "x.test" } },
+  { name: "page_navigate", cmd: "navigate", args: { url: "https://x.test/" } },
+  { name: "page_close", cmd: "close", args: {} },
+  { name: "page_fetch", cmd: "fetch", args: { url: "https://x.test/a" } },
+];
+
 /** A real AIbitat with the plugin installed — no doubles on the registration path. */
 function aibitatWith(invocation) {
   const aibitat = new AIbitat({
@@ -150,6 +179,22 @@ describe("browser-companion plugin", () => {
     expect(socket.sent).toHaveLength(0);
   });
 
+  // The guard runs before `registry.resolve`, not merely before `send`. Both
+  // orderings write nothing, so only the message distinguishes them: with
+  // nobody connected, a POST must still be refused for being a POST rather
+  // than reported as an offline browser. Pins the ordering the module comment
+  // claims — without this, moving the guard below resolve passes.
+  it("refuses a non-GET fetch before it resolves a socket at all", async () => {
+    const out = await runCommand({
+      cmd: "fetch",
+      payload: { url: "https://x.test/a", method: "POST" },
+      userId: 7,
+      multiUserMode: true,
+    });
+    expect(out).toMatch(/GET/);
+    expect(out).not.toMatch(/not connected/i);
+  });
+
   // @edge — ตัวพิมพ์เล็กต้องโดนบล็อกเหมือนกัน ไม่ใช่เทียบสตริงตรง ๆ
   it("rejects a lower-case non-GET method too", async () => {
     const socket = fakeSocket();
@@ -194,10 +239,11 @@ describe("browser-companion plugin", () => {
     expect(socket.sent).toHaveLength(0);
   });
 
-  // Awaited to completion, not asserted synchronously: a command sent a second
-  // time on a later microtask is invisible to a synchronous count, and a
-  // duplicated click or navigate is a real action taken twice in the user's own
-  // browser. Each call must produce exactly one frame, start to finish.
+  // Awaited past the macrotask queue, not just to promise resolution: a command
+  // sent a second time is invisible to a synchronous count AND to a plain
+  // `await`, because `await` drains microtasks only. A duplicated click or
+  // navigate is a real action taken twice in the user's own browser, with no
+  // undo — so every tool gets this, on both axes, not just fetch and click.
   it("sends an allowed fetch exactly once, whether the method is absent or an explicit get", async () => {
     const socket = fakeSocket();
     registry.register({ userId: 7, socket });
@@ -215,7 +261,9 @@ describe("browser-companion plugin", () => {
     });
     reply(socket, { ok: true, data: "a" });
     await expect(first).resolves.toBe("a");
+    await drainMacrotasks();
     expect(socket.sent).toHaveLength(1);
+    expect(protocol.__pendingCount()).toBe(0);
 
     const second = runCommand({
       cmd: "fetch",
@@ -230,12 +278,13 @@ describe("browser-companion plugin", () => {
     });
     reply(socket, { ok: true, data: "b" });
     await expect(second).resolves.toBe("b");
+    await drainMacrotasks();
     expect(socket.sent).toHaveLength(2);
     expect(protocol.__pendingCount()).toBe(0);
   });
 
   // Same property for an acting command: one call, one frame, no duplicate on a
-  // later tick.
+  // later tick of either queue.
   it("sends a click exactly once", async () => {
     const socket = fakeSocket();
     registry.register({ userId: 7, socket });
@@ -247,8 +296,41 @@ describe("browser-companion plugin", () => {
     });
     reply(socket, { ok: true, data: "clicked" });
     await expect(pending).resolves.toBe("clicked");
+    await drainMacrotasks();
     expect(socket.sent).toHaveLength(1);
     expect(protocol.__pendingCount()).toBe(0);
+  });
+
+  // Every tool, one at a time, each on its own socket and its own suite entry —
+  // so a duplicate names the tool that duplicated rather than reddening some
+  // unrelated test through a leaked timer. Driven through the REGISTERED
+  // handler, not runCommand: that is the path a duplicate would really take.
+  describe.each(TOOL_CALLS)("$name sends exactly one frame", ({ name, cmd, args }) => {
+    it("issues one frame per call and leaves nothing pending", async () => {
+      const socket = fakeSocket();
+      registry.register({ userId: 7, socket });
+      const aibitat = aibitatWith({ user_id: 7 });
+
+      const pending = aibitat.functions
+        .get(name)
+        .handler.call({ super: aibitat, caller: "agent" }, args);
+
+      // Past the handler's `await SystemSettings.isMultiUserMode()` and past any
+      // duplicate riding a timer, before the frame is counted.
+      await drainMacrotasks();
+      expect(socket.sent).toHaveLength(1);
+      expect(socket.sent[0].cmd).toBe(cmd);
+
+      reply(socket, { ok: true, data: "ok" });
+      await expect(pending).resolves.toBe("ok");
+      await drainMacrotasks();
+
+      // Both assertions matter: `sent` catches the extra write, and
+      // `__pendingCount` catches a duplicate whose reply never came — a leaked
+      // correlation entry that would otherwise outlive the test.
+      expect(socket.sent).toHaveLength(1);
+      expect(protocol.__pendingCount()).toBe(0);
+    });
   });
 
   it("sends the command over the resolved socket", async () => {
@@ -381,6 +463,45 @@ describe("browser-companion plugin", () => {
       expect(aibitat.functions.get("page_state").description).toMatch(
         /page_click|page_type/
       );
+    });
+
+    // Every tool that CHANGES the page invalidates the [id] map page_state
+    // built, and the model reads only these descriptions — so each one has to
+    // say so where the model will see it. Without this, a model calls
+    // page_state once at the start of a turn, scrolls, and then clicks an id
+    // that now points at something else.
+    //
+    // The name is asserted, not a sentence: a rewording that still directs the
+    // model back to page_state passes, and one that drops the direction fails.
+    it("tells the model to re-run page_state after anything that changes the page", () => {
+      const aibitat = aibitatWith({ user_id: 7 });
+      for (const name of [
+        "page_scroll",
+        "page_key",
+        "page_switch",
+        "page_navigate",
+      ]) {
+        expect(aibitat.functions.get(name).description).toMatch(/page_state/);
+      }
+    });
+
+    // Substring checks alone cannot tell "call page_state again" from "you do
+    // not need to call page_state again" — both contain the token. The exact
+    // inversion of this property, told to the model as fact, is the failure
+    // this guards: a description asserting that ids survive is a correctness
+    // change wearing a docs-change disguise, and it must not pass.
+    //
+    // Phrased as a negation guard rather than as required prose, so ordinary
+    // copy-editing stays green and only a reversal of the claim goes red.
+    it("never tells the model that element ids stay valid", () => {
+      const aibitat = aibitatWith({ user_id: 7 });
+      const CONTRADICTS_INVALIDATION =
+        /(do|does|don't|do not|need not|no need)[^.]{0,40}\bcall page_state\b|\bstays? valid\b|\bstay valid\b|\bremain valid\b|\breuse the same\b|\bcached\b|\bonly (?:need|call) (?:this|it) once\b|\bforever\b/i;
+      for (const [name, fn] of aibitat.functions) {
+        expect(
+          `${name}: ${fn.description}`.match(CONTRADICTS_INVALIDATION)
+        ).toBeNull();
+      }
     });
 
     it("advertises exactly the tool names it registers", () => {

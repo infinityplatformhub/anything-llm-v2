@@ -174,6 +174,21 @@ const TOOLS = [
     description: "Close one of the agent's own tabs.",
     properties: {},
   },
+  // CONTRACT NOTE FOR THE EXTENSION (task 8): the schema below is ADVISORY.
+  // aibitat calls `fn.handler(args)` with no validation layer — no ajv, nothing
+  // that reads `required` or `additionalProperties` — so those keywords only
+  // ever reach the model provider. `runCommand` spreads the model's args
+  // straight into the frame, which means a model that emits `headers`, `body`
+  // or `credentials` alongside `url` puts them on the wire:
+  //
+  //   {"url":"…","headers":{"Authorization":"Bearer …"},"credentials":"include",
+  //    "method":"GET","requestId":"r_…","cmd":"fetch"}
+  //
+  // This plugin is therefore NOT a payload whitelist. It guarantees exactly one
+  // thing about page_fetch — the method is GET — and nothing else. The
+  // extension is the only component that can refuse the rest, so it must read
+  // ONLY the fields declared here and ignore every other key on the frame.
+  // Same-origin is likewise the extension's to enforce.
   {
     name: "page_fetch",
     cmd: "fetch",
