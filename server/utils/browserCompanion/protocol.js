@@ -175,7 +175,19 @@ function handleMessage({ socket, raw }) {
 
   // The reply must arrive on the socket the command went out on. A frame
   // echoing another connection's requestId resolves nothing.
-  if (entry.socket !== socket) return;
+  if (entry.socket !== socket) {
+    // Never normal traffic, so this cannot be noisy: it is either a wiring bug
+    // (the socket registered is not the socket attached, which makes every
+    // command time out with text identical to a disconnected browser) or one
+    // connection echoing another's requestId. Without this line both are silent
+    // — the drop is a bare `return`, and the caller only ever sees a timeout.
+    // The requestId is not logged: it is the correlation secret this module's
+    // socket check exists to stop being guessable.
+    console.warn(
+      "browserCompanion protocol: reply arrived on a different socket than the command was sent on — dropping it. This is a socket-wiring bug or a cross-connection echo, never normal traffic."
+    );
+    return;
+  }
 
   // `=== true`, not truthy: `ok: "false"` is a truthy string, so an extension
   // doing `ok: String(success)` — or any JSON round trip that stringifies
@@ -205,6 +217,45 @@ function attach(socket) {
   if (attached.has(socket)) return;
   attached.add(socket);
   socket.on("message", (raw) => handleMessage({ socket, raw }));
+}
+
+/**
+ * Settle every command still awaiting a reply on one socket.
+ *
+ * Called from the endpoint's close handler. Without it, a command already in
+ * flight when the browser disconnects waits out its own timeout — up to
+ * DEFAULT_TIMEOUT_MS — and then reports "timed out", which reads as a slow page
+ * rather than a closed browser. Commands sent *after* the disconnect already
+ * answer immediately via the readyState guard in `send`; this covers the ones
+ * that were already on the wire.
+ *
+ * Filtered by socket identity, deliberately: `__reset` settles everything for
+ * every connection, so using it here would abort every other user's in-flight
+ * commands whenever any one extension disconnects.
+ *
+ * Resolves rather than rejects, like every other exit path in this module.
+ *
+ * @param {object} socket the connection that closed
+ * @returns {number} how many commands were settled
+ */
+function drainSocket(socket) {
+  // A missing socket must not match entries whose socket is undefined for some
+  // other reason, and would drain connections it has nothing to do with.
+  if (!socket) return 0;
+
+  let drained = 0;
+  // Snapshotted first: `entry.resolve` is the settle closure, which deletes from
+  // the map as it goes.
+  for (const entry of [...pending.values()]) {
+    if (entry.socket !== socket) continue;
+    drained += 1;
+    entry.resolve({
+      ok: false,
+      data: null,
+      error: `Browser command failed: ${DISCONNECTED_ERROR}`,
+    });
+  }
+  return drained;
 }
 
 /**
@@ -244,6 +295,7 @@ module.exports = {
   send,
   handleMessage,
   attach,
+  drainSocket,
   __reset,
   __pendingCount,
   DEFAULT_TIMEOUT_MS,

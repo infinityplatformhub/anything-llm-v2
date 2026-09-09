@@ -486,6 +486,124 @@ describe("browserCompanion protocol", () => {
   // nothing verified it. A reset that clears the timer and drops the map entry
   // without resolving leaves the caller hung forever — to the Jest timeout,
   // rather than a useful failure.
+  describe("drainSocket", () => {
+    it("settles every command in flight on that socket", async () => {
+      const socket = fakeSocket();
+      const first = protocol.send({ socket, cmd: "read", timeoutMs: 60_000 });
+      const second = protocol.send({ socket, cmd: "click", timeoutMs: 60_000 });
+      expect(protocol.__pendingCount()).toBe(2);
+
+      expect(protocol.drainSocket(socket)).toBe(2);
+
+      for (const pending of [first, second]) {
+        const settled = await Promise.race([
+          pending,
+          new Promise((resolve) => setTimeout(() => resolve("HUNG"), 100)),
+        ]);
+        expect(settled).not.toBe("HUNG");
+        expect(settled.ok).toBe(false);
+        expect(settled.data).toBeNull();
+        expect(settled.error).toMatch(/not connected/i);
+      }
+      expect(protocol.__pendingCount()).toBe(0);
+    });
+
+    // The reason __reset could not be reused: one extension disconnecting must
+    // not settle a different user's in-flight commands.
+    it("leaves other sockets' commands untouched", async () => {
+      const mine = fakeSocket();
+      const theirs = fakeSocket();
+      const drained = protocol.send({
+        socket: mine,
+        cmd: "read",
+        timeoutMs: 60_000,
+      });
+      const untouched = protocol.send({
+        socket: theirs,
+        cmd: "read",
+        timeoutMs: 60_000,
+      });
+
+      expect(protocol.drainSocket(mine)).toBe(1);
+      await expect(drained).resolves.toMatchObject({ ok: false });
+      expect(protocol.__pendingCount()).toBe(1);
+
+      // Still genuinely pending, not settled.
+      const stillWaiting = await Promise.race([
+        untouched,
+        new Promise((resolve) => setTimeout(() => resolve("PENDING"), 50)),
+      ]);
+      expect(stillWaiting).toBe("PENDING");
+
+      protocol.drainSocket(theirs);
+      await expect(untouched).resolves.toMatchObject({ ok: false });
+    });
+
+    it("is a no-op for a socket with nothing in flight, and for no socket", () => {
+      expect(protocol.drainSocket(fakeSocket())).toBe(0);
+      expect(protocol.drainSocket(undefined)).toBe(0);
+      expect(protocol.drainSocket(null)).toBe(0);
+    });
+
+    // A missing socket must not match entries that happen to carry a falsy
+    // socket, or it would drain connections it has nothing to do with.
+    it("does not drain entries when called with no socket", async () => {
+      const socket = fakeSocket();
+      const pending = protocol.send({ socket, cmd: "read", timeoutMs: 60_000 });
+
+      expect(protocol.drainSocket(undefined)).toBe(0);
+      expect(protocol.__pendingCount()).toBe(1);
+
+      protocol.drainSocket(socket);
+      await expect(pending).resolves.toMatchObject({ ok: false });
+    });
+  });
+
+  describe("mismatched-socket diagnostics", () => {
+    // A reply on the wrong socket is dropped correctly, but was previously
+    // dropped SILENTLY — indistinguishable from an unknown requestId, and the
+    // caller only ever saw a timeout. It is a wiring bug or a cross-connection
+    // echo, never normal traffic, so warning cannot be noisy.
+    it("warns when a reply arrives on a different socket than it was sent on", () => {
+      const sent = fakeSocket();
+      const other = fakeSocket();
+      protocol.send({ socket: sent, cmd: "read", timeoutMs: 60_000 });
+      const requestId = sent.lastRequestId();
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        protocol.handleMessage({
+          socket: other,
+          raw: JSON.stringify({ requestId, ok: true, data: "PWN" }),
+        });
+        expect(warn).toHaveBeenCalledTimes(1);
+        // The requestId is the correlation secret — it must not be logged.
+        expect(String(warn.mock.calls[0][0])).not.toContain(requestId);
+      } finally {
+        warn.mockRestore();
+      }
+      // And the command is still pending: the frame resolved nothing.
+      expect(protocol.__pendingCount()).toBe(1);
+      protocol.drainSocket(sent);
+    });
+
+    // An unknown requestId is ordinary traffic (a late reply after a timeout),
+    // so it must stay silent or the warning becomes noise and gets ignored.
+    it("stays silent for an unknown requestId", () => {
+      const socket = fakeSocket();
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        protocol.handleMessage({
+          socket,
+          raw: JSON.stringify({ requestId: "r_never-existed", ok: true }),
+        });
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
   describe("__reset", () => {
     it("settles in-flight callers instead of abandoning them", async () => {
       const socket = fakeSocket();

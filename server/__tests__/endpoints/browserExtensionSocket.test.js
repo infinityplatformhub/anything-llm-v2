@@ -436,6 +436,329 @@ describe("browser-companion agent socket", () => {
       socket.emit("error", new Error("Invalid WebSocket frame"))
     ).not.toThrow();
   });
+
+  // ---------------------------------------------------------------------
+  // Fix round 1.
+  // ---------------------------------------------------------------------
+
+  // @edge — `schema.prisma` declares `suspended Int @default(0)` and `User.get`
+  // does not cast it, so production hands this handler `1`, never `true`. Every
+  // other test here mocks a boolean, so tightening the check to `=== true` — the
+  // most natural-looking edit — survives them all while letting a suspended
+  // user's extension register. Mocked with the values Prisma actually returns.
+  it("refuses a suspended user when Prisma reports suspended as 1, not true", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
+    SystemSettings.isMultiUserMode.mockResolvedValue(true);
+    User.get.mockResolvedValue({ id: 7, suspended: 1 });
+
+    const socket = await connect("brx-good");
+    expect(socket.closed).toBe(true);
+    expect(socket.closeCode).toBe(4403);
+    expect(
+      registry.resolve({ userId: 7, multiUserMode: true }).socket
+    ).toBeNull();
+  });
+
+  it("admits an active user when Prisma reports suspended as 0, not false", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
+    SystemSettings.isMultiUserMode.mockResolvedValue(true);
+    User.get.mockResolvedValue({ id: 7, suspended: 0 });
+
+    const socket = await connect("brx-good");
+    expect(socket.closed).toBe(false);
+    expect(registry.resolve({ userId: 7, multiUserMode: true }).socket).toBe(
+      socket
+    );
+  });
+
+  // @edge — M-2: `""` must never reach the DB. `validate("")` would return false
+  // at `.startsWith`, so this is defence in depth, but nothing pinned it.
+  it("closes the socket on an empty-string key without touching the database", async () => {
+    const socket = await connect("");
+    expect(socket.closed).toBe(true);
+    expect(socket.closeCode).toBe(4401);
+    expect(BrowserExtensionApiKey.validate).not.toHaveBeenCalled();
+  });
+
+  // --- C1: the key travels in the subprotocol, query is the deprecated fallback ---
+
+  it("authenticates with the key offered as a subprotocol", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
+    SystemSettings.isMultiUserMode.mockResolvedValue(true);
+    User.get.mockResolvedValue({ id: 7, suspended: 0 });
+
+    const socket = fakeSocket();
+    await wsRoutes[ROUTE](socket, {
+      headers: {
+        "sec-websocket-protocol":
+          "anythingllm-browser-companion, brx-from-subprotocol",
+      },
+      query: {},
+    });
+
+    expect(BrowserExtensionApiKey.validate).toHaveBeenCalledWith(
+      "brx-from-subprotocol"
+    );
+    expect(socket.closed).toBe(false);
+    expect(registry.resolve({ userId: 7, multiUserMode: true }).socket).toBe(
+      socket
+    );
+  });
+
+  // The subprotocol must WIN when both are present, or an attacker who can
+  // append a query string to the upgrade URL could downgrade the transport.
+  it("prefers the subprotocol key over the query parameter when both are sent", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
+    SystemSettings.isMultiUserMode.mockResolvedValue(true);
+    User.get.mockResolvedValue({ id: 7, suspended: 0 });
+
+    const socket = fakeSocket();
+    await wsRoutes[ROUTE](socket, {
+      headers: {
+        "sec-websocket-protocol": "anythingllm-browser-companion, brx-preferred",
+      },
+      query: { key: "brx-ignored" },
+    });
+
+    expect(BrowserExtensionApiKey.validate).toHaveBeenCalledWith("brx-preferred");
+    expect(BrowserExtensionApiKey.validate).not.toHaveBeenCalledWith(
+      "brx-ignored"
+    );
+  });
+
+  // A header without the marker is not a credential offer. Accepting a bare
+  // token would let any subprotocol string be tried as a key.
+  it("ignores a subprotocol header that does not lead with the marker", async () => {
+    const socket = fakeSocket();
+    await wsRoutes[ROUTE](socket, {
+      headers: { "sec-websocket-protocol": "brx-not-announced" },
+      query: {},
+    });
+
+    expect(socket.closed).toBe(true);
+    expect(socket.closeCode).toBe(4401);
+    expect(BrowserExtensionApiKey.validate).not.toHaveBeenCalled();
+  });
+
+  // Sabotage found this gap: the "no marker" test above offers a single token,
+  // so dropping the marker check still rejects it (tokens[1] is undefined).
+  // Two tokens whose first is NOT the marker is what actually distinguishes
+  // "require the marker" from "treat any subprotocol list as a credential".
+  it("ignores a two-token subprotocol offer whose first token is not the marker", async () => {
+    const socket = fakeSocket();
+    await wsRoutes[ROUTE](socket, {
+      headers: { "sec-websocket-protocol": "some-other-protocol, brx-sneaky" },
+      query: {},
+    });
+
+    expect(socket.closed).toBe(true);
+    expect(socket.closeCode).toBe(4401);
+    expect(BrowserExtensionApiKey.validate).not.toHaveBeenCalled();
+  });
+
+  // Sabotage found this gap too: with only two tokens, "index 1" and "last
+  // token" are the same value. A third token separates them, and the key must
+  // stay at the position right after the marker — otherwise a client appending
+  // subprotocols shifts which value is treated as the credential.
+  it("takes the key from the position after the marker, not the last token", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
+    SystemSettings.isMultiUserMode.mockResolvedValue(true);
+    User.get.mockResolvedValue({ id: 7, suspended: 0 });
+
+    await wsRoutes[ROUTE](fakeSocket(), {
+      headers: {
+        "sec-websocket-protocol":
+          "anythingllm-browser-companion, brx-real-key, brx-trailing-decoy",
+      },
+      query: {},
+    });
+
+    expect(BrowserExtensionApiKey.validate).toHaveBeenCalledWith("brx-real-key");
+    expect(BrowserExtensionApiKey.validate).not.toHaveBeenCalledWith(
+      "brx-trailing-decoy"
+    );
+  });
+
+  it("closes the socket when the marker is offered with no key after it", async () => {
+    const socket = fakeSocket();
+    await wsRoutes[ROUTE](socket, {
+      headers: { "sec-websocket-protocol": "anythingllm-browser-companion" },
+      query: {},
+    });
+
+    expect(socket.closed).toBe(true);
+    expect(socket.closeCode).toBe(4401);
+    expect(BrowserExtensionApiKey.validate).not.toHaveBeenCalled();
+  });
+
+  // The deprecation has to be visible or the fallback is never removed.
+  it("warns exactly once when the deprecated query parameter is used", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
+    SystemSettings.isMultiUserMode.mockResolvedValue(true);
+    User.get.mockResolvedValue({ id: 7, suspended: 0 });
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await connect("brx-good");
+      const deprecationWarnings = warn.mock.calls.filter((args) =>
+        String(args[0]).includes("deprecated")
+      );
+      expect(deprecationWarnings).toHaveLength(1);
+      // It must name the replacement, or it is a warning nobody can act on.
+      expect(String(deprecationWarnings[0][0])).toContain(
+        "anythingllm-browser-companion"
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does not warn about deprecation when the subprotocol is used", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
+    SystemSettings.isMultiUserMode.mockResolvedValue(true);
+    User.get.mockResolvedValue({ id: 7, suspended: 0 });
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await wsRoutes[ROUTE](fakeSocket(), {
+        headers: {
+          "sec-websocket-protocol": "anythingllm-browser-companion, brx-good",
+        },
+        query: {},
+      });
+      expect(
+        warn.mock.calls.filter((args) =>
+          String(args[0]).includes("deprecated")
+        )
+      ).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // --- M-1: the raw key must never reach the log ---
+
+  // Prisma embeds the failing query's arguments in its error message, so an
+  // error raised while validating carries the key in plaintext. Truncating does
+  // not fix it — in the real error shape the key sits inside the first 200
+  // characters — so the token itself has to go.
+  it("never logs the raw API key when validate throws", async () => {
+    const KEY = "brx-SUPERSECRETKEYVALUE12345";
+    BrowserExtensionApiKey.validate.mockRejectedValue(
+      new Error(
+        "Invalid `prisma.browser_extension_api_keys.findUnique()` invocation: where key = " +
+          KEY
+      )
+    );
+    const errorLog = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const socket = await connect(KEY);
+      expect(socket.closed).toBe(true);
+      expect(socket.closeCode).toBe(1011);
+
+      const logged = errorLog.mock.calls.map((args) => args.join(" ")).join("\n");
+      expect(logged).not.toContain(KEY);
+      // And it must still say something useful.
+      expect(logged).toContain("brx-[redacted]");
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  // --- M-5: a client that dies mid-auth must not leave a dead socket bound ---
+
+  it("does not leave a socket registered when the client dies during auth", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
+    SystemSettings.isMultiUserMode.mockResolvedValue(true);
+    User.get.mockResolvedValue({ id: 7, suspended: 0 });
+
+    // A socket that reports itself already CLOSED by the time auth finishes —
+    // the close event fired before the handler could attach its listener.
+    const socket = fakeSocket();
+    socket.readyState = 3; // CLOSED
+    await wsRoutes[ROUTE](socket, { query: { key: "brx-good" } });
+
+    expect(
+      registry.resolve({ userId: 7, multiUserMode: true }).socket
+    ).toBeNull();
+  });
+
+  it("keeps an open socket registered (the mid-auth check must not fire on a live one)", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
+    SystemSettings.isMultiUserMode.mockResolvedValue(true);
+    User.get.mockResolvedValue({ id: 7, suspended: 0 });
+
+    const socket = fakeSocket();
+    socket.readyState = 1; // OPEN
+    await wsRoutes[ROUTE](socket, { query: { key: "brx-good" } });
+
+    expect(registry.resolve({ userId: 7, multiUserMode: true }).socket).toBe(
+      socket
+    );
+  });
+
+  // --- drainSocket: in-flight commands answer on disconnect ---
+
+  it("answers in-flight commands with 'not connected' when the socket closes", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
+    SystemSettings.isMultiUserMode.mockResolvedValue(true);
+    User.get.mockResolvedValue({ id: 7, suspended: 0 });
+
+    const socket = await connect("brx-good");
+    // In flight: written to the socket, no reply yet. A long timeout so that a
+    // pass cannot come from the command simply timing out.
+    const inFlight = protocol.send({
+      socket,
+      cmd: "read_page",
+      timeoutMs: 60_000,
+    });
+    expect(protocol.__pendingCount()).toBe(1);
+
+    socket.emit("close");
+
+    await expect(inFlight).resolves.toMatchObject({
+      ok: false,
+      data: null,
+      error: expect.stringContaining("not connected"),
+    });
+    expect(protocol.__pendingCount()).toBe(0);
+  });
+
+  // One extension disconnecting must not settle another user's commands — the
+  // reason __reset could not be used for this.
+  it("drains only the closing socket's commands, not another connection's", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
+    SystemSettings.isMultiUserMode.mockResolvedValue(true);
+    User.get.mockResolvedValue({ id: 7, suspended: 0 });
+    const first = await connect("brx-good");
+
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 2, user_id: 9 });
+    User.get.mockResolvedValue({ id: 9, suspended: 0 });
+    const second = await connect("brx-other");
+
+    const onFirst = protocol.send({
+      socket: first,
+      cmd: "read_page",
+      timeoutMs: 60_000,
+    });
+    const onSecond = protocol.send({
+      socket: second,
+      cmd: "read_page",
+      timeoutMs: 60_000,
+    });
+    expect(protocol.__pendingCount()).toBe(2);
+
+    first.emit("close");
+
+    await expect(onFirst).resolves.toMatchObject({ ok: false });
+    // The other user's command is untouched and still waiting.
+    expect(protocol.__pendingCount()).toBe(1);
+
+    // Settle it so the test does not leave a live timer behind.
+    second.emit("close");
+    await expect(onSecond).resolves.toMatchObject({ ok: false });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -649,5 +972,124 @@ describe("browser-companion agent socket (real ws + express-ws)", () => {
       error: null,
     });
     client.close();
+  });
+
+  // --- Fix round 1, against the real libraries ---
+
+  // I2: regression cover for the error-listener fix. The bug it prevents is a
+  // process-wide crash from six bytes, so the assertion has to be against the
+  // real ws frame parser — a fake socket cannot produce a protocol violation.
+  // (The existing "survives a malformed frame" test above covers the same fix;
+  // this one pins the listener's own presence and that the connection is still
+  // cleaned up afterwards.)
+  it("keeps serving after a malformed frame and cleans up that connection", async () => {
+    const client = open("brx-good");
+    await client.opened;
+    const { socket } = registry.resolve({ userId: 7, multiUserMode: true });
+    expect(socket.listenerCount("error")).toBeGreaterThan(0);
+
+    // Reserved opcode 0x3 — rejected by ws while parsing, emits 'error'.
+    client._socket.write(Buffer.from([0x83, 0x80, 0x00, 0x00, 0x00, 0x00]));
+    await closedWithin(client);
+    await new Promise((tick) => setTimeout(tick, 50));
+
+    expect(
+      registry.resolve({ userId: 7, multiUserMode: true }).socket
+    ).toBeNull();
+
+    // Still serving: the process is alive and the route still authenticates.
+    const next = open("brx-good");
+    expect(await next.opened).toBe("open");
+    next.close();
+  });
+
+  // C1: the whole point of moving the key off the query string is that a real
+  // browser client can still connect. ws@7 selects the FIRST offered
+  // subprotocol and echoes only that back; if the marker were not offered first,
+  // or the server echoed the key, the handshake contract would break.
+  it("completes the handshake for a client offering the key as a subprotocol", async () => {
+    const client = new WebSocket(
+      `${baseUrl}/browser-companion/agent-socket`,
+      ["anythingllm-browser-companion", "brx-good"]
+    );
+    clients.push(client);
+    client.on("error", () => {});
+    const opened = await new Promise((done) => {
+      client.once("open", () => done("open"));
+      client.once("close", () => done("closed"));
+    });
+
+    expect(opened).toBe("open");
+    // The echoed subprotocol must be the marker, never the credential.
+    expect(client.protocol).toBe("anythingllm-browser-companion");
+    expect(client.protocol).not.toContain("brx-");
+
+    const { socket } = registry.resolve({ userId: 7, multiUserMode: true });
+    expect(socket).not.toBeNull();
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    client.close();
+  });
+
+  it("rejects a real subprotocol connection whose key is invalid", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue(false);
+    const client = new WebSocket(
+      `${baseUrl}/browser-companion/agent-socket`,
+      ["anythingllm-browser-companion", "brx-bad"]
+    );
+    clients.push(client);
+    client.on("error", () => {});
+    const { code } = await new Promise((done) => {
+      client.once("close", (c, r) => done({ code: c, reason: String(r) }));
+      setTimeout(() => done({ code: "never-closed", reason: "" }), 4000).unref?.();
+    });
+    expect(code).toBe(4401);
+  });
+
+  // The key must not appear in the URL when the subprotocol is used — that is
+  // the entire exposure this change exists to close.
+  it("carries no key in the request URL when the subprotocol is used", async () => {
+    const seen = [];
+    server.on("upgrade", (req) => seen.push(req.url));
+
+    const client = new WebSocket(
+      `${baseUrl}/browser-companion/agent-socket`,
+      ["anythingllm-browser-companion", "brx-good"]
+    );
+    clients.push(client);
+    client.on("error", () => {});
+    await new Promise((done) => {
+      client.once("open", done);
+      client.once("close", done);
+    });
+
+    expect(seen.length).toBeGreaterThan(0);
+    for (const url of seen) expect(url).not.toContain("brx-");
+    client.close();
+  });
+
+  // drainSocket over a real disconnect: the command must answer immediately with
+  // "not connected" rather than waiting out its timeout.
+  it("answers an in-flight command as soon as the real connection drops", async () => {
+    const client = open("brx-good");
+    await client.opened;
+    const { socket } = registry.resolve({ userId: 7, multiUserMode: true });
+
+    // Never replied to. A long timeout, so passing cannot be the timeout firing.
+    const inFlight = protocol.send({
+      socket,
+      cmd: "read_page",
+      timeoutMs: 60_000,
+    });
+    await new Promise((tick) => setTimeout(tick, 20));
+
+    const startedAt = Date.now();
+    client._socket.destroy(); // abnormal close, no handshake
+
+    const result = await inFlight;
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/not connected/i);
+    // Answered because the socket closed, not because it timed out.
+    expect(Date.now() - startedAt).toBeLessThan(5000);
+    expect(protocol.__pendingCount()).toBe(0);
   });
 });

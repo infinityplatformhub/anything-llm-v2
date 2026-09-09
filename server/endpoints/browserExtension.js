@@ -26,9 +26,94 @@ const WS_CLOSE_FORBIDDEN = 4403; // key is valid but its user may not connect
 const WS_CLOSE_REPLACED = 4409; // another device took this user's slot
 const WS_CLOSE_INTERNAL_ERROR = 1011; // RFC 6455 "internal error"
 
+// ws readyState for OPEN. Named for the same reason protocol.js names it: the
+// bare `1` reads as a magic number at the one place a dead socket is detected.
+const WS_OPEN = 1;
+
 // ws refuses a close reason over 123 bytes with a throw ("The message must not be
 // greater than 123 bytes"), verified against ws@7.5.10. Kept well under.
 const EVICTED_REASON = "Replaced by a newer connection.";
+
+// Subprotocol marker the extension offers first, with the key as the second
+// value: `new WebSocket(url, [BROWSER_COMPANION_SUBPROTOCOL, "brx-..."])`.
+//
+// Why the key travels here rather than in the query string: the upgrade request
+// is an ordinary HTTP GET, so `?key=` is written verbatim into the access log of
+// every reverse proxy, ingress and CDN in front of this server — plaintext, at
+// rest for weeks, on infrastructure this repo does not configure. A
+// `Sec-WebSocket-Protocol` header is not logged by any of those defaults.
+//
+// `ws@7.5.10` selects the FIRST offered subprotocol and echoes only that one back
+// in the handshake response — verified against the real library — so the marker
+// is what appears on the wire and the key is never echoed. The browser
+// `WebSocket` constructor rejects the connection if the server answers with a
+// value it did not offer, which is why the marker must be offered first and
+// echoed unchanged.
+const BROWSER_COMPANION_SUBPROTOCOL = "anythingllm-browser-companion";
+
+// Matches a `brx-` API key anywhere in a string. `BrowserExtensionApiKey.makeSecret`
+// builds them as `brx-` + a uuid-apikey value (upper-case base32 with dashes), so
+// the character class covers the whole token and stops at the first character
+// that cannot be part of one.
+const API_KEY_PATTERN = /brx-[A-Za-z0-9-]+/g;
+
+/**
+ * Strip any API key out of text bound for a log.
+ *
+ * Prisma embeds a failing query's arguments in its error message, so an error
+ * raised while validating a key carries that key in plaintext. Redacting the
+ * token is the only thing that works: truncating the message does not, because
+ * in the real error shape the key appears well inside the first 200 characters.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function redactApiKeys(text) {
+  return text.replace(API_KEY_PATTERN, "brx-[redacted]");
+}
+
+/**
+ * Pull the API key off a WebSocket upgrade request.
+ *
+ * Two accepted sources, in order of preference:
+ *   1. `Sec-WebSocket-Protocol: anythingllm-browser-companion, brx-...`
+ *   2. `?key=brx-...` — DEPRECATED, retained so an already-installed extension
+ *      keeps working across the upgrade.
+ *
+ * The query path may be deleted once (a) the task-8 extension offers the
+ * subprotocol, and (b) every installed extension has updated past that release.
+ * Until both hold, removing it silently breaks connected users. Whoever writes
+ * the task-8 client should read this comment before choosing a transport.
+ *
+ * @param {object} request the upgrade request
+ * @returns {{key: string|null, source: "subprotocol"|"query"|null}}
+ */
+function browserCompanionKeyFrom(request) {
+  // Express lower-cases header names; the value is the raw comma-separated list
+  // the client offered, e.g. "anythingllm-browser-companion, brx-abc".
+  const offered = request?.headers?.["sec-websocket-protocol"];
+  if (typeof offered === "string") {
+    const tokens = offered
+      .split(",")
+      .map((token) => token.trim())
+      .filter(Boolean);
+    // Anything after the marker is the key. Indexed rather than "last token" so
+    // a client offering extra subprotocols after the key cannot shift which
+    // value is treated as the credential.
+    if (tokens[0] === BROWSER_COMPANION_SUBPROTOCOL && tokens.length > 1)
+      return { key: tokens[1], source: "subprotocol" };
+  }
+
+  // `String(key)` is deliberately NOT used: a missing key would become the
+  // literal "undefined" and a repeated ?key=a&key=b (express parses that to an
+  // array) would become "a,b" — both reach the DB as a lookup that merely
+  // misses, and neither should get that far.
+  const fromQuery = request?.query?.key;
+  if (typeof fromQuery === "string" && fromQuery)
+    return { key: fromQuery, source: "query" };
+
+  return { key: null, source: null };
+}
 
 function browserExtensionEndpoints(app) {
   if (!app) return;
@@ -238,8 +323,10 @@ function browserExtensionEndpoints(app) {
   );
 
   // Long-lived socket the extension holds open so agent tools can drive the
-  // user's own Chrome. Browser WebSocket cannot set headers, so the key travels
-  // as a query param — the same key /browser-extension/check accepts as a bearer.
+  // user's own Chrome. A browser WebSocket cannot set headers, so the key travels
+  // in the subprotocol list (preferred) or the query string (deprecated) — see
+  // `browserCompanionKeyFrom`. It is the same key /browser-extension/check
+  // accepts as a bearer.
   //
   // This handler is the authentication boundary for the whole feature: everything
   // behind it (the registry entry, every command the protocol writes to this
@@ -249,13 +336,16 @@ function browserExtensionEndpoints(app) {
   // request, which is attacker-controlled.
   app.ws("/browser-companion/agent-socket", async function (socket, request) {
     try {
-      const key = request?.query?.key;
-      // String(key) below would turn a missing key into "undefined" and a
-      // repeated ?key=a&key=b (express parses that to an array) into "a,b" — both
-      // reach the DB as a lookup that simply misses, but neither should get that
-      // far. Only a non-empty string is a candidate for validation.
-      if (!key || typeof key !== "string")
-        return socket.close(WS_CLOSE_UNAUTHORIZED);
+      const { key, source } = browserCompanionKeyFrom(request);
+      if (!key) return socket.close(WS_CLOSE_UNAUTHORIZED);
+
+      // A deprecated path nobody can see being used is a path that never gets
+      // removed. Logged once per connection, not per command, and only for the
+      // fallback — the supported transport stays silent.
+      if (source === "query")
+        console.warn(
+          `browser-companion: extension authenticated with the deprecated ?key= query parameter. The key is written to upstream proxy access logs this way; the extension should offer it as the "${BROWSER_COMPANION_SUBPROTOCOL}" subprotocol instead.`
+        );
 
       // `validate` resolves `false` (not null) for a bad key, and already applies
       // the multi-user rule that a key with no user_id is not valid. Checked
@@ -271,8 +361,20 @@ function browserExtensionEndpoints(app) {
         // legacy single-user key, which every user's agent run can resolve.
         if (apiKey.user_id === null) return socket.close(WS_CLOSE_FORBIDDEN);
         const user = await User.get({ id: apiKey.user_id });
+        // Truthy, NOT `=== true`: `schema.prisma` declares `suspended Int
+        // @default(0)` and `User.get` does not cast it, so a suspended user
+        // arrives here as `1`, never `true`. Tightening this to `=== true` — the
+        // most natural-looking edit, and what a TypeScript migration would
+        // produce — turns it into an auth bypass that lets a suspended user's
+        // extension register and be driven. Pinned by a test using `1`/`0`.
         if (!user || user.suspended) return socket.close(WS_CLOSE_FORBIDDEN);
       }
+      // Single-user mode intentionally has no user check: `validate` returns any
+      // `brx-` row regardless of user_id, and every such connection registers
+      // under the same null sentinel. So it is one browser per INSTANCE, not per
+      // key — a second extension evicts the first with 4409. Correct as designed
+      // (single-user mode has one human, so per-instance and per-user are the
+      // same statement), but surprising if you assumed keys were per-device.
 
       // The socket object registered here is the same object handed to
       // `protocol.attach` below and the same one `registry.resolve` returns to
@@ -363,13 +465,39 @@ function browserExtensionEndpoints(app) {
         // a dead socket. `unregister` only drops the entry while it is still this
         // socket, so a late close cannot evict the replacement that took over.
         registry.unregister({ userId: apiKey.user_id, socket });
+        // Answer the commands already on the wire. Without this they wait out
+        // their own timeout and report "timed out after 20000ms", which reads as
+        // a slow page rather than a closed browser. Scoped to this socket, so one
+        // extension disconnecting cannot settle another user's commands.
+        protocol.drainSocket(socket);
       });
+
+      // M-5: the client may have died during the awaits above. The close event
+      // has already fired by now, so the listener just attached will never run,
+      // and the entry registered a moment ago would be a dead socket that an
+      // agent run can still resolve — and, worse, one that evicts a live
+      // extension that took the slot while this connection was authenticating.
+      // Checked after the listener is attached so the two cannot both miss.
+      if (socket.readyState !== undefined && socket.readyState !== WS_OPEN) {
+        registry.unregister({ userId: apiKey.user_id, socket });
+        protocol.drainSocket(socket);
+      }
     } catch (error) {
       // Includes the TypeError `registry.register` throws on a non-integer
       // user_id. Not swallowed and not worked around: a key row whose user_id is
       // neither an integer nor null is a corrupt identity, and the only safe
       // answer is to refuse the connection rather than bind it to a guessed key.
-      console.error("browser-companion agent socket error", error);
+      // Redacted, and the message only — never the error object. A Prisma
+      // failure embeds the failing query's arguments, which on this path is the
+      // raw `brx-` key: a live, long-lived credential in plaintext server logs.
+      //
+      // Truncation alone does NOT fix this and was measured before being
+      // rejected: in the real Prisma error shape the key sits at index 81-135,
+      // so a 200-char slice still contains it. Only removing the token works.
+      console.error(
+        "browser-companion agent socket error:",
+        redactApiKeys(String(error?.message ?? error))
+      );
       try {
         socket.close(WS_CLOSE_INTERNAL_ERROR);
       } catch {
