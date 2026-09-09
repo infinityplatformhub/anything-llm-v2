@@ -1,0 +1,145 @@
+# Browser Companion Bridge — ให้ agent สั่ง Chrome ตัวจริงของผู้ใช้
+
+วันที่: 2026-09-09 · mockup: `docs/superpowers/mockups/browser-companion-bridge.html`
+
+## ปัญหา
+
+agent ในแอปอ่านเว็บได้ (`web-scraping`, `web-browsing`) แต่:
+
+- **กดไม่ได้** — อ่านได้อย่างเดียว ไม่มี click/type/scroll
+- **ติด antibot** — HTTP fetch ไม่มี session, ไม่มี cookie, ไม่มี browser fingerprint → LinkedIn/Cloudflare block
+- **เว็บหลัง login เข้าไม่ถึง** — ต้อง auth ในเบราว์เซอร์ที่ผู้ใช้ login อยู่แล้ว
+
+`open-computer/` มี CDP bridge ที่แก้ปัญหานี้ได้แล้ว (`services/interface-service/utils/cdp-input.js` +
+`services/extensions/browser-agent.ts` 10 tool) แต่รันใน QEMU VM — profile/cookie ไม่ใช่ของผู้ใช้ และกิน RAM/CPU ทั้ง VM
+
+## ทางที่เลือก
+
+ต่อ **extension เดิม** (`browser-extension/`) เข้ากับ `chrome.debugger` API แล้วให้ agent plugin ฝั่ง server
+สั่งผ่าน WebSocket
+
+### ทำไม `chrome.debugger` ไม่ใช่ทางอื่น
+
+| | open-computer VM | Playwright CDP-attach | **extension + chrome.debugger** |
+|---|---|---|---|
+| profile/cookie จริงของผู้ใช้ | ไม่ | ได้ (profile แยก) | **ได้ profile ที่ใช้อยู่จริง** |
+| `navigator.webdriver` | false | **true** (`--enable-automation`) | **false** |
+| `isTrusted` event | ได้ | ได้ | **ได้** |
+| ต้นทุน runtime | VM ทั้งลูก | Chrome แยกตัว | **ศูนย์** |
+
+content script กดผ่าน `el.click()` ให้ `isTrusted: false` — antibot จับได้ทันที นั่นคือเหตุผลที่ต้องเป็น
+`chrome.debugger` + `Input.dispatchMouseEvent` ไม่ใช่ content script
+
+## สถาปัตยกรรม
+
+ทางเดินของคำสั่งหนึ่งครั้ง (5 hop):
+
+1. **agent plugin** (`server/utils/agents/aibitat/plugins/browser-companion.js`) — agent เรียก `page_click({ id: 12 })`
+2. **server** (`server/endpoints/browserExtension.js`) — หา socket จาก `apiKeyId` ส่งคำสั่งเข้าไป รอผลตาม `requestId`
+3. **extension service worker** — เช็ค allowlist ก่อน ถ้าผ่านจึง `chrome.debugger.attach`
+4. **CDP** — `Input.dispatchMouseEvent` / `dispatchKeyEvent` เว้นจังหวะพิมพ์สุ่ม 30–90ms
+5. **หน้าเว็บ** — ได้ event `isTrusted: true`, `navigator.webdriver === false`
+
+### ช่องคุย: WebSocket ค้างไว้
+
+`app.ws()` มีอยู่แล้วในโปรเจกต์ (express-ws — ดู `server/endpoints/agentWebsocket.js`) ไม่ต้องเพิ่ม infra
+
+route ใหม่: `app.ws("/browser-extension/agent-socket", ...)` auth ด้วย `BrowserExtensionApiKey` ที่มีอยู่ —
+**ไม่แตะ schema**
+
+ที่เลือก WS ไม่ใช่ long-poll: agent กด 20–30 step ติดกัน long-poll เพิ่ม 0–500ms ต่อ step และต้องมีตาราง
+queue ใน DB = แตะ schema
+
+**ราคาที่จ่าย และต้องเขียนโค้ดรับ:**
+
+- MV3 service worker ตายเมื่อ idle 30 วิ → ต้องมี keepalive (`chrome.alarms` 25 วิ + WS ping) และ reconnect ทุกครั้งที่ตื่น
+- server ถือ `apiKeyId → socket` ใน memory → หลาย replica ต้อง sticky session
+  dev2 รัน replica เดียว ยังไม่เจ็บ **แต่บิลมาถึงตอน scale — ต้องเขียนไว้ใน README ของ endpoint**
+
+### wire protocol
+
+server → extension:
+```json
+{ "requestId": "r_8f2a", "cmd": "click", "tabId": 391, "id": 12 }
+```
+
+extension → server:
+```json
+{ "requestId": "r_8f2a", "ok": true, "url": "https://www.linkedin.com/messaging/" }
+```
+หรือ `{ "requestId": "r_8f2a", "ok": false, "error": "denied: domain not in allowlist" }`
+
+`requestId` จำเป็นเพราะ agent อาจยิงหลายคำสั่งซ้อนกัน — ตอบผิดคู่ = agent เข้าใจหน้าเว็บผิด
+
+## Agent tool
+
+ยืม tool shape จาก `open-computer/services/extensions/browser-agent.ts` ที่พิสูจน์แล้วว่าใช้งานได้จริง:
+
+| tool | ทำอะไร |
+|---|---|
+| `page_state` | อ่านผัง element ในหน้า ติด `[id]` ให้ agent อ้างถึง |
+| `page_click` | กด element ตาม `[id]` |
+| `page_type` | พิมพ์ลง element ตาม `[id]` |
+| `page_read` | อ่านข้อความในหน้า (markdown) |
+| `page_scroll` | เลื่อนหน้า |
+| `page_key` | กดปุ่ม (Enter/Tab/Escape) |
+| `page_tabs` | ดูรายการแท็บที่เปิดอยู่ |
+| `page_switch` | สลับแท็บตาม URL substring |
+| `page_navigate` | เปิด URL |
+| `page_close` | ปิดแท็บ |
+
+agent ไม่เห็นพิกเซล — เห็น `[id]` ที่ `page_state` ส่งมา นี่เป็นเหตุผลที่ `page_state` ต้องถูกเรียกก่อน
+`page_click` เสมอ (state เก่า = กดผิดปุ่ม)
+
+## ความปลอดภัย — ไม่ใช่ optional
+
+**นี่คือ path ที่ให้ agent สั่งเบราว์เซอร์ที่มี session ของผู้ใช้ทุกอย่าง (ธนาคาร อีเมล) — ทุกข้อต้องมี**
+
+1. **domain allowlist ปิดหมดก่อน (default deny)** — ผู้ใช้เปิดเองทีละโดเมน
+   **ด่านนี้อยู่ในฝั่ง extension ไม่ใช่ server** — เพราะ server ถูก compromise ได้ แต่ extension คือของที่ผู้ใช้ติดตั้งเอง
+   ถ้าอยู่ที่ server อย่างเดียว server ที่ถูกแฮ็กสั่งอะไรก็ได้
+2. **kill switch** — ปุ่ม "ตัดทุกแท็บ" อยู่ทุกแท็บของ popup (`chrome.debugger.detach` ทุก target)
+   เวลาจะหยุด ไม่ควรต้องหาว่าปุ่มอยู่แท็บไหน
+3. **pause / resume** — agent เจอ captcha/OTP หยุดเอง คนกดต่อในแท็บนั้น แล้วสั่ง resume
+4. **audit log** — ทุกคำสั่งที่เข้าเบราว์เซอร์ (รวมที่ถูก deny) เก็บใน `chrome.storage.local` ให้ดาวน์โหลดได้
+
+## ข้อจำกัดที่แก้ไม่ได้ — เขียนไว้เพื่อไม่ให้ถูกไปตามหาว่าเป็น bug
+
+1. แถบ **"DevTools is debugging this tab"** โผล่ทุกแท็บที่ attach — Chrome บังคับ ซ่อนไม่ได้
+2. `chrome://*` และ Chrome Web Store **attach ไม่ได้** — Chrome กันไว้
+3. Web Store review เข้มมากกับ `debugger` permission — แผนแจกคือ **unpacked / enterprise policy** ไปก่อน
+   ถ้าจะขึ้น Web Store ต้องเป็นงานรอบแยกที่มีเอกสาร justification
+4. LinkedIn ToS ห้าม automate ทุกรูปแบบ — ความเสี่ยงอยู่ที่ **บัญชีผู้ใช้** ไม่ใช่โค้ด
+   ผู้ใช้รับทราบและตัดสินใจแล้ว (2026-09-09)
+
+## ที่ตัดออกจากงานนี้
+
+**E2E test ของแอปเราเอง ไม่ใช้ bridge นี้** — localhost ไม่มี antibot ให้ผ่าน Playwright headed +
+`gate-e2e` เดิมตอบได้ครบ ถ้าเอา bridge ไปทำ E2E จะได้ test ที่พึ่ง Chrome บนเครื่องคน → รันใน CI ไม่ได้
+ผู้ใช้เห็นด้วยแล้ว (2026-09-09)
+
+## แบ่งงาน
+
+งานนี้แตะ path ที่รับคำสั่งจาก server เข้ามาสั่งเบราว์เซอร์ที่มี session ผู้ใช้ — **ทุก task ต้องผ่าน
+security review (Opus)** ไม่ใช่แค่ final review
+
+| # | task | ไฟล์ | พึ่งงานไหน |
+|---|---|---|---|
+| 1 | WS route + socket registry + auth | `server/endpoints/browserExtension.js` | — |
+| 2 | wire protocol + requestId correlation (ทั้งสองฝั่ง) | server + extension bg | 1 |
+| 3 | extension: `debugger` permission + attach/detach + allowlist gate | `browser-extension/` manifest + bg | — |
+| 4 | extension: CDP input (click/type/key/scroll) + human delay | `browser-extension/` bg | 3 |
+| 5 | extension: `page_state` element map + `[id]` | `browser-extension/` bg | 3 |
+| 6 | extension popup UI 4 แท็บ (ตาม mockup) + kill switch + audit log | `browser-extension/src/` | 3 |
+| 7 | agent plugin 10 tool | `server/utils/agents/aibitat/plugins/browser-companion.js` | 1, 2 |
+| 8 | keepalive + reconnect (MV3 service worker) | `browser-extension/` bg | 1, 3 |
+
+## หลักฐานที่จะพิสูจน์ว่างานเสร็จ
+
+evidence contract: unit test ของ allowlist gate + wire protocol correlation ต้องเขียว
+เพราะ contract ที่ต้อง attach Chrome จริงไม่สามารถรันใน gate อัตโนมัติได้ (ต้องมีคน login อยู่)
+
+E2E headed (`gate-e2e`) ครอบ popup UI — allowlist toggle, kill switch, pause/resume, `@edge` = โดเมนไม่อยู่ใน
+allowlist ต้องถูก deny
+
+**การพิสูจน์ว่า antibot ไม่จับ ต้องมีคนดูจริง** — ไม่ใช่สิ่งที่ gate ตรวจได้ ต้องสาธิตให้ผู้ใช้เห็นก่อนปิด issue
