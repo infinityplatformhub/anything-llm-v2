@@ -298,10 +298,13 @@ export function handleTabRemoved(tabId) {
  * such false positives, and it is already maintained correctly by the listener,
  * so it needs no second source of truth to drift from the first.
  *
- * It is also strictly stronger in the case that matters. A counter would let a
- * captured id through whenever the removal happened before the id was read; the
- * question this asks is true or false at the moment of the act, whatever
- * happened before it.
+ * A third reason was given when this was written and it does NOT survive being
+ * driven, so it is recorded as withdrawn rather than quietly deleted: "a
+ * counter lets a captured id through whenever the removal preceded the read".
+ * That case cannot arise — if the removal came first, the listener had already
+ * nulled `agentTabId`, so the read returns a FRESH id and there is nothing
+ * stale to let through. Membership is not strictly stronger than a counter; it
+ * is correctly scoped, which is what the two reasons above actually say.
  *
  * Called immediately before an act, with no await between the check and the
  * call it guards — a check with an await after it is the bug, not the fix.
@@ -340,6 +343,21 @@ const TAB_ID_ACTS = new Set([
   "navigate",
   "fetch",
   "closeTab",
+  // pageState. These reach `Runtime.evaluate` through pageState's OWN direct
+  // import of cdp.js, bypassing the frozen `cdp` surface entirely — which is
+  // exactly how they escaped a set that was only ever checked against that
+  // surface. `capture` and `read` return the page's text and its control
+  // layout, so an unguarded one discloses an arbitrary non-allowlisted page to
+  // the server, which is the one thing the allowlist exists to bound.
+  "capture",
+  "read",
+  // `lookup` touches no page — it reads a local Map. It is guarded anyway
+  // because of what its RETURN VALUE is used for: the coordinates the next
+  // click lands on. A map surviving on a recycled id would hand `page_click`
+  // a point derived from a page that is gone, aimed at a tab that is now
+  // someone else's. Guarding it costs one Set lookup and removes the need to
+  // reason about whether the map and the tab can ever disagree.
+  "lookup",
 ]);
 
 /**
@@ -370,16 +388,27 @@ const TAB_ID_ACTS = new Set([
  * throwing, and invisible to the mutation harness because nothing calls the
  * guarded copy.
  *
- * WHAT A FUTURE `cdp` METHOD GETS BY DEFAULT: passed through UNWRAPPED. That is
- * the right default only because of what the two failure modes cost. A method
- * that takes a tab id and is missing from this set loses one layer of a
- * defence-in-depth check while the gate, the ownership filter and the listener
- * all still stand. A method that takes something else and is wrapped anyway is
- * DEAD — it throws on every call, as `detachAll` did, and the failure hides
- * until whatever calls it changes. So the default is the recoverable error
- * rather than the silent one. Adding a tab-taking method means adding its name
- * here, and `__tests__/socket.test.js` asserts this set against the real `cdp`
- * surface so the omission is caught rather than trusted to a reader.
+ * WHAT AN UNLISTED METHOD GETS BY DEFAULT: passed through UNWRAPPED. The
+ * conclusion stands; the reason an earlier version of this comment gave for it
+ * did NOT, and the difference is worth stating because getting it wrong is what
+ * let `pageState` through.
+ *
+ * That version said a missing method "loses one layer of a defence-in-depth
+ * check while the gate, the ownership filter and the listener all still stand."
+ * That is true FOR THE FROZEN `cdp` SURFACE and is NOT A GENERAL RULE. It was
+ * driven and it is false on `page_read`: the gate ran before the window opened,
+ * the ownership filter is not on that path, and the listener cannot reach a
+ * captured local — which is the entire reason this guard exists. On that path
+ * the act-time check was the ONLY layer, and a miss disclosed a
+ * non-allowlisted page's text to the server.
+ *
+ * So the default is justified by the COST ASYMMETRY alone, not by other layers:
+ * a method wrapped wrongly is DEAD — it throws on every call, as `detachAll`
+ * did, and hides until whatever calls it changes — while a missing one fails in
+ * a way that is recoverable and, crucially, TESTABLE. Which is why the test
+ * below is the real protection and this default is only the tie-breaker: it
+ * checks this set against EVERY tab-taking dep in the wiring, not just `cdp`.
+ * `evaluate` is exactly the method that escaped a `cdp`-only check.
  *
  * (An argument-shape check — "wrap it if it has at least one parameter" — was
  * considered and rejected: `fn.length` lies for rest and default parameters, so

@@ -303,21 +303,109 @@ describe("the dependency bundle handed to dispatch", () => {
     await control.setPaused(false);
   });
 
-  // The set and the real surface must agree. A set that drifts from `cdp` is
-  // exactly how detachAll got wrapped: every name here has to exist on the
-  // surface, and every surface method that is NOT here is knowingly unguarded.
-  it("guards exactly the cdp methods that take a tab id", () => {
-    const surface = Object.keys(cdp);
-    const guardedHere = [...socket.TAB_ID_ACTS].filter((n) => n !== "closeTab");
-    for (const name of guardedHere) expect(surface).toContain(name);
+  /**
+   * EVERY tab-taking dep, not just `cdp`.
+   *
+   * A `cdp`-only version of this check passed while `pageState` was wired raw
+   * and `page_read` disclosed a non-allowlisted page — `pageState` imports
+   * `evaluate` straight from cdp.js, so it never appears on the frozen surface
+   * a cdp-only test inspects. Enumerating the WIRING instead is what makes a
+   * future `screenshot` or `getCookies` fail here rather than ship.
+   *
+   * Each entry names a dep object in `deps` and the methods knowingly left
+   * unguarded, with the reason. "Knowingly" is the load-bearing word: a name
+   * has to be argued into that list, and anything neither guarded nor listed
+   * fails.
+   */
+  const TAB_TAKING_DEPS = [
+    {
+      name: "cdp",
+      surface: () => cdp,
+      // detach: page_close detaches before closing, and refusing it would
+      // strand an attachment on a tab that is going away. detachAll: takes no
+      // tab id at all — it is the kill switch's sweep.
+      knowinglyUnguarded: ["detach", "detachAll"],
+    },
+    {
+      name: "pageState",
+      surface: async () => await import("../src/background/pageState.js"),
+      // invalidate: cleanup that must never be refused — a refused
+      // invalidation strands a stale map, which is the exact failure the map's
+      // own existence is designed to prevent. hasMap: a boolean about our own
+      // bookkeeping, touching no page and naming no act.
+      knowinglyUnguarded: ["invalidate", "hasMap"],
+      // Constants exported alongside the functions.
+      ignore: ["MAX_ELEMENTS", "MAX_TEXT_CHARS", "MAX_LABEL_CHARS"],
+    },
+  ];
 
-    // Everything on the surface is either guarded or knowingly exempt. A new
-    // cdp method fails this until someone decides which it is.
-    const knowinglyUnguarded = ["detach", "detachAll"];
-    for (const name of surface)
-      expect(
-        socket.TAB_ID_ACTS.has(name) || knowinglyUnguarded.includes(name)
-      ).toBe(true);
+  it.each(TAB_TAKING_DEPS.map((d) => [d.name, d]))(
+    "guards every tab-taking method on %s",
+    async (_label, entry) => {
+      const surface = await entry.surface();
+      const methods = Object.keys(surface).filter(
+        (name) =>
+          typeof surface[name] === "function" &&
+          !(entry.ignore ?? []).includes(name)
+      );
+      expect(methods.length).toBeGreaterThan(0);
+
+      for (const name of methods)
+        expect(
+          socket.TAB_ID_ACTS.has(name) ||
+            entry.knowinglyUnguarded.includes(name)
+        ).toBe(true);
+    }
+  );
+
+  // @edge — the WIRING, not the wrapper. Two mutations survived here: wiring
+  // `pageState` raw again, and reaching `lookup` around the wrapper. The socket
+  // suite's disclosure tests inject their own wrapped pageState — deliberately,
+  // so they test the fix rather than the bug — which means nothing there can
+  // see index.js hand over the raw module. This is the only place that can.
+  it.each([
+    ["capture"],
+    ["read"],
+    ["lookup"],
+  ])("routes pageState.%s through the ownership check", async (name) => {
+    const raw = await import("../src/background/pageState.js");
+    expect(deps.pageState[name]).not.toBe(raw[name]);
+    expect(() => deps.pageState[name](4242, 1)).toThrow(
+      /closed while this command/
+    );
+  });
+
+  // `deps.lookup` is the same reference dispatch reaches as
+  // `deps.pageState.lookup`; two wrappers would behave alike while being a
+  // wiring bug nobody could see.
+  it("hands dispatch one lookup, guarded, by both routes", () => {
+    expect(deps.lookup).toBe(deps.pageState.lookup);
+    expect(() => deps.lookup(4242, 1)).toThrow(/closed while this command/);
+  });
+
+  // The cleanup half stays unwrapped: a refused invalidation strands a stale
+  // map, which is the failure the map's existence is designed to prevent.
+  it.each([["invalidate"], ["hasMap"]])(
+    "leaves pageState.%s unwrapped, so cleanup can never be refused",
+    async (name) => {
+      const raw = await import("../src/background/pageState.js");
+      expect(deps.pageState[name]).toBe(raw[name]);
+      expect(() => deps.pageState[name](4242)).not.toThrow();
+    }
+  );
+
+  // The other direction: no name in the set may be one that guards nothing.
+  // This caught `evaluate` in the set's first draft — cdp.js exports it, but
+  // the frozen surface does not carry it, so it would have been dead weight
+  // that read as protection.
+  it("lists no name that is not on some guarded surface", async () => {
+    const pageStateModule = await import("../src/background/pageState.js");
+    const everywhere = new Set([
+      ...Object.keys(cdp),
+      ...Object.keys(pageStateModule),
+      "closeTab", // supplied by socket.js, not by a dep module
+    ]);
+    for (const name of socket.TAB_ID_ACTS) expect([...everywhere]).toContain(name);
   });
 
   // THE ACCESSOR CONTRACT, stated executably here because task 7 exports none.

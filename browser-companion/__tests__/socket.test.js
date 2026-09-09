@@ -1836,6 +1836,98 @@ describe("agentTabUrl and ensureAgentTab name the same tab", () => {
     expect(tabs.get(usersTab.id).url).toBe("https://allowed.test/user-secret");
   });
 
+  /* ---------------------------------------------------------------------
+   * TOCTOU-1, the pageState path — DISCLOSURE rather than action.
+   *
+   * `pageState` was wired into deps RAW, and it imports `evaluate` straight
+   * from cdp.js rather than through the frozen `cdp` surface — so `page_read`
+   * and `page_state` reached `Runtime.evaluate` on the captured id with no
+   * act-time check, and returned an arbitrary NON-ALLOWLISTED page's text and
+   * control layout to the server.
+   *
+   * The follow-up click does not land (the next command gets a fresh tab and
+   * the gate refuses), so the reachable damage is disclosure. That is still the
+   * one thing the allowlist exists to bound, because the server is the
+   * component this design assumes may be compromised.
+   *
+   * Driven with PER-TAB page content, so reading the wrong tab returns visibly
+   * different text — a double that returned one fixed page could not tell the
+   * two apart and the test would pass on the broken wiring.
+   * ------------------------------------------------------------------ */
+  const pageContentByTab = (byId) => {
+    // Mirrors what cdp.evaluate returns for pageState's expressions, chosen by
+    // which tab the command actually reached.
+    globalThis.chrome.debugger.sendCommand = async ({ tabId }) => ({
+      result: { value: byId[tabId] ?? null },
+    });
+  };
+
+  it.each([
+    ["read", "text"],
+    ["state", "elements"],
+  ])("does not disclose a recycled tab's page through page_%s", async (cmd) => {
+    localStore[ALLOWLIST_KEY] = ["allowed.test"];
+    const agentTab = await agentOpenedTab("https://allowed.test/agent");
+
+    let usersTab;
+    const result = await handle(
+      { requestId: "p1", cmd },
+      {
+        loadAllowlist: (await import("../src/background/allowlist.js"))
+          .loadAllowlist,
+        record: auditLog.record,
+        agentTabUrl: socket.agentTabUrl,
+        ensureAgentTab: socket.ensureAgentTab,
+        listAgentTabs: socket.listAgentTabs,
+        switchToTab: socket.switchToTab,
+        closeTab: socket.closeTab,
+        cdp: socket.guardTabActs({
+          // The window: the id is resolved, and the recycle lands while the
+          // attach is outstanding.
+          attach: async () => {
+            usersTab = await recycleOnto(
+              agentTab,
+              // NOT in the allowlist at all.
+              "https://bank.example.com/statement"
+            );
+            pageContentByTab({
+              [usersTab.id]: {
+                url: "https://bank.example.com/statement",
+                title: "Statement",
+                text: "USER PRIVATE BANK BALANCE 12345",
+                elements: [
+                  { id: 1, tag: "button", text: "Transfer funds", x: 5, y: 6 },
+                ],
+              },
+            });
+          },
+          detach: async () => {},
+        }),
+        // The REAL pageState, wrapped the way index.js wraps it. Using the raw
+        // module here would test the bug rather than the fix.
+        pageState: socket.guardTabActs(
+          await import("../src/background/pageState.js")
+        ),
+      }
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/closed while this command/);
+    // Nothing from the bank page may appear anywhere in the reply.
+    expect(JSON.stringify(result)).not.toContain("BANK BALANCE");
+    expect(JSON.stringify(result)).not.toContain("Transfer funds");
+    expect(JSON.stringify(result)).not.toContain("bank.example.com");
+
+    // AND the audit line must not name a page that was never read. An entry
+    // that is confidently wrong is worse than an absent one, because it is
+    // what someone relies on afterwards to decide nothing happened.
+    const entries = await auditLog.readAll();
+    const last = entries.at(-1);
+    expect(last.outcome).toBe("error");
+    expect(last.url).not.toBe("https://bank.example.com/statement");
+    void usersTab;
+  });
+
   // @edge — the element map is keyed by tab id, so a surviving map resolves
   // coordinates for a RECYCLED id: the agent asks for element [3] and gets a
   // point from a page that no longer exists, on a tab that is now someone

@@ -451,8 +451,8 @@ mutate("toctou", "the check runs but its verdict is discarded", SOCK,
   "  if (createdTabIds.has(tabId)) return;\n  throw new Error(",
   "  if (true) return;\n  throw new Error(");
 mutate("toctou", "detach is wrapped too, so a closing tab keeps its attachment", SOCK,
-  '  "fetch",\n  "closeTab",\n]);',
-  '  "fetch",\n  "closeTab",\n  "detach",\n]);');
+  '  "lookup",\n]);',
+  '  "lookup",\n  "detach",\n]);');
 mutate("toctou", "back to exclusion, so detachAll is wrapped and can never run", SOCK,
   'if (typeof fn !== "function" || !TAB_ID_ACTS.has(name)) {',
   'if (typeof fn !== "function" || name === "detach") {');
@@ -464,6 +464,18 @@ mutate("toctou", "the check is awaited, reopening the window it closes", SOCK,
   "    guarded[name] = async (tabId, ...rest) => {\n      await Promise.resolve();");
 mutate("toctou", "the element map survives a removed tab", SOCK,
   "  pageState.invalidate(tabId);", "");
+
+// --- axis: the pageState disclosure path (TOCTOU-1, second route) ----------
+mutate("disclose", "capture is unguarded, so page_state reads a recycled tab", SOCK,
+  '  "capture",\n', "");
+mutate("disclose", "read is unguarded, so page_read discloses a recycled tab", SOCK,
+  '  "read",\n', "");
+mutate("disclose", "lookup is unguarded, so a stale map aims the next click", SOCK,
+  '  "lookup",\n]);', '  "lookup_",\n]);');
+mutate("disclose", "pageState is wired raw again", IDX,
+  "  pageState: guardedPageState,", "  pageState,");
+mutate("disclose", "lookup is wired around the wrapper", IDX,
+  "  lookup: guardedPageState.lookup,", "  lookup: pageState.lookup,");
 
 // --- POSITIVE CONTROL -------------------------------------------------------
 // Must be KILLED. If this survives, the harness is not running these tests and

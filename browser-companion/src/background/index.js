@@ -30,6 +30,9 @@ import * as control from "./control.js";
  */
 export const CONFIG_KEYS = Object.freeze(["apiBase", "apiKey"]);
 
+/** Built once, so `deps.pageState.lookup` and `deps.lookup` are the same function. */
+const guardedPageState = socket.guardTabActs(pageState);
+
 /**
  * The dependency bundle `dispatch.handle` runs against.
  *
@@ -68,10 +71,22 @@ export const deps = {
   // belongs immediately before the act, and the acts are these functions. That
   // also covers the awaits INSIDE `spec.run`, which a check in `handle` would
   // miss — the same "looked complete" shape this branch has hit before.
+  // EVERY dep that takes a tab id goes through the wrapper, not only `cdp`.
+  // `pageState` was wired raw here, and it imports `evaluate` straight from
+  // cdp.js rather than through the frozen `cdp` surface — so `page_read` and
+  // `page_state` reached `Runtime.evaluate` on the captured id with no
+  // act-time check, and returned an arbitrary non-allowlisted page's text and
+  // control layout to the server. Disclosure, not action, but disclosure to
+  // the component this design assumes may be compromised is precisely what the
+  // allowlist exists to bound.
   closeTab: socket.guardTabActs({ closeTab: socket.closeTab }).closeTab,
   cdp: socket.guardTabActs(cdp),
-  pageState,
-  lookup: pageState.lookup,
+  pageState: guardedPageState,
+  // The SAME wrapper object, not a second call: `dispatch` reaches `lookup`
+  // both ways, and two wrappers would be two functions that merely behave
+  // alike — which is the kind of near-identity a later identity assertion
+  // reads as a wiring bug.
+  lookup: guardedPageState.lookup,
 };
 
 /**
