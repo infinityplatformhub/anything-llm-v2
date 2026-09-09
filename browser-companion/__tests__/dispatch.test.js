@@ -5,6 +5,7 @@ import {
   GATE_KINDS,
   GATE_RESOLVERS,
   SEARCH_SHAPED_GATES,
+  readsTheTabList,
   assertCommandTable,
   withDefaults,
 } from "../src/background/dispatch.js";
@@ -429,12 +430,111 @@ describe("the allowlist gate cannot be bypassed by any command", () => {
     }
   });
 
-  it("declares every search-shaped gate that a resolver actually searches", () => {
-    // The set is hand-maintained, so this pins the one entry that exists and
-    // will fail if matchedTab is ever dropped from it.
-    expect(SEARCH_SHAPED_GATES.has("matchedTab")).toBe(true);
+  it("derives the search-shaped gates by observation, not from a written list", () => {
+    // The set was hand-maintained, and a review broke it the obvious way: a new
+    // resolver searching the same tabs by TITLE was simply not in the list, so
+    // the suite stayed green with the oracle reopened. It is now derived from
+    // whether a resolver actually reads deps.listAgentTabs.
+    expect([...SEARCH_SHAPED_GATES]).toEqual(["matchedTab"]);
     for (const gate of SEARCH_SHAPED_GATES)
       expect([gate, GATE_KINDS.includes(gate)]).toEqual([gate, true]);
+
+    // AND IT MUST STAY DERIVED. Comparing the set's contents cannot see the
+    // difference between a derivation and a literal that happens to agree with
+    // it today — a mutation replacing the derivation with `new Set(["matchedTab"])`
+    // survived on contents alone. So this checks the set tracks the RESOLVERS:
+    // every resolver that reads the tab list is in it, and every one that does
+    // not is absent. A hardcoded literal fails the moment those diverge, which
+    // is exactly when it matters.
+    for (const [name, resolve] of Object.entries(GATE_RESOLVERS))
+      expect([name, SEARCH_SHAPED_GATES.has(name)]).toEqual([
+        name,
+        readsTheTabList(resolve),
+      ]);
+  });
+
+  it("would classify a newly added search-shaped resolver without being edited", () => {
+    // The escape case at the level the mutation attacks: a literal set cannot
+    // grow, a derivation can. This proves the SET-BUILDING expression tracks
+    // GATE_RESOLVERS, by running that expression over an extended resolver map
+    // — the same computation the module performs, applied to a resolver the
+    // module has never seen.
+    const extended = {
+      ...GATE_RESOLVERS,
+      matchedTabByTitle: async ({ command, deps }) => {
+        const tabs = (await deps.listAgentTabs()) ?? [];
+        const match = tabs.find((tab) => tab?.title?.includes(command.url));
+        return { urls: match ? [match.url] : [], target: match };
+      },
+    };
+    const derived = new Set(
+      Object.entries(extended)
+        .filter(([, resolve]) => readsTheTabList(resolve))
+        .map(([name]) => name)
+    );
+    expect([...derived].sort()).toEqual(["matchedTab", "matchedTabByTitle"]);
+  });
+
+  it("classifies each real resolver correctly by whether it reads the tab list", () => {
+    const expected = {
+      currentPage: false,
+      targetUrl: false,
+      currentAndTargetUrl: false,
+      matchedTab: true,
+    };
+    // Enumerated from the real resolvers, so a new one must be classified here
+    // rather than silently skipped.
+    expect(Object.keys(expected).sort()).toEqual([...GATE_KINDS].sort());
+    for (const [name, isSearchShaped] of Object.entries(expected))
+      expect([name, readsTheTabList(GATE_RESOLVERS[name])]).toEqual([
+        name,
+        isSearchShaped,
+      ]);
+  });
+
+  // THE ESCAPE CASE, as a permanent test. A resolver that does not exist in
+  // dispatch.js — the review's `matchedTabByTitle`, searching the same tab list
+  // by title — must be detected without anyone adding its name anywhere.
+  it("detects a NEW search-shaped resolver that no list mentions", () => {
+    const matchedTabByTitle = async ({ command, deps }) => {
+      const tabs = (await deps.listAgentTabs()) ?? [];
+      const match = tabs.find((tab) => tab?.title?.includes(command.url));
+      return { urls: match ? [match.url] : [], target: match };
+    };
+    expect(readsTheTabList(matchedTabByTitle)).toBe(true);
+  });
+
+  it("does not flag a resolver that never looks at the user's tabs", () => {
+    const harmless = async ({ command }) => ({ urls: [command.url] });
+    expect(readsTheTabList(harmless)).toBe(false);
+  });
+
+  it("still detects a resolver that reads tabs before throwing", () => {
+    // A resolver whose argument check fires after it reads tabs must not be
+    // classified as safe just because the probe command made it throw.
+    const throwsAfterReading = async ({ deps }) => {
+      await deps.listAgentTabs();
+      throw new Error("nope");
+    };
+    expect(readsTheTabList(throwsAfterReading)).toBe(true);
+  });
+
+  it("does not let a synchronous throw hide a tab read", () => {
+    const syncThrow = ({ deps }) => {
+      deps.listAgentTabs();
+      throw new Error("nope");
+    };
+    expect(readsTheTabList(syncThrow)).toBe(true);
+  });
+
+  it("treats a resolver that throws before reading anything as not search-shaped", () => {
+    // Correct, and its limit is documented in readsTheTabList: a resolver that
+    // reads tabs only on SOME inputs can evade a single probe. Recorded so the
+    // classification is not mistaken for a proof.
+    const throwsFirst = async () => {
+      throw new Error("bad argument");
+    };
+    expect(readsTheTabList(throwsFirst)).toBe(false);
   });
 
   it("offers no gate kind that skips the allowlist", () => {
@@ -876,14 +976,21 @@ describe("per-command gate subjects", () => {
   it("switches to the agent's own tab even when a forbidden tab matches first", async () => {
     // The fix must not merely equalise by denying everything: the legitimate
     // switch still has to work, and must land on the allowed tab.
+    //
+    // The needle MUST appear in the forbidden url too, or nothing "matches
+    // first" and the test proves nothing. A first draft used "linkedin.com/jobs"
+    // against a chase.example url that could not contain it, so it stayed green
+    // with the pre-filter reverted — a name promising something it could not
+    // detect. Here "jobs" is in both, and the forbidden tab is listed FIRST, so
+    // an unfiltered `find` returns tab 9 and this fails.
     const d = deps({
       listAgentTabs: async () => [
-        { id: 9, url: "https://chase.example/accounts/9021", title: "S" },
+        { id: 9, url: "https://chase.example/jobs/9021", title: "S" },
         { id: 1, url: "https://www.linkedin.com/jobs/", title: "Mine" },
       ],
     });
     const out = await handle(
-      { requestId: "r_ord2", cmd: "switch", url: "linkedin.com/jobs" },
+      { requestId: "r_ord2", cmd: "switch", url: "jobs" },
       d
     );
     expect(out.ok).toBe(true);
@@ -894,20 +1001,58 @@ describe("per-command gate subjects", () => {
   it("searches exactly the tabs page_tabs would show", async () => {
     // The two commands must share one view of the world; a divergence between
     // them is where this class of bug lives.
+    //
+    // Asserting on `ok` alone cannot see that: a forbidden tab yields ok:false
+    // from the no-match branch AFTER the fix and from the gate-denies branch
+    // BEFORE it, so the assertion passed either way. `switchToTab` cannot see it
+    // either — the gate refuses before `run` in both cases, so it is never
+    // called (that was a second draft, also vacuous).
+    //
+    // The one place the two branches genuinely differ is the AUDIT RECORD:
+    // "no page to act on" means the resolver never selected the tab, while
+    // "not in allowlist: <url>" means it selected it and the gate then refused.
+    // Only the first is compatible with the tab having been filtered out.
     const tabs = [
       { id: 9, url: "https://chase.example/accounts", title: "S" },
       { id: 1, url: "https://www.linkedin.com/feed/", title: "F" },
     ];
-    const d = deps({ listAgentTabs: async () => tabs });
-    const listed = await handle({ requestId: "r_v1", cmd: "tabs" }, d);
+    const listed = await handle(
+      { requestId: "r_v1", cmd: "tabs" },
+      deps({ listAgentTabs: async () => tabs })
+    );
     const visibleIds = listed.data.tabs.map((t) => t.id);
+    expect(visibleIds).toEqual([1]);
 
     for (const tab of tabs) {
+      const d = deps({ listAgentTabs: async () => tabs });
       const out = await handle(
         { requestId: `r_v_${tab.id}`, cmd: "switch", url: tab.url },
-        deps({ listAgentTabs: async () => tabs })
+        d
       );
-      expect([tab.id, out.ok]).toEqual([tab.id, visibleIds.includes(tab.id)]);
+      const shouldBeReachable = visibleIds.includes(tab.id);
+      expect([tab.id, out.ok]).toEqual([tab.id, shouldBeReachable]);
+
+      if (shouldBeReachable) {
+        expect(d.switchToTab).toHaveBeenCalledWith(tab.id);
+      } else {
+        expect(d.switchToTab).not.toHaveBeenCalled();
+        // The load-bearing assertion: the tab page_tabs hides was never
+        // SELECTED, not merely refused after selection. This is what fails if
+        // the pre-filter is removed.
+        expect(d.record).toHaveBeenCalledWith(
+          expect.objectContaining({
+            cmd: "switch",
+            outcome: "denied",
+            detail: "no page to act on",
+          })
+        );
+        // And nothing about it reaches the reply or the log.
+        expect(out.error ?? "").not.toMatch(/chase\.example/);
+        const logged = d.record.mock.calls
+          .map(([e]) => JSON.stringify(e))
+          .join(" ");
+        expect(logged).not.toMatch(/chase\.example/);
+      }
     }
   });
 

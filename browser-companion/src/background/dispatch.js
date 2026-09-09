@@ -198,19 +198,90 @@ const GATE_RESOLVERS = Object.freeze({
 const GATE_KINDS = Object.freeze(Object.keys(GATE_RESOLVERS));
 
 /**
- * Gates whose subject is DISCOVERED by searching the user's browser, rather
- * than named outright by the command.
+ * Decide, BY OBSERVING IT, whether a resolver discovers its subject by
+ * searching the user's browser.
+ *
+ * WHY THIS IS NOT A LIST. It was one — `new Set(["matchedTab"])` — and a review
+ * broke it in the obvious way: add `matchedTabByTitle`, searching the same
+ * `listAgentTabs` by title instead of url, forget to add its name, and the
+ * suite stays green (489 passed) with the message leak and the oracle fully
+ * reopened. A hand-maintained list of dangerous things is the same shape as a
+ * phrase blocklist, and this branch has already watched eight wrong values walk
+ * past one of those.
+ *
+ * The property is not a name, it is a behaviour: a resolver is search-shaped
+ * exactly when its answer DEPENDS ON `deps.listAgentTabs` — the user's open
+ * tabs, including the ones the agent may not see. So we ask it. Each resolver
+ * is called once with an instrumented `deps` and, if it touches that accessor,
+ * every command using it must declare an `opaqueDenial`. `matchedTabByTitle` is
+ * then caught the moment it is written, by nobody remembering anything.
+ *
+ * TWO THINGS THIS RESTS ON, both of which are now REQUIREMENTS rather than
+ * happy accidents, and both of which the next person to add a resolver must
+ * honour:
+ *
+ *   1. RESOLVERS MUST BE SIDE-EFFECT-FREE. This calls every one of them at
+ *      module load, with a synthetic command, purely to watch which accessors
+ *      they touch. That is safe today — all four only read — and this detector
+ *      is what makes it load-bearing. A resolver that navigated, clicked, or
+ *      wrote storage would perform that action once at import.
+ *   2. A resolver must read tabs UNCONDITIONALLY, not only for certain inputs.
+ *      A resolver that consulted `listAgentTabs` only when, say, the needle is
+ *      long would evade this single probe and be classified as safe. There is
+ *      no way to close that from outside; it is recorded here so that a
+ *      conditional read is a thing a reviewer knows to look for.
+ *
+ * The probe swallows throws: a resolver rejecting a synthetic command is normal
+ * (`requireString` fires on a missing field), and what matters is only whether
+ * the accessor was reached before it did.
+ *
+ * @param {(ctx: object) => Promise<any>} resolve
+ * @returns {boolean} whether this resolver read the user's tab list
+ */
+function readsTheTabList(resolve) {
+  let read = false;
+  const probeDeps = {
+    listAgentTabs: async () => {
+      read = true;
+      return [];
+    },
+  };
+  try {
+    // A command shaped like a real one, so a resolver gets past its argument
+    // checks and reaches the accessor. The returned promise is deliberately not
+    // awaited: `read` is set synchronously by the accessor itself, and awaiting
+    // here would make module load asynchronous.
+    const outcome = resolve({
+      command: { url: "https://probe.invalid/probe", text: "probe", id: 1 },
+      deps: probeDeps,
+      currentUrl: async () => "https://probe.invalid/probe",
+      allowlist: [],
+    });
+    // An async resolver returns a rejected promise rather than throwing, and an
+    // unhandled rejection at load is noise that looks like a real fault.
+    if (outcome && typeof outcome.catch === "function") outcome.catch(() => {});
+  } catch {
+    // Reached the accessor or not; either way `read` already holds the answer.
+  }
+  return read;
+}
+
+/**
+ * Gates whose subject is DISCOVERED by searching the user's browser.
  *
  * A command on one of these can be asked a question about tabs it may not see,
  * and every observable difference in the answer — the message, the ok flag,
- * which tab was chosen — is a bit about the user's browsing. `assertCommandTable`
- * therefore requires such a command to declare an `opaqueDenial`, at load.
+ * which tab was chosen — is a bit about the user's browsing. So
+ * `assertCommandTable` requires such a command to declare an `opaqueDenial`, at
+ * load.
  *
- * Kept beside `GATE_RESOLVERS` on purpose: adding a resolver that searches
- * anything means adding its name here, and the two sit in the same screen so
- * the omission is visible rather than remembered.
+ * Derived, never written down. See `readsTheTabList`.
  */
-const SEARCH_SHAPED_GATES = new Set(["matchedTab"]);
+const SEARCH_SHAPED_GATES = new Set(
+  Object.entries(GATE_RESOLVERS)
+    .filter(([, resolve]) => readsTheTabList(resolve))
+    .map(([name]) => name)
+);
 
 /* ------------------------------------------------------------------------- */
 /* The command table                                                          */
@@ -744,6 +815,10 @@ export {
   GATE_RESOLVERS,
   GATE_KINDS,
   SEARCH_SHAPED_GATES,
+  // Exported so a test can drive the detector against a resolver that does not
+  // exist in this file — which is the only way to prove it catches the NEXT
+  // search-shaped resolver rather than the one it was written against.
+  readsTheTabList,
   CommandError,
   assertCommandTable,
   // Exported for one assertion: that dependency defaulting never INVENTS a

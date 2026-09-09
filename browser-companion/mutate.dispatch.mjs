@@ -31,7 +31,7 @@
  *      individually rather than counted.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
 
 const DI = "src/background/dispatch.js";
 const CD = "src/background/cdp.js";
@@ -290,17 +290,19 @@ mutate("bound", "a browser error is echoed unbounded", DI,
   "    const detail = String(error?.message ?? error);");
 
 // --- axis: the page_switch enumeration oracle (review HIGH 1) ---------------
-// THESE TWO NOW SURVIVE, AND THAT IS THE FIX WORKING — verified, not assumed.
-// Instrumenting the allowlist-denial branch shows `switch` reaches it ZERO
-// times across every world (forbidden tab alone, forbidden + allowed, no tabs),
-// while a control `navigate` to a forbidden url hits it once. With forbidden
-// tabs filtered out BEFORE the search, matchedTab can only ever yield an
-// ALLOWED url, so that branch is unreachable for this command and mutating its
-// message is unobservable by construction.
+// THESE TWO NOW SURVIVE, AND THAT IS THE FIX WORKING. With forbidden tabs
+// filtered out BEFORE the search, `matchedTab` can only ever yield an ALLOWED
+// url, so the allowlist-denial branch is unreachable for `switch` and mutating
+// its message is unobservable by construction.
 //
-// They are kept rather than deleted: the branch is still live for every other
-// command, and if a future change lets `switch` reach it again these start
-// failing, which is exactly when someone should look.
+// That claim is NOT asserted here — it is MEASURED, by the executable
+// unreachability check at the end of this file, which instruments the branch
+// and requires 0 hits from switch against a control navigate that must hit it.
+// A comment claiming unreachability is the exact thing that has gone wrong
+// three times on this branch; this one just points at the measurement.
+//
+// Kept rather than deleted: the branch is still live for every other command,
+// and these are the tripwires that invert if switch ever reaches it again.
 mutate("oracle", "the allowlist denial quotes the matched tab's url again [UNREACHABLE for switch since the pre-filter]", DI,
   "        error:\n          spec.opaqueDenial ??\n          `denied: ${echo(url)} is not in the allowlist",
   "        error:\n          `denied: ${echo(url)} is not in the allowlist");
@@ -349,8 +351,36 @@ mutate("must-declare", "the opaqueDenial requirement is dropped", DI,
   "    if (SEARCH_SHAPED_GATES.has(spec.gate) && !spec.opaqueDenial) {",
   "    if (false) {");
 mutate("must-declare", "the search-shaped gate set is emptied", DI,
-  'const SEARCH_SHAPED_GATES = new Set(["matchedTab"]);',
+  "const SEARCH_SHAPED_GATES = new Set(\n  Object.entries(GATE_RESOLVERS)\n    .filter(([, resolve]) => readsTheTabList(resolve))\n    .map(([name]) => name)\n);",
   "const SEARCH_SHAPED_GATES = new Set([]);");
+// The detector replaced a hand-maintained list, because a review escaped the
+// list by adding a resolver nobody remembered to name. These perturb the
+// DETECTION rather than the list.
+//
+// SURVIVES, AND IS NOT EQUIVALENT — verified by applying it and running the
+// suite. `new Set(["matchedTab"])` is exactly equal to the derived set for
+// TODAY'S four resolvers, so nothing can observe the difference; it diverges
+// only when a fifth, search-shaped resolver is added, which is precisely the
+// case the derivation exists for. No test can force that divergence either,
+// because GATE_RESOLVERS is frozen at module level and cannot be extended from
+// outside.
+//
+// So the derivation's value is entirely in the future, and this mutation is the
+// marker for it. `readsTheTabList` itself IS covered — four mutations against
+// the detection logic are killed, and a test runs the set-building expression
+// over an extended resolver map to prove it would pick up `matchedTabByTitle`.
+// What is uncovered is only the one line that binds the expression to the name.
+mutate("must-declare", "the detector reverts to a hand-maintained list [SURVIVES: identical for today's resolvers, NOT equivalent]", DI,
+  "const SEARCH_SHAPED_GATES = new Set(\n  Object.entries(GATE_RESOLVERS)\n    .filter(([, resolve]) => readsTheTabList(resolve))\n    .map(([name]) => name)\n);",
+  'const SEARCH_SHAPED_GATES = new Set(["matchedTab"]);');
+mutate("must-declare", "the detector never observes a tab read", DI,
+  "    listAgentTabs: async () => {\n      read = true;\n      return [];\n    },",
+  "    listAgentTabs: async () => [],");
+mutate("must-declare", "the detector reports every resolver as search-shaped", DI,
+  "  return read;\n}", "  return true;\n}");
+mutate("must-declare", "the probe command is empty, so resolvers throw before reading", DI,
+  '      command: { url: "https://probe.invalid/probe", text: "probe", id: 1 },',
+  "      command: {},");
 mutate("must-declare", "a non-string opaqueDenial is accepted", DI,
   '    if (spec.opaqueDenial !== undefined && typeof spec.opaqueDenial !== "string")',
   "    if (false)");
@@ -452,6 +482,78 @@ mutate("deps", "close does not detach before closing the tab", DI,
 mutate("deps", "handle rethrows instead of replying", DI,
   "  } catch (error) {\n    // Bounded like every other echoed value",
   "  } catch (error) {\n    if (error) throw error;\n    // Bounded like every other echoed value");
+
+// --- executable unreachability check ----------------------------------------
+//
+// Two [oracle] mutations survive because `switch` can no longer REACH the
+// allowlist-denial branch: forbidden tabs are filtered out before the search,
+// so `matchedTab` only ever yields an allowed url. That is a claim about
+// control flow, and a comment asserting it is exactly the thing that has gone
+// wrong three times on this branch. So it is measured instead.
+//
+// Instruments the branch, drives `switch` through worlds that would each have
+// hit it before the fix, and asserts ZERO hits — plus a control `navigate` that
+// MUST hit it, without which "0 hits" could just mean a broken probe.
+//
+// If a future change lets `switch` reach that branch again, this fails and the
+// two survivors below stop being explainable.
+restore();
+{
+  const src = readFileSync(DI, "utf8");
+  const anchor = "      if (isAllowed(url, allowlist)) continue;";
+  if (src.split(anchor).length - 1 !== 1)
+    throw new Error("unreachability probe: anchor is not unique");
+  const probePath = "src/background/__unreachability_probe.js";
+  writeFileSync(
+    probePath,
+    src.replace(
+      anchor,
+      anchor +
+        "\n      globalThis.__deniedBranchHits = (globalThis.__deniedBranchHits ?? 0) + 1;"
+    )
+  );
+  try {
+    const { handle } = await import("./src/background/__unreachability_probe.js");
+    const mk = (tabs) => ({
+      loadAllowlist: async () => ["www.linkedin.com"],
+      record: async () => {},
+      agentTabUrl: async () => "https://www.linkedin.com/feed/",
+      ensureAgentTab: async () => 1,
+      listAgentTabs: async () => tabs,
+      switchToTab: async () => {},
+      closeTab: async () => {},
+      cdp: { attach: async () => {}, detach: async () => {} },
+      pageState: { invalidate: () => {} },
+      lookup: async () => null,
+    });
+    const secret = { id: 9, url: "https://chase.example/accounts/9021", title: "S" };
+    const mine = { id: 1, url: "https://www.linkedin.com/s?q=chase", title: "M" };
+    const worlds = [[secret], [secret, mine], [mine, secret], [mine], []];
+
+    globalThis.__deniedBranchHits = 0;
+    for (const tabs of worlds)
+      for (const needle of ["chase", "a", ".", "com", "accounts", "9021"])
+        await handle({ requestId: "u", cmd: "switch", url: needle }, mk(tabs));
+    const switchHits = globalThis.__deniedBranchHits;
+
+    globalThis.__deniedBranchHits = 0;
+    await handle(
+      { requestId: "u", cmd: "navigate", url: "https://evil.test/x" },
+      mk([])
+    );
+    const controlHits = globalThis.__deniedBranchHits;
+
+    const ok = switchHits === 0 && controlHits > 0;
+    console.log(
+      `\nUNREACHABILITY (switch vs the allowlist-denial branch): ` +
+        `${switchHits} hits over ${worlds.length * 6} probes, control navigate ${controlHits} hit(s)` +
+        ` -> ${ok ? "UNREACHABLE as claimed" : "*** CLAIM FALSE — the two [oracle] survivors are no longer explained ***"}`
+    );
+    if (!ok) process.exitCode = 1;
+  } finally {
+    unlinkSync(probePath);
+  }
+}
 
 // --- negative control -------------------------------------------------------
 // Without this the whole run is worthless: a suite failing for an unrelated
