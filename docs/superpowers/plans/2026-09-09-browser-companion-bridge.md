@@ -4,7 +4,7 @@
 
 **Goal:** ให้ agent ในแอปสั่ง Chrome ตัวจริงของผู้ใช้ (กด/พิมพ์/อ่าน/ยิง GET) ผ่าน `chrome.debugger` เพื่อเข้าเว็บหลัง login และผ่าน antibot ได้
 
-**Architecture:** extension เดิม (`browser-extension/`) เปิด WebSocket ค้างไว้กับ server, server เก็บ registry `user_id → socket`, agent plugin ยิงคำสั่งเข้า socket รอผลตาม `requestId`, extension เช็ค allowlist แล้ว attach `chrome.debugger` ยิง `Input.dispatchMouseEvent`/`dispatchKeyEvent` = trusted event ที่ antibot จับไม่ได้ **server ไม่ถือ session ของเว็บปลายทางเลย** — session อยู่ใน Chrome ของผู้ใช้ฝั่งเดียว
+**Architecture:** extension เดิม (`browser-companion/`) เปิด WebSocket ค้างไว้กับ server, server เก็บ registry `user_id → socket`, agent plugin ยิงคำสั่งเข้า socket รอผลตาม `requestId`, extension เช็ค allowlist แล้ว attach `chrome.debugger` ยิง `Input.dispatchMouseEvent`/`dispatchKeyEvent` = trusted event ที่ antibot จับไม่ได้ **server ไม่ถือ session ของเว็บปลายทางเลย** — session อยู่ใน Chrome ของผู้ใช้ฝั่งเดียว
 
 **Tech Stack:** Node/Express + express-ws (`app.ws()` มีอยู่แล้ว) · Prisma (ไม่แตะ schema) · MV3 Chrome extension + React 18 + Vite · Jest · Playwright
 
@@ -25,7 +25,9 @@
 - **agent เปิดแท็บใหม่ของตัวเอง** ไม่แตะแท็บที่ผู้ใช้เปิดอยู่
 - **browser offline = ตอบทันที** ไม่รอ ไม่ retry เงียบ
 - ค่าที่ต่างตาม environment (URL, port, timeout, keepalive interval) อยู่ใน env/config ไม่ hardcode
-- test runner: `cd server && node node_modules/.bin/jest <path> --silent` (ไม่ใช้ `npx` — ดู harness note)
+- test runner (server, CJS): `cd server && node ../node_modules/jest/bin/jest.js <path> --silent`
+- test runner (extension, ESM): `cd browser-companion && NODE_OPTIONS=--experimental-vm-modules node ../node_modules/jest/bin/jest.js <path>`
+- **extension code lives in `browser-companion/`** — `browser-extension/` is a git submodule of a third-party repo and must not be touched
 
 ---
 
@@ -37,7 +39,7 @@
 |---|---|
 | `server/utils/browserCompanion/registry.js` (สร้าง) | เก็บ `userId → socket` เดียว, resolve socket จาก user, เตะ socket เก่า |
 | `server/utils/browserCompanion/protocol.js` (สร้าง) | ส่งคำสั่ง + จับคู่ `requestId` + timeout |
-| `server/endpoints/browserExtension.js` (แก้) | route `app.ws("/browser-extension/agent-socket")` |
+| `server/endpoints/browserExtension.js` (แก้) | route `app.ws("/browser-companion/agent-socket")` |
 | `server/utils/agents/aibitat/plugins/browser-companion.js` (สร้าง) | agent plugin 11 tool |
 | `server/utils/agents/aibitat/plugins/index.js` (แก้) | ลงทะเบียน plugin |
 | `server/models/workspaceAgentSettings.js` (แก้) | **ไม่ใส่ใน `DEFAULT_ENABLED_SKILLS`** — opt-in เท่านั้น |
@@ -49,17 +51,17 @@
 
 | ไฟล์ | หน้าที่ |
 |---|---|
-| `browser-extension/src/background/index.js` (สร้าง) | entry ของ service worker — ย้ายโค้ดเดิมจาก `public/background.js` มา + ต่อ WS |
-| `browser-extension/src/background/socket.js` (สร้าง) | WS client + keepalive + reconnect |
-| `browser-extension/src/background/allowlist.js` (สร้าง) | **ด่านความปลอดภัย** — default deny, match โดเมน |
-| `browser-extension/src/background/cdp.js` (สร้าง) | attach/detach + `Input.dispatch*` + human delay |
-| `browser-extension/src/background/pageState.js` (สร้าง) | `Runtime.evaluate` เก็บผัง element ติด `[id]` |
-| `browser-extension/src/background/auditLog.js` (สร้าง) | บันทึกทุกคำสั่ง (รวมที่ deny) ลง `chrome.storage.local` |
-| `browser-extension/src/background/dispatch.js` (สร้าง) | รับคำสั่งจาก socket → allowlist → cdp/pageState → ตอบกลับ |
-| `browser-extension/public/manifest.json` (แก้) | `"debugger"` permission + `background.type: "module"` |
-| `browser-extension/vite.config.js` (แก้) | เพิ่ม input `background` |
-| `browser-extension/package.json` (แก้) | ลบ `cp public/background.js dist/` |
-| `browser-extension/src/components/CompanionPanel/*.jsx` (สร้าง) | popup 4 แท็บ |
+| `browser-companion/src/background/index.js` (สร้าง) | entry ของ service worker — ย้ายโค้ดเดิมจาก `public/background.js` มา + ต่อ WS |
+| `browser-companion/src/background/socket.js` (สร้าง) | WS client + keepalive + reconnect |
+| `browser-companion/src/background/allowlist.js` (สร้าง) | **ด่านความปลอดภัย** — default deny, match โดเมน |
+| `browser-companion/src/background/cdp.js` (สร้าง) | attach/detach + `Input.dispatch*` + human delay |
+| `browser-companion/src/background/pageState.js` (สร้าง) | `Runtime.evaluate` เก็บผัง element ติด `[id]` |
+| `browser-companion/src/background/auditLog.js` (สร้าง) | บันทึกทุกคำสั่ง (รวมที่ deny) ลง `chrome.storage.local` |
+| `browser-companion/src/background/dispatch.js` (สร้าง) | รับคำสั่งจาก socket → allowlist → cdp/pageState → ตอบกลับ |
+| `browser-companion/public/manifest.json` (แก้) | `"debugger"` permission + `background.type: "module"` |
+| `browser-companion/vite.config.js` (แก้) | เพิ่ม input `background` |
+| `browser-companion/package.json` (แก้) | ลบ `cp public/background.js dist/` |
+| `browser-companion/src/components/CompanionPanel/*.jsx` (สร้าง) | popup 4 แท็บ |
 
 ---
 
@@ -146,7 +148,7 @@ describe("browserCompanion registry", () => {
 
 - [ ] **Step 2: รัน test ยืนยันว่าแดง**
 
-Run: `cd server && node node_modules/.bin/jest __tests__/utils/browserCompanion/registry.test.js`
+Run: `cd server && node ../node_modules/jest/bin/jest.js __tests__/utils/browserCompanion/registry.test.js`
 Expected: FAIL — `Cannot find module '../../../utils/browserCompanion/registry'`
 
 - [ ] **Step 3: เขียน implementation**
@@ -205,7 +207,7 @@ module.exports = { register, unregister, resolve, __reset, SINGLE_USER_KEY };
 
 - [ ] **Step 4: รัน test ยืนยันว่าเขียว**
 
-Run: `cd server && node node_modules/.bin/jest __tests__/utils/browserCompanion/registry.test.js`
+Run: `cd server && node ../node_modules/jest/bin/jest.js __tests__/utils/browserCompanion/registry.test.js`
 Expected: PASS — 7 tests
 
 - [ ] **Step 5: Commit**
@@ -309,7 +311,7 @@ describe("browserCompanion protocol", () => {
 
 - [ ] **Step 2: รัน test ยืนยันว่าแดง**
 
-Run: `cd server && node node_modules/.bin/jest __tests__/utils/browserCompanion/protocol.test.js`
+Run: `cd server && node ../node_modules/jest/bin/jest.js __tests__/utils/browserCompanion/protocol.test.js`
 Expected: FAIL — module not found
 
 - [ ] **Step 3: เขียน implementation**
@@ -375,7 +377,7 @@ module.exports = { send, handleMessage, attach, __reset, DEFAULT_TIMEOUT_MS };
 
 - [ ] **Step 4: รัน test ยืนยันว่าเขียว**
 
-Run: `cd server && node node_modules/.bin/jest __tests__/utils/browserCompanion/protocol.test.js`
+Run: `cd server && node ../node_modules/jest/bin/jest.js __tests__/utils/browserCompanion/protocol.test.js`
 Expected: PASS — 6 tests
 
 - [ ] **Step 5: Commit**
@@ -395,7 +397,7 @@ git commit -m "feat(browser-companion): wire protocol with requestId correlation
 
 **Interfaces:**
 - Consumes: `registry.register/unregister` (Task 1), `protocol.attach` (Task 2), `BrowserExtensionApiKey.validate`, `SystemSettings.isMultiUserMode`, `User.get`
-- Produces: `app.ws("/browser-extension/agent-socket")` — auth ด้วย query param `?key=brx-...`
+- Produces: `app.ws("/browser-companion/agent-socket")` — auth ด้วย query param `?key=brx-...`
   (WebSocket ฝั่งเบราว์เซอร์ **ตั้ง header ไม่ได้** จึงส่ง key ทาง query — ไม่ใช่ทางเลือกด้านสไตล์)
 
 - [ ] **Step 1: เขียน test ที่ต้องแดง**
@@ -418,7 +420,7 @@ const { SystemSettings } = require("../../models/systemSettings");
 const { User } = require("../../models/user");
 const { browserExtensionEndpoints } = require("../../endpoints/browserExtension");
 
-const ROUTE = "/browser-extension/agent-socket";
+const ROUTE = "/browser-companion/agent-socket";
 let wsRoutes;
 
 function fakeApp() {
@@ -446,7 +448,7 @@ async function connect(key) {
   return socket;
 }
 
-describe("browser-extension agent socket", () => {
+describe("browser-companion agent socket", () => {
   beforeEach(() => {
     registry.__reset();
     jest.clearAllMocks();
@@ -515,8 +517,8 @@ describe("browser-extension agent socket", () => {
 
 - [ ] **Step 2: รัน test ยืนยันว่าแดง**
 
-Run: `cd server && node node_modules/.bin/jest __tests__/endpoints/browserExtensionSocket.test.js`
-Expected: FAIL — `wsRoutes["/browser-extension/agent-socket"] is not a function`
+Run: `cd server && node ../node_modules/jest/bin/jest.js __tests__/endpoints/browserExtensionSocket.test.js`
+Expected: FAIL — `wsRoutes["/browser-companion/agent-socket"] is not a function`
 
 - [ ] **Step 3: เขียน implementation**
 
@@ -534,8 +536,8 @@ const { User } = require("../models/user");
 ```javascript
   // Long-lived socket the extension holds open so agent tools can drive the
   // user's own Chrome. Browser WebSocket cannot set headers, so the key travels
-  // as a query param — the same key /browser-extension/check accepts as a bearer.
-  app.ws("/browser-extension/agent-socket", async function (socket, request) {
+  // as a query param — the same key /browser-companion/check accepts as a bearer.
+  app.ws("/browser-companion/agent-socket", async function (socket, request) {
     try {
       const key = request?.query?.key;
       if (!key) return socket.close(4401);
@@ -565,7 +567,7 @@ const { User } = require("../models/user");
       protocol.attach(socket);
       socket.on("close", () => registry.unregister({ userId: apiKey.user_id, socket }));
     } catch (error) {
-      console.error("browser-extension agent socket error", error);
+      console.error("browser-companion agent socket error", error);
       try { socket.close(1011); } catch { /* already closed */ }
     }
   });
@@ -573,7 +575,7 @@ const { User } = require("../models/user");
 
 - [ ] **Step 4: รัน test ยืนยันว่าเขียว**
 
-Run: `cd server && node node_modules/.bin/jest __tests__/endpoints/browserExtensionSocket.test.js`
+Run: `cd server && node ../node_modules/jest/bin/jest.js __tests__/endpoints/browserExtensionSocket.test.js`
 Expected: PASS — 6 tests
 
 - [ ] **Step 5: Commit**
@@ -670,7 +672,7 @@ describe("browser-companion plugin", () => {
 
 - [ ] **Step 2: รัน test ยืนยันว่าแดง**
 
-Run: `cd server && node node_modules/.bin/jest __tests__/utils/agents/plugins/browser-companion.test.js`
+Run: `cd server && node ../node_modules/jest/bin/jest.js __tests__/utils/agents/plugins/browser-companion.test.js`
 Expected: FAIL — module not found
 
 - [ ] **Step 3: เขียน implementation**
@@ -783,7 +785,7 @@ const { browserCompanion } = require("./browser-companion.js");
 
 - [ ] **Step 4: รัน test ยืนยันว่าเขียว**
 
-Run: `cd server && node node_modules/.bin/jest __tests__/utils/agents/plugins/browser-companion.test.js`
+Run: `cd server && node ../node_modules/jest/bin/jest.js __tests__/utils/agents/plugins/browser-companion.test.js`
 Expected: PASS — 5 tests
 
 - [ ] **Step 5: Commit**
@@ -795,35 +797,66 @@ git commit -m "feat(browser-companion): agent plugin with 11 page tools, opt-in 
 
 ---
 
-### Task 5: extension build — bundle service worker
+### Task 5: scaffold the new extension
 
 **Files:**
-- Modify: `browser-extension/vite.config.js`
-- Modify: `browser-extension/package.json`
-- Modify: `browser-extension/public/manifest.json`
-- Create: `browser-extension/src/background/index.js` (ย้ายเนื้อจาก `public/background.js`)
-- Delete: `browser-extension/public/background.js`
+- Create: `browser-companion/package.json`
+- Create: `browser-companion/vite.config.js`
+- Create: `browser-companion/jest.config.mjs`
+- Create: `browser-companion/.gitignore`
+- Create: `browser-companion/index.html`
+- Create: `browser-companion/public/manifest.json`
+- Create: `browser-companion/src/background/index.js`
+- Create: `browser-companion/src/main.jsx`
+- Create: `browser-companion/src/App.jsx`
+- Create: `browser-companion/README.md`
 
 **Interfaces:**
-- Produces: `dist/background.js` ที่ bundle จาก `src/background/index.js` และ import module อื่นได้
-  — ทุก task หลังจากนี้ import เข้า entry นี้
+- Produces: `dist/background.js` — bundled ES-module service worker that later tasks
+  add imports to; and `dist/index.html` — the popup React root Task 9 fills in.
 
-**ทำไมต้องมี task นี้:** `package.json` วันนี้ทำ `cp public/background.js dist/` — ไฟล์ไม่ผ่าน bundler
-จึง `import` อะไรไม่ได้เลย ถ้าไม่แก้ build โค้ดทั้งหมดของ task 6–8 จะต้องกองในไฟล์เดียว = หนี้ที่ไม่ได้บันทึก
+**ทำไมเป็นโฟลเดอร์ใหม่ ไม่ใช่แก้ `browser-extension/`:** `browser-extension/` เป็น git submodule
+ชี้ไป `github.com/Mintplex-Labs/anythingllm-extension.git` (ดู `.gitmodules`) — commit ที่ลงในนั้น
+เข้า repo ของ Mintplex ไม่ใช่ PR นี้ และ gate ของเราไม่ครอบ repo นอก ผู้ใช้ตัดสินให้สร้างใหม่ (2026-09-09)
+submodule เดิมไม่ถูกแตะเลย
 
-- [ ] **Step 1: ย้ายไฟล์ พร้อมยืนยันว่าเนื้อไม่เปลี่ยน**
+- [ ] **Step 1: สร้าง package.json**
 
-```bash
-cd browser-extension
-mkdir -p src/background
-git mv public/background.js src/background/index.js
+```json
+{
+  "name": "anythingllm-browser-companion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build",
+    "test": "NODE_OPTIONS=--experimental-vm-modules node ../node_modules/jest/bin/jest.js",
+    "lint": "prettier --ignore-path ../.prettierignore --write ./src"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.3.4"
+  }
+}
 ```
 
-- [ ] **Step 2: แก้ vite.config.js — เพิ่ม input ที่สอง**
+jest ไม่อยู่ใน devDependencies เพราะมีอยู่ที่ root ของ repo แล้ว (`../node_modules/jest`) —
+เพิ่มซ้ำคือสองเวอร์ชันให้ดูแล ตรงกับที่ `server/package.json` ทำอยู่
 
-ใน `build.rollupOptions.input` เพิ่ม `background` และบังคับชื่อไฟล์ผลลัพธ์ เพราะ manifest อ้างชื่อคงที่:
+- [ ] **Step 2: สร้าง vite.config.js**
 
 ```javascript
+import { defineConfig } from "vite";
+import { fileURLToPath, URL } from "url";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
   build: {
     rollupOptions: {
       input: {
@@ -831,64 +864,160 @@ git mv public/background.js src/background/index.js
         background: "src/background/index.js",
       },
       output: {
-        // manifest.json points at a fixed filename, so the service worker bundle
-        // must not get a content hash the way the popup chunks do.
+        // manifest.json names the service worker by a fixed filename, so this one
+        // entry must not get a content hash the way the popup chunks do.
         entryFileNames: (chunk) =>
           chunk.name === "background" ? "background.js" : "assets/[name]-[hash].js",
       },
     },
     outDir: "dist",
   },
+  resolve: {
+    alias: [{ find: "@", replacement: fileURLToPath(new URL("./src", import.meta.url)) }],
+  },
+});
 ```
 
-- [ ] **Step 3: แก้ package.json — เอา cp ออก**
+- [ ] **Step 3: สร้าง jest.config.mjs**
 
-```json
-    "dev:build": "vite build",
-    "build": "vite build",
+```javascript
+// The service worker runs as an ES module, so its source is ESM. Jest reads it
+// natively under --experimental-vm-modules rather than through a babel transform,
+// which would be a second toolchain to keep in step with vite for no gain.
+export default {
+  testEnvironment: "node",
+  transform: {},
+};
 ```
 
-- [ ] **Step 4: แก้ manifest.json — permission + module worker**
+- [ ] **Step 4: สร้าง .gitignore, index.html, main.jsx, App.jsx**
+
+`.gitignore`:
+```
+node_modules
+dist
+```
+
+`index.html`:
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>AnythingLLM Browser Companion</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+```
+
+`src/main.jsx`:
+```javascript
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App.jsx";
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+```
+
+`src/App.jsx` — Task 9 แทนที่ด้วย popup จริง ตัวนี้มีเพื่อให้ build ผ่านและพิสูจน์ว่า bundle ถูกทาง:
+```javascript
+export default function App() {
+  return (
+    <main style={{ width: 376, padding: 16, fontFamily: "system-ui, sans-serif" }}>
+      <h1 style={{ fontSize: 15, margin: 0 }}>AnythingLLM Companion</h1>
+      <p style={{ fontSize: 13, color: "#555" }}>
+        Connect this browser to AnythingLLM to let an agent read and click here.
+      </p>
+    </main>
+  );
+}
+```
+
+- [ ] **Step 5: สร้าง public/manifest.json**
 
 ```json
-  "permissions": [
-    "contextMenus",
-    "activeTab",
-    "storage",
-    "notifications",
-    "alarms",
-    "debugger"
-  ],
+{
+  "manifest_version": 3,
+  "name": "AnythingLLM Browser Companion",
+  "version": "0.1.0",
+  "description": "Let an AnythingLLM agent read and click in this browser, on the domains you allow.",
+  "permissions": ["storage", "alarms", "tabs", "debugger"],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
+  "action": {
+    "default_popup": "index.html"
+  }
+}
 ```
 
-- [ ] **Step 5: build แล้วยืนยันว่าได้ไฟล์จริง**
+`"debugger"` คือ permission ที่ทำให้ทั้งงานนี้เป็นไปได้ — ยิง trusted input ผ่าน CDP
+`"tabs"` จำเป็นเพราะ agent เปิดและอ่าน URL ของแท็บตัวเอง
+ไม่ใส่ `"contextMenus"`/`"notifications"` เพราะ extension นี้ไม่มีเมนูคลิกขวา (นั่นเป็นงานของ
+`browser-extension` ตัวเดิม) — permission ที่ไม่ได้ใช้คือพื้นที่โจมตีที่ขอมาเปล่าๆ
+
+- [ ] **Step 6: สร้าง src/background/index.js — โครงที่ task 8 ต่อ**
+
+```javascript
+// Service worker entry. Task 8 wires the socket client in here; this file exists
+// now so the vite build has its second input and the bundle path is proven.
+console.info("AnythingLLM Browser Companion service worker loaded.");
+```
+
+- [ ] **Step 7: สร้าง README.md**
+
+```markdown
+# AnythingLLM Browser Companion
+
+Lets an AnythingLLM agent read and click in your own Chrome, on the domains you
+allow, using trusted CDP input via `chrome.debugger`.
+
+This is a separate extension from `browser-extension/` (the save-to-workspace
+companion, which is a git submodule of Mintplex's repo). Both can be installed.
+
+## Install (unpacked)
+
+1. `yarn install && yarn build`
+2. Open `chrome://extensions`, enable Developer mode
+3. Load unpacked, select this folder's `dist/`
+4. Click the extension, paste your AnythingLLM browser-extension API key
+5. Open the domains you want the agent to touch — everything is off by default
+
+Chrome shows a "DevTools is debugging this tab" bar on any tab the agent drives.
+That bar cannot be hidden; it is Chrome telling you the truth about what is happening.
+
+## Test
+
+    yarn test
+```
+
+- [ ] **Step 8: install แล้ว build ยืนยันว่าได้ไฟล์จริง**
 
 ```bash
-cd browser-extension && yarn build
-test -f dist/background.js && grep -q "contextMenus" dist/background.js && echo "BUNDLE OK"
+cd browser-companion && yarn install && yarn build
+test -f dist/background.js && test -f dist/index.html && echo "BUNDLE OK"
 ```
 Expected: `BUNDLE OK`
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add browser-extension/vite.config.js browser-extension/package.json browser-extension/public/manifest.json browser-extension/src/background/index.js
-git commit -m "build(browser-extension): bundle service worker, add debugger permission (#60)"
+git add browser-companion
+git commit -m "build(browser-companion): scaffold new MV3 extension with debugger permission (#60)"
 ```
-
----
 
 ### Task 6: allowlist gate — ด่านความปลอดภัยฝั่งผู้ใช้
 
 **Files:**
-- Create: `browser-extension/src/background/allowlist.js`
-- Create: `browser-extension/src/background/auditLog.js`
-- Test: `browser-extension/__tests__/allowlist.test.js`
-- Modify: `browser-extension/package.json` (เพิ่ม `"test"` script + jest devDependency)
+- Create: `browser-companion/src/background/allowlist.js`
+- Create: `browser-companion/src/background/auditLog.js`
+- Test: `browser-companion/__tests__/allowlist.test.js`
+(package.json + jest.config.mjs สร้างแล้วใน Task 5 — task นี้ไม่แตะ build config)
 
 **Interfaces:**
 - Consumes: `chrome.storage.local`
@@ -903,8 +1032,8 @@ git commit -m "build(browser-extension): bundle service worker, add debugger per
 - [ ] **Step 1: เขียน test ที่ต้องแดง**
 
 ```javascript
-const { describe, it, expect } = require("@jest/globals");
-const { isAllowed } = require("../src/background/allowlist.js");
+import { describe, it, expect } from "@jest/globals";
+import { isAllowed } from "../src/background/allowlist.js";
 
 describe("allowlist", () => {
   it("denies everything when the list is empty", () => {
@@ -944,15 +1073,20 @@ describe("allowlist", () => {
 });
 ```
 
-- [ ] **Step 2: เพิ่ม jest ให้ extension แล้วรัน ยืนยันว่าแดง**
+- [ ] **Step 2: รัน test ยืนยันว่าแดง**
 
-```bash
-cd browser-extension
-yarn add -D jest@^29
+
+
+และสร้าง `browser-companion/jest.config.mjs`:
+
+```javascript
+// The service worker runs as an ES module, so its source is ESM. Jest reads it
+// natively with --experimental-vm-modules rather than through a babel transform,
+// which would be a second toolchain to keep in step with vite for no gain.
+export default { testEnvironment: "node", transform: {} };
 ```
-เพิ่มใน `package.json` scripts: `"test": "node node_modules/.bin/jest"`
 
-Run: `cd browser-extension && node node_modules/.bin/jest __tests__/allowlist.test.js`
+Run: `cd browser-companion && NODE_OPTIONS=--experimental-vm-modules node ../node_modules/jest/bin/jest.js __tests__/allowlist.test.js`
 Expected: FAIL — module not found
 
 - [ ] **Step 3: เขียน implementation**
@@ -1039,13 +1173,13 @@ export { STORAGE_KEY, MAX_ENTRIES };
 
 - [ ] **Step 4: รัน test ยืนยันว่าเขียว**
 
-Run: `cd browser-extension && node node_modules/.bin/jest __tests__/allowlist.test.js`
+Run: `cd browser-companion && NODE_OPTIONS=--experimental-vm-modules node ../node_modules/jest/bin/jest.js __tests__/allowlist.test.js`
 Expected: PASS — 8 tests
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add browser-extension/src/background/allowlist.js browser-extension/src/background/auditLog.js browser-extension/__tests__/allowlist.test.js browser-extension/package.json browser-extension/yarn.lock
+git add browser-companion/src/background/allowlist.js browser-companion/src/background/auditLog.js browser-companion/__tests__/allowlist.test.js browser-companion/package.json browser-companion/yarn.lock
 git commit -m "feat(browser-companion): extension-side allowlist gate and audit log (#60)"
 ```
 
@@ -1054,10 +1188,10 @@ git commit -m "feat(browser-companion): extension-side allowlist gate and audit 
 ### Task 7: CDP layer — trusted input + page_state + page_fetch
 
 **Files:**
-- Create: `browser-extension/src/background/cdp.js`
-- Create: `browser-extension/src/background/pageState.js`
-- Create: `browser-extension/src/background/dispatch.js`
-- Test: `browser-extension/__tests__/dispatch.test.js`
+- Create: `browser-companion/src/background/cdp.js`
+- Create: `browser-companion/src/background/pageState.js`
+- Create: `browser-companion/src/background/dispatch.js`
+- Test: `browser-companion/__tests__/dispatch.test.js`
 
 **Interfaces:**
 - Consumes: `isAllowed`/`loadAllowlist` (Task 6), `auditLog.record` (Task 6), `chrome.debugger`, `chrome.tabs`
@@ -1070,8 +1204,8 @@ git commit -m "feat(browser-companion): extension-side allowlist gate and audit 
 - [ ] **Step 1: เขียน test ที่ต้องแดง**
 
 ```javascript
-const { describe, it, expect, jest: j } = require("@jest/globals");
-const { handle } = require("../src/background/dispatch.js");
+import { describe, it, expect, jest as j } from "@jest/globals";
+import { handle } from "../src/background/dispatch.js";
 
 function deps(overrides = {}) {
   return {
@@ -1159,7 +1293,7 @@ describe("dispatch", () => {
 
 - [ ] **Step 2: รัน test ยืนยันว่าแดง**
 
-Run: `cd browser-extension && node node_modules/.bin/jest __tests__/dispatch.test.js`
+Run: `cd browser-companion && NODE_OPTIONS=--experimental-vm-modules node ../node_modules/jest/bin/jest.js __tests__/dispatch.test.js`
 Expected: FAIL — module not found
 
 - [ ] **Step 3: เขียน implementation**
@@ -1420,13 +1554,13 @@ export { CURRENT_URL_COMMANDS };
 
 - [ ] **Step 4: รัน test ยืนยันว่าเขียว**
 
-Run: `cd browser-extension && node node_modules/.bin/jest __tests__/dispatch.test.js`
+Run: `cd browser-companion && NODE_OPTIONS=--experimental-vm-modules node ../node_modules/jest/bin/jest.js __tests__/dispatch.test.js`
 Expected: PASS — 8 tests
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add browser-extension/src/background/cdp.js browser-extension/src/background/pageState.js browser-extension/src/background/dispatch.js browser-extension/__tests__/dispatch.test.js
+git add browser-companion/src/background/cdp.js browser-companion/src/background/pageState.js browser-companion/src/background/dispatch.js browser-companion/__tests__/dispatch.test.js
 git commit -m "feat(browser-companion): CDP trusted input, page_state map, same-origin page_fetch (#60)"
 ```
 
@@ -1435,15 +1569,15 @@ git commit -m "feat(browser-companion): CDP trusted input, page_state map, same-
 ### Task 8: socket client + keepalive + agent tab
 
 **Files:**
-- Create: `browser-extension/src/background/socket.js`
-- Modify: `browser-extension/src/background/index.js`
-- Test: `browser-extension/__tests__/socket.test.js`
+- Create: `browser-companion/src/background/socket.js`
+- Modify: `browser-companion/src/background/index.js`
+- Test: `browser-companion/__tests__/socket.test.js`
 
 **Interfaces:**
 - Consumes: `handle` (Task 7), `chrome.storage.sync` (apiBase/apiKey ที่ Config.jsx เขียนไว้แล้ว), `chrome.alarms`
 - Produces:
   - `connect({ apiBase, apiKey, onCommand })` → `Promise<void>`
-  - `wsUrlFor(apiBase, apiKey)` → `string` — แปลง `http(s)://host/api` → `ws(s)://host/api/browser-extension/agent-socket?key=...`
+  - `wsUrlFor(apiBase, apiKey)` → `string` — แปลง `http(s)://host/api` → `ws(s)://host/api/browser-companion/agent-socket?key=...`
   - `ensureAgentTab()` → `Promise<number>` — แท็บของ agent เอง สร้างใหม่ถ้ายังไม่มี
   - `state()` → `{ status: "idle"|"online"|"evicted", lastError }`
 
@@ -1454,25 +1588,25 @@ git commit -m "feat(browser-companion): CDP trusted input, page_state map, same-
 - [ ] **Step 1: เขียน test ที่ต้องแดง**
 
 ```javascript
-const { describe, it, expect } = require("@jest/globals");
-const { wsUrlFor } = require("../src/background/socket.js");
+import { describe, it, expect } from "@jest/globals";
+import { wsUrlFor } from "../src/background/socket.js";
 
 describe("wsUrlFor", () => {
   it("upgrades https to wss and keeps the api path", () => {
     expect(wsUrlFor("https://workspace.approof.studio/api", "brx-abc")).toBe(
-      "wss://workspace.approof.studio/api/browser-extension/agent-socket?key=brx-abc"
+      "wss://workspace.approof.studio/api/browser-companion/agent-socket?key=brx-abc"
     );
   });
 
   it("upgrades http to ws for a local server", () => {
     expect(wsUrlFor("http://localhost:3001/api", "brx-abc")).toBe(
-      "ws://localhost:3001/api/browser-extension/agent-socket?key=brx-abc"
+      "ws://localhost:3001/api/browser-companion/agent-socket?key=brx-abc"
     );
   });
 
   it("tolerates a trailing slash on apiBase", () => {
     expect(wsUrlFor("https://x.test/api/", "brx-abc")).toBe(
-      "wss://x.test/api/browser-extension/agent-socket?key=brx-abc"
+      "wss://x.test/api/browser-companion/agent-socket?key=brx-abc"
     );
   });
 
@@ -1489,7 +1623,7 @@ describe("wsUrlFor", () => {
 
 - [ ] **Step 2: รัน test ยืนยันว่าแดง**
 
-Run: `cd browser-extension && node node_modules/.bin/jest __tests__/socket.test.js`
+Run: `cd browser-companion && NODE_OPTIONS=--experimental-vm-modules node ../node_modules/jest/bin/jest.js __tests__/socket.test.js`
 Expected: FAIL — module not found
 
 - [ ] **Step 3: เขียน implementation**
@@ -1497,7 +1631,7 @@ Expected: FAIL — module not found
 `src/background/socket.js`:
 
 ```javascript
-const SOCKET_PATH = "browser-extension/agent-socket";
+const SOCKET_PATH = "browser-companion/agent-socket";
 
 // MV3 kills an idle service worker at ~30s. An alarm under a minute only fires
 // for an unpacked extension, which matches this round's distribution plan
@@ -1642,20 +1776,20 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 - [ ] **Step 4: รัน test ยืนยันว่าเขียว**
 
-Run: `cd browser-extension && node node_modules/.bin/jest __tests__/socket.test.js`
+Run: `cd browser-companion && NODE_OPTIONS=--experimental-vm-modules node ../node_modules/jest/bin/jest.js __tests__/socket.test.js`
 Expected: PASS — 5 tests
 
 - [ ] **Step 5: build ยืนยันว่า bundle ไม่พัง**
 
 ```bash
-cd browser-extension && yarn build && grep -q "agent-socket" dist/background.js && echo "BUNDLE OK"
+cd browser-companion && yarn build && grep -q "agent-socket" dist/background.js && echo "BUNDLE OK"
 ```
 Expected: `BUNDLE OK`
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add browser-extension/src/background/socket.js browser-extension/src/background/index.js browser-extension/__tests__/socket.test.js
+git add browser-companion/src/background/socket.js browser-companion/src/background/index.js browser-companion/__tests__/socket.test.js
 git commit -m "feat(browser-companion): socket client, keepalive, agent-owned tab (#60)"
 ```
 
@@ -1664,11 +1798,11 @@ git commit -m "feat(browser-companion): socket client, keepalive, agent-owned ta
 ### Task 9: popup UI 4 แท็บ + E2E headed
 
 **Files:**
-- Create: `browser-extension/src/components/CompanionPanel/index.jsx`
-- Create: `browser-extension/src/components/CompanionPanel/DomainsTab.jsx`
-- Create: `browser-extension/src/components/CompanionPanel/ActivityTab.jsx`
-- Create: `browser-extension/src/components/CompanionPanel/HistoryTab.jsx`
-- Modify: `browser-extension/src/App.jsx`
+- Create: `browser-companion/src/components/CompanionPanel/index.jsx`
+- Create: `browser-companion/src/components/CompanionPanel/DomainsTab.jsx`
+- Create: `browser-companion/src/components/CompanionPanel/ActivityTab.jsx`
+- Create: `browser-companion/src/components/CompanionPanel/HistoryTab.jsx`
+- Modify: `browser-companion/src/App.jsx`
 - Test: `e2e/browser-companion-popup.spec.js`
 
 **Interfaces:**
@@ -1686,7 +1820,7 @@ git commit -m "feat(browser-companion): socket client, keepalive, agent-owned ta
 - [ ] **Step 1: เขียน E2E ที่ต้องแดง**
 
 ```javascript
-const { test, expect } = require("@playwright/test");
+import { test, expect } from "@playwright/test";
 
 // The popup is a plain React page, so it loads over http for E2E. chrome.* is
 // stubbed because the assertions here are about the UI contract, not CDP.
@@ -1740,7 +1874,7 @@ test("pause offers a way to reach the agent's tab", async ({ page }) => {
 
 - [ ] **Step 2: รัน E2E ยืนยันว่าแดง**
 
-Run: `cd browser-extension && npx playwright test --headed e2e/browser-companion-popup.spec.js`
+Run: `cd browser-companion && npx playwright test --headed e2e/browser-companion-popup.spec.js`
 Expected: FAIL — ไม่มีแท็บใน UI
 
 - [ ] **Step 3: เขียน popup ตาม mockup**
@@ -1756,7 +1890,7 @@ Expected: FAIL — ไม่มีแท็บใน UI
 - [ ] **Step 4: รัน E2E headed ยืนยันว่าเขียว + เขียน report ให้ gate**
 
 ```bash
-cd browser-extension
+cd browser-companion
 npx playwright test --headed --reporter=json e2e/browser-companion-popup.spec.js > ../.infi/e2e-report.json
 ```
 Expected: ทุก case PASS และมี `@edge` ผ่านอย่างน้อย 1 case
@@ -1764,7 +1898,7 @@ Expected: ทุก case PASS และมี `@edge` ผ่านอย่า�
 - [ ] **Step 5: Commit**
 
 ```bash
-git add browser-extension/src/components/CompanionPanel browser-extension/src/App.jsx browser-extension/e2e
+git add browser-companion/src/components/CompanionPanel browser-companion/src/App.jsx browser-companion/e2e
 git commit -m "feat(browser-companion): popup with allowlist, kill switch, audit log (#60)"
 ```
 
@@ -1812,6 +1946,17 @@ git commit -m "feat(browser-companion): popup with allowlist, kill switch, audit
 - `auditLog.record({cmd,url,outcome,detail})` / `readAll()` — task 6, 7, 9
 - `socket.state()` → `{status, lastError}` — task 8, 9
 
-**หมายเหตุ: task ถูกแบ่งเป็น 9 ไม่ใช่ 8** — สเปกรวม build change ไว้ในงาน extension แต่ `background.js`
-ถูก `cp` ไม่ผ่าน bundler จึงต้องแยกเป็น task 5 ก่อน ไม่งั้นทุกไฟล์ของ task 6–8 `import` ไม่ได้เลย
-นี่เป็นการค้นพบจากการอ่าน `package.json` จริง ไม่ใช่การขยาย scope
+**หมายเหตุ 1: task ถูกแบ่งเป็น 9 ไม่ใช่ 8** — สเปกรวมงาน scaffold ไว้ในงาน extension
+แต่ extension ต้องมีตัวตนก่อน (package.json, vite input, manifest) ไม่งั้นทุกไฟล์ของ task 6-8
+`import` ไม่ได้เลย จึงแยกเป็น task 5
+
+**หมายเหตุ 2: extension อยู่ที่ `browser-companion/` ไม่ใช่ `browser-extension/`** —
+`browser-extension/` เป็น git submodule ชี้ไป `github.com/Mintplex-Labs/anythingllm-extension.git`
+(ดู `.gitmodules`) commit ที่ลงในนั้นจะเข้า repo ของ Mintplex ไม่ใช่ PR นี้ และ gate ของเราไม่ครอบ
+repo นอก ผู้ใช้ตัดสินให้สร้างใหม่ (2026-09-09) submodule เดิมไม่ถูกแตะ
+
+**หมายเหตุ 3: คำสั่ง test** — server ใช้ `cd server && node ../node_modules/jest/bin/jest.js <path> --silent`
+(jest อยู่ที่ root ของ repo ไม่ใช่ใน `server/node_modules` — ตรงกับที่ `server/package.json` ใช้อยู่)
+extension ใช้ `NODE_OPTIONS=--experimental-vm-modules node ../node_modules/jest/bin/jest.js` เพราะ
+service worker เป็น ES module — test ฝั่ง extension จึงเขียนด้วย `import` ไม่ใช่ `require` ต่างจาก
+test ฝั่ง server ที่เป็น CJS
