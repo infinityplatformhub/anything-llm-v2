@@ -58,7 +58,7 @@ const DEFAULT_TIMEOUT_MS = resolveTimeoutMs(
  * in flight on the old one, where the reply would otherwise come back from a
  * different browser session at a different page.
  *
- * @type {Map<string, {resolve: Function, timer: NodeJS.Timeout, socket: object}>}
+ * @type {Map<string, {resolve: Function, timer: NodeJS.Timeout, socket: object, cmd: string}>}
  */
 const pending = new Map();
 
@@ -103,7 +103,9 @@ function send({ socket, cmd, payload = {}, timeoutMs } = {}) {
       resolveOuter(result);
     };
 
-    pending.set(requestId, { resolve: settle, timer, socket });
+    // `cmd` is recorded so `drainSocket` can name the command it interrupted;
+    // every other exit path already has `cmd` in scope from the argument.
+    pending.set(requestId, { resolve: settle, timer, socket, cmd });
 
     // A closed ws socket does NOT throw on send: ws/lib/websocket.js throws only
     // for CONNECTING(0), and for CLOSING(2)/CLOSED(3) it calls sendAfterClose()
@@ -252,7 +254,13 @@ function drainSocket(socket) {
     entry.resolve({
       ok: false,
       data: null,
-      error: `Browser command failed: ${DISCONNECTED_ERROR}`,
+      // Distinct from BOTH other failure strings, deliberately. The timeout text
+      // ("timed out after 20000ms") reads as a slow page and was half the reason
+      // for adding this function; the send-guard text ("could not be sent")
+      // describes a command that never went out. This one went out and was in
+      // flight when the browser vanished, so it says exactly that — the agent
+      // reads these strings and reasons about them.
+      error: `Browser command "${entry.cmd}" was interrupted: the browser disconnected before it answered.`,
     });
   }
   return drained;

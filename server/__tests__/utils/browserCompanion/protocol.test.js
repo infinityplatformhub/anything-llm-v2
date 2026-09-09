@@ -503,7 +503,12 @@ describe("browserCompanion protocol", () => {
         expect(settled).not.toBe("HUNG");
         expect(settled.ok).toBe(false);
         expect(settled.data).toBeNull();
-        expect(settled.error).toMatch(/not connected/i);
+        // Must say the browser disconnected, and must NOT reuse the timeout
+        // text: "timed out" reads as a slow page, which is the misleading
+        // string this function exists to replace.
+        expect(settled.error).toMatch(/disconnected before it answered/i);
+        expect(settled.error).not.toMatch(/timed out/i);
+        expect(settled.error).not.toMatch(/could not be sent/i);
       }
       expect(protocol.__pendingCount()).toBe(0);
     });

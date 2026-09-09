@@ -414,22 +414,28 @@ function browserExtensionEndpoints(app) {
 
       protocol.attach(socket);
 
-      // Socket-identity wiring check, at connect time rather than at reply time.
+      // Defensive assertion on the register/attach identity invariant.
       //
-      // protocol.js keys its pending map on the socket OBJECT, so if the object
-      // registered above is ever not the object attached here — a wrapper, a
-      // proxy, a spread copy, a prototype alias — every reply stops matching and
-      // every command times out with text identical to a disconnected browser.
-      // Nothing logs, and the cause is one function away from the symptom.
+      // BE CLEAR ABOUT WHAT THIS IS: today this branch is UNREACHABLE, not
+      // merely rare. `registry.register` stores the object it is given and
+      // `resolve` returns exactly that object or null, so a non-null resolve
+      // that differs from `socket` cannot be produced — verified against the
+      // real registry across every connection shape that reaches this line. The
+      // one shape where `resolve` does return null (a null user_id in
+      // multi-user mode) is already closed 4403 above. Replacing the condition
+      // with `if (false)` changes no observable behaviour.
       //
-      // This cannot be detected from the reply path outside protocol.js: an
-      // unknown requestId and a known-but-mismatched one both leave
-      // `__pendingCount` unchanged, because `handleMessage` returns identically
-      // for both and the distinction never crosses the module boundary. It CAN
-      // be detected here, before a single command is sent, because the invariant
-      // is simply that these are the same object. So the check lives where the
-      // plumbing does. It is a wiring bug or an attack, never normal traffic, so
-      // it cannot be noisy: on a correct build it never fires.
+      // It is kept anyway, and only for this: protocol.js keys its pending map
+      // on the socket OBJECT, so if a future edit ever puts a wrapper, proxy,
+      // spread copy or prototype alias between `register` and `attach`, every
+      // reply silently stops matching and every command times out with text
+      // identical to a disconnected browser. This turns that into a refused
+      // connection with a named cause instead. It is an assertion against a
+      // future change, not a runtime defence against anything reachable now.
+      //
+      // What it does NOT cover, and never did: a socket swapped after connect,
+      // and an adversarial cross-socket echo. Both are reply-path events, and
+      // both are handled by the mismatch warning in `protocol.handleMessage`.
       const registered = registry.resolve({
         userId: apiKey.user_id,
         multiUserMode,

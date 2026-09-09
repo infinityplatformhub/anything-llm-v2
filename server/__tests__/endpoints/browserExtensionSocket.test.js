@@ -700,7 +700,7 @@ describe("browser-companion agent socket", () => {
 
   // --- drainSocket: in-flight commands answer on disconnect ---
 
-  it("answers in-flight commands with 'not connected' when the socket closes", async () => {
+  it("answers in-flight commands with a disconnect error when the socket closes", async () => {
     BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
     SystemSettings.isMultiUserMode.mockResolvedValue(true);
     User.get.mockResolvedValue({ id: 7, suspended: 0 });
@@ -717,11 +717,13 @@ describe("browser-companion agent socket", () => {
 
     socket.emit("close");
 
-    await expect(inFlight).resolves.toMatchObject({
-      ok: false,
-      data: null,
-      error: expect.stringContaining("not connected"),
-    });
+    const settled = await inFlight;
+    expect(settled).toMatchObject({ ok: false, data: null });
+    // The command names itself and says the browser went away — not the
+    // timeout text, which would read as a slow page.
+    expect(settled.error).toContain("read_page");
+    expect(settled.error).toMatch(/disconnected before it answered/i);
+    expect(settled.error).not.toMatch(/timed out/i);
     expect(protocol.__pendingCount()).toBe(0);
   });
 
@@ -1087,9 +1089,58 @@ describe("browser-companion agent socket (real ws + express-ws)", () => {
 
     const result = await inFlight;
     expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/not connected/i);
+    expect(result.error).toMatch(/disconnected before it answered/i);
+    expect(result.error).not.toMatch(/timed out/i);
     // Answered because the socket closed, not because it timed out.
     expect(Date.now() - startedAt).toBeLessThan(5000);
     expect(protocol.__pendingCount()).toBe(0);
+  });
+
+  // The isolation guarantee — one extension disconnecting must not settle
+  // another's commands — is asserted above against fake sockets. Repeated here
+  // against two real connections, because that guarantee is the entire reason
+  // `__reset` could not be used, and a fake socket cannot disagree with me
+  // about how a real disconnect propagates.
+  it("drains only the dropped connection, leaving another user's command in flight", async () => {
+    const mine = open("brx-good");
+    await mine.opened;
+    const mySocket = registry.resolve({
+      userId: 7,
+      multiUserMode: true,
+    }).socket;
+
+    // A second, genuinely separate connection belonging to a different user.
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 2, user_id: 9 });
+    User.get.mockResolvedValue({ id: 9, suspended: 0 });
+    const theirs = open("brx-other");
+    await theirs.opened;
+    const theirSocket = registry.resolve({
+      userId: 9,
+      multiUserMode: true,
+    }).socket;
+    expect(theirSocket).not.toBe(mySocket);
+
+    const drained = protocol.send({
+      socket: mySocket,
+      cmd: "read_page",
+      timeoutMs: 60_000,
+    });
+    const untouched = protocol.send({
+      socket: theirSocket,
+      cmd: "read_page",
+      timeoutMs: 60_000,
+    });
+    expect(protocol.__pendingCount()).toBe(2);
+
+    mine._socket.destroy();
+    await expect(drained).resolves.toMatchObject({ ok: false });
+
+    // Still genuinely pending — not settled, not timed out.
+    expect(protocol.__pendingCount()).toBe(1);
+    const stillWaiting = await Promise.race([
+      untouched,
+      new Promise((resolve) => setTimeout(() => resolve("PENDING"), 50)),
+    ]);
+    expect(stillWaiting).toBe("PENDING");
   });
 });
