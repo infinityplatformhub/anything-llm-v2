@@ -146,6 +146,8 @@ class FakeSocket {
 let tabs;
 let nextTabId;
 let tabCreateCalls;
+/** onRemoved listeners the module registered at load. */
+const tabRemovedListeners = [];
 
 function makeTabs() {
   tabs = new Map();
@@ -192,8 +194,33 @@ function makeTabs() {
     async remove(id) {
       if (!tabs.has(id)) throw new Error(`No tab with id: ${id}.`);
       tabs.delete(id);
+      // Chrome fires onRemoved for EVERY removal, including ones the extension
+      // asked for. A double that fired only for user-initiated closes would
+      // hide a listener that double-handles its own `closeTab`.
+      fireTabRemoved(id);
+    },
+    onRemoved: {
+      addListener: (fn) => tabRemovedListeners.push(fn),
     },
   };
+}
+
+/**
+ * Close a tab the way the USER does: Chrome removes it and fires onRemoved,
+ * with nothing in the extension having asked.
+ *
+ * Tests previously modelled this as a bare `tabs.delete(id)`, which is the
+ * silent half only — and silence is precisely what F1-R was about. Going
+ * through this helper means a test cannot accidentally assert against a world
+ * where Chrome never told the extension anything.
+ */
+function userClosesTab(id) {
+  tabs.delete(id);
+  fireTabRemoved(id);
+}
+
+function fireTabRemoved(id) {
+  for (const fn of tabRemovedListeners) fn(id, { isWindowClosing: false });
 }
 
 /* ---- chrome.alarms ---- */
@@ -1580,6 +1607,171 @@ describe("agentTabUrl and ensureAgentTab name the same tab", () => {
     expect(closeResult.ok).toBe(true);
     expect(closed).not.toContain(usersDraft.id);
     expect(tabs.has(usersDraft.id)).toBe(true);
+  });
+
+  /* ---------------------------------------------------------------------
+   * F1-R — a tab id the module holds must not survive the tab it named.
+   *
+   * Chrome reuses tab ids within a session, and since F1 every held id GRANTS.
+   * The first fix dropped stale ids in `doResolveAgentTab`'s catch, which only
+   * fires when a lookup FAILS — but after a recycle the lookup SUCCEEDS, so
+   * the catch never ran and the agent adopted whatever tab now wore the
+   * number. `chrome.tabs.onRemoved` is the event that invalidates the ids, so
+   * that is where they are dropped.
+   *
+   * Both routes are driven through the REAL dispatch.handle, and the user's
+   * tab is on the SAME allowlisted domain as the agent's — so the allowlist
+   * cannot be what protects it and only ownership can.
+   * ------------------------------------------------------------------ */
+  const ownershipDeps = async (log = {}) => ({
+    loadAllowlist: (await import("../src/background/allowlist.js"))
+      .loadAllowlist,
+    record: auditLog.record,
+    agentTabUrl: socket.agentTabUrl,
+    ensureAgentTab: socket.ensureAgentTab,
+    listAgentTabs: socket.listAgentTabs,
+    switchToTab: socket.switchToTab,
+    closeTab: async (id) => {
+      (log.closed ??= []).push(id);
+      await socket.closeTab(id);
+    },
+    cdp: {
+      attach: async (id) => {
+        (log.attached ??= []).push(id);
+      },
+      detach: async () => {},
+      click: async (id) => {
+        (log.clicked ??= []).push(id);
+      },
+    },
+    pageState: { invalidate: () => {} },
+    lookup: async () => ({ x: 10, y: 20 }),
+  });
+
+  // ROUTE A — `agentTabId`, and `listAgentTabs` is never involved. This is why
+  // a test that only exercises page_switch would miss it: nothing here goes
+  // near the tab list. The agent simply keeps acting on "its" tab, which is now
+  // someone else's.
+  it("does not act on a user tab that recycled the agent tab's id", async () => {
+    localStore[ALLOWLIST_KEY] = ["allowed.test"];
+    const agentTab = await agentOpenedTab("https://allowed.test/agent-page");
+
+    // The user closes the agent's tab. Chrome fires onRemoved.
+    userClosesTab(agentTab);
+    // Chrome hands that id to a tab the USER opens, on the same allowed domain.
+    nextTabId = agentTab;
+    const usersTab = await chrome.tabs.create({
+      url: "https://allowed.test/user-secret",
+      active: false,
+    });
+    expect(usersTab.id).toBe(agentTab);
+
+    const log = {};
+    const deps = await ownershipDeps(log);
+
+    // page_click would attach a debugger to the user's tab and click in it.
+    const clicked = await handle(
+      { requestId: "a1", cmd: "click", id: 1 },
+      deps
+    );
+    // page_close would remove it.
+    const closedResult = await handle({ requestId: "a2", cmd: "close" }, deps);
+
+    // The agent must have opened a FRESH tab rather than inheriting the id, so
+    // nothing it did can have landed on the user's tab.
+    expect(log.attached ?? []).not.toContain(usersTab.id);
+    expect(log.clicked ?? []).not.toContain(usersTab.id);
+    expect(log.closed ?? []).not.toContain(usersTab.id);
+    expect(tabs.has(usersTab.id)).toBe(true);
+    expect(tabs.get(usersTab.id).url).toBe("https://allowed.test/user-secret");
+    // Both commands still resolved rather than hanging — the agent is told
+    // something, it just is not given the user's tab.
+    expect(typeof clicked.ok).toBe("boolean");
+    expect(typeof closedResult.ok).toBe("boolean");
+  });
+
+  // ROUTE B — `createdTabIds`, while the worker is not holding that tab
+  // current. The stale entry keeps granting, so page_switch adopts the user's
+  // recycled tab and page_close then removes it.
+  it("does not adopt a user tab that recycled an owned tab's id", async () => {
+    localStore[ALLOWLIST_KEY] = ["allowed.test"];
+    const owned = await agentOpenedTab("https://allowed.test/owned");
+    // The module stops holding it current, but it stays in createdTabIds.
+    socket.__forgetCurrentTab();
+    await agentOpenedTab("https://allowed.test/agent-page");
+
+    // The user closes the first one; Chrome recycles its id onto their own tab.
+    userClosesTab(owned);
+    nextTabId = owned;
+    const usersTab = await chrome.tabs.create({
+      url: "https://allowed.test/user-secret",
+      active: false,
+    });
+    expect(usersTab.id).toBe(owned);
+
+    const log = {};
+    const deps = await ownershipDeps(log);
+
+    const switched = await handle(
+      { requestId: "b1", cmd: "switch", url: "user-secret" },
+      deps
+    );
+    expect(switched.ok).toBe(false);
+
+    const closedResult = await handle({ requestId: "b2", cmd: "close" }, deps);
+    expect(closedResult.ok).toBe(true);
+    expect(log.closed ?? []).not.toContain(usersTab.id);
+    expect(tabs.has(usersTab.id)).toBe(true);
+  });
+
+  // The listener itself, at the unit level: both handles are given up, and the
+  // gate binding deliberately is NOT — clearing it would erase the evidence of
+  // the very event it exists to catch.
+  it("gives up both tab handles when Chrome reports a tab removed", async () => {
+    const mine = await agentOpenedTab("https://allowed.test/one");
+    expect((await socket.listAgentTabs()).map((t) => t.id)).toContain(mine);
+
+    socket.handleTabRemoved(mine);
+
+    expect((await socket.listAgentTabs()).map((t) => t.id)).not.toContain(mine);
+    await expect(socket.switchToTab(mine)).rejects.toThrow(
+      /only acts on its own tabs/
+    );
+  });
+
+  it("ignores a removal event for a tab it never held", async () => {
+    const mine = await agentOpenedTab("https://allowed.test/one");
+    socket.handleTabRemoved(9999);
+    expect((await socket.listAgentTabs()).map((t) => t.id)).toEqual([mine]);
+  });
+
+  // A non-numeric removal id must change nothing.
+  //
+  // BE HONEST ABOUT WHAT THIS PINS: the `typeof` guard in `handleTabRemoved` is
+  // currently INERT, and a mutation removing it correctly survives these cases.
+  // I first justified it as stopping `handleTabRemoved(null)` from matching
+  // `agentTabId === null` — that reasoning is WRONG and driving it proved so:
+  // when a tab is held, `agentTabId` is a number, and when none is held there
+  // is nothing to lose. `Set.delete` and `===` reject these values anyway.
+  //
+  // The cases stay because they pin the BEHAVIOUR (a junk event is a no-op)
+  // rather than the guard, and that behaviour must hold however the function is
+  // later written — the moment someone adds a `Map` keyed by id, or a `find`,
+  // the coercion rules stop being so forgiving. The guard itself stays as one
+  // cheap line on a listener fed by an external event source. Recorded in the
+  // harness as an equivalent mutant rather than left to look like coverage.
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["a numeric string", "1"],
+    ["an object", {}],
+  ])("ignores a removal event carrying %s", async (_label, value) => {
+    const mine = await agentOpenedTab("https://allowed.test/one");
+    socket.handleTabRemoved(value);
+    // Still owned, still current, still listed.
+    expect((await socket.listAgentTabs()).map((t) => t.id)).toEqual([mine]);
+    expect(await socket.ensureAgentTab()).toBe(mine);
+    expect(tabCreateCalls).toHaveLength(1);
   });
 
   // page_tabs must not even enumerate the user's tabs: the urls a user has

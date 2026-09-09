@@ -241,8 +241,14 @@ mutate("tab", "the agent takes over the user's active tab", SOCK,
 mutate("tab", "switchToTab focuses without adopting", SOCK,
   "  await chrome.tabs.update(tabId, { active: true });\n  agentTabId = tabId;",
   "  await chrome.tabs.update(tabId, { active: true });");
-mutate("tab", "closeTab forgets nothing", SOCK,
-  "  if (agentTabId === tabId) agentTabId = null;", "");
+// NOT MUTATED after F1-R, and recorded rather than quietly dropped. Chrome
+// fires onRemoved for extension-initiated removals too, so `handleTabRemoved`
+// has already cleared `agentTabId` and `createdTabIds` by the time `closeTab`
+// returns — removing either line changes nothing observable. Equivalent
+// mutants, not coverage gaps; scoring them as survivors would be noise.
+// `closeTab`'s own comment says why the lines stay anyway, and its `boundTabId`
+// line is NOT redundant (the listener deliberately does not touch it) and is
+// covered by the gate-binding cases.
 mutate("tab", "a tab with no url reports the empty string", SOCK,
   'return typeof tab?.url === "string" && tab.url ? tab.url : BLANK_URL;',
   "return tab?.url;");
@@ -372,9 +378,11 @@ mutate("listener", "a storage failure escapes as an unhandled rejection", IDX,
   "  } catch (error) {\n    // A rejected `storage.sync.get`",
   "  } finally {\n    // A rejected `storage.sync.get`");
 
-mutate("orphan", "closeTab keeps the id, so a recycled id closes a user tab", SOCK,
-  "  if (boundTabId === tabId) boundTabId = null;\n  createdTabIds.delete(tabId);",
-  "  if (boundTabId === tabId) boundTabId = null;");
+// The L4 mutation, retired for the same reason as the one above: after F1-R the
+// onRemoved listener drops the id first, so closeTab's own delete is no longer
+// the thing that protects a recycled id. What protects it now is the listener,
+// and the `stale` axis mutates that directly. Keeping this one would score an
+// equivalent mutant as a survivor and hide the real coverage question.
 mutate("orphan", "a mid-navigation tab is treated as unused", SOCK,
   '    if (typeof pending === "string" && pending && pending !== BLANK_URL) return;',
   "");
@@ -389,8 +397,11 @@ mutate("ownership", "listAgentTabs reports every tab in the browser again", SOCK
 mutate("ownership", "switchToTab adopts any tab it is handed", SOCK,
   "  if (!createdTabIds.has(tabId)) {\n    throw new Error(",
   "  if (false) {\n    throw new Error(");
-mutate("ownership", "a user-closed agent tab keeps its ownership", SOCK,
-  "      createdTabIds.delete(agentTabId);\n      agentTabId = null;",
+// Re-anchored for F1-R: the lazy catch no longer inlines the forget, it calls
+// `handleTabRemoved`. This mutation now removes the BACKSTOP — the case where
+// no listener ran at all (a teardown between the close and the next lookup).
+mutate("ownership", "the lazy backstop stops forgetting a vanished tab", SOCK,
+  "      handleTabRemoved(agentTabId);",
   "      agentTabId = null;");
 
 // --- axis: the null-reply convention (F3) ----------------------------------
@@ -400,6 +411,28 @@ mutate("nullreply", "a null reply is stringified onto the wire", SOCK,
 mutate("nullreply", "only undefined is treated as no-reply", SOCK,
   "      if (result === null || result === undefined) return;",
   "      if (result === undefined) return;");
+
+// --- axis: stale tab ids (F1-R) --------------------------------------------
+mutate("stale", "no onRemoved listener at all", SOCK,
+  "globalThis.chrome?.tabs?.onRemoved?.addListener?.(handleTabRemoved);",
+  "// no listener");
+mutate("stale", "removal drops the current handle but not the grant", SOCK,
+  "  createdTabIds.delete(tabId);\n  if (agentTabId === tabId) agentTabId = null;",
+  "  if (agentTabId === tabId) agentTabId = null;");
+mutate("stale", "removal drops the grant but not the current handle", SOCK,
+  "  createdTabIds.delete(tabId);\n  if (agentTabId === tabId) agentTabId = null;",
+  "  createdTabIds.delete(tabId);");
+mutate("stale", "removal clears the gate binding, erasing the mismatch evidence", SOCK,
+  "  if (agentTabId === tabId) agentTabId = null;\n}",
+  "  if (agentTabId === tabId) agentTabId = null;\n  if (boundTabId === tabId) boundTabId = null;\n}");
+// NOT MUTATED: the `typeof tabId !== "number"` guard in handleTabRemoved is
+// INERT and removing it survives. Driven and confirmed rather than assumed —
+// `Set.delete` and `===` already reject every non-numeric value, and when a tab
+// is held `agentTabId` is a number, so there is no null-matches-null case (my
+// first justification for the guard, and it was wrong). The behaviour is still
+// pinned by tests; the guard is one cheap line on a listener fed by an external
+// event source, and it becomes load-bearing the moment this function grows a
+// Map lookup or a `find`.
 
 // --- POSITIVE CONTROL -------------------------------------------------------
 // Must be KILLED. If this survives, the harness is not running these tests and

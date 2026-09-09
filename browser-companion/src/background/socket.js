@@ -180,18 +180,91 @@ let config = null;
 /** Commands run one at a time; see `enqueueCommand`. */
 let commandQueue = Promise.resolve();
 
+/**
+ * EVERY TAB ID THIS MODULE HOLDS IS A CAPABILITY, NOT BOOKKEEPING.
+ *
+ * That changed with F1, and it changes the question to ask of any stored id.
+ * It used to be "is this stale?", whose worst answer was a wasted call. It is
+ * now "COULD THIS NOW NAME SOMEONE ELSE'S TAB?", whose worst answer is the
+ * agent attaching a debugger to, navigating, or closing a tab the user opened.
+ *
+ * Chrome reuses tab ids within a session, so a held id survives the tab it
+ * named. Anywhere an id is kept, that question must have an answer — and the
+ * only answer that holds is dropping the id when Chrome says the tab is gone,
+ * which is what `handleTabRemoved` below is for. Noticing lazily, at the next
+ * `chrome.tabs.get`, is NOT an answer: by then the id may already have been
+ * handed to someone else's tab, and the lookup then SUCCEEDS.
+ *
+ * Two handles are invalidated by that one event, and both are below.
+ */
+
 /** The tab id this module believes is the agent's. */
 let agentTabId = null;
 /**
  * Tabs THIS module opened, so cleanup can never close one the user opened.
  * Per-worker like everything else here: after a teardown a previously created
  * tab is simply not a cleanup candidate, which fails safe.
+ *
+ * Since F1 this set GRANTS: membership is what `listAgentTabs` reports and what
+ * `switchToTab` requires. A stale entry is therefore not untidiness, it is an
+ * authorisation for a tab that may no longer be ours.
  */
 const createdTabIds = new Set();
 /** The in-flight `resolveAgentTab`, so concurrent callers cannot open two tabs. */
 let resolving = null;
 /** The tab id `agentTabUrl` reported inside the current command scope. See `ensureAgentTab`. */
 let boundTabId = null;
+
+/**
+ * Give up every claim on a tab the moment Chrome says it is gone.
+ *
+ * THIS IS THE INVALIDATION EVENT, so this is where the ids are dropped — the
+ * same reasoning as narrowing at the set-building site rather than at each
+ * consumer. Dropping them lazily, when the next `chrome.tabs.get` happens to
+ * fail, is not equivalent and a review drove both ways it fails:
+ *
+ *   - ROUTE A, `agentTabId`. The user closes the agent's tab; Chrome recycles
+ *     that id onto a tab THEY open. The next `chrome.tabs.get(agentTabId)` now
+ *     SUCCEEDS, so the lazy catch never runs, and the agent treats the user's
+ *     tab as its own — `page_click` attaches a debugger to it, `page_close`
+ *     removes it. `listAgentTabs` is not involved at all, which is why a test
+ *     that only exercises `page_switch` would miss this entirely.
+ *   - ROUTE B, `createdTabIds`. The stale entry keeps granting while the worker
+ *     is not holding that tab current, so `page_switch` adopts the user's
+ *     recycled tab and `page_close` then removes it.
+ *
+ * `boundTabId` IS DELIBERATELY NOT CLEARED HERE, and that is not an oversight.
+ * It is the per-command gate binding, and its entire job is to notice that the
+ * tab the allowlist judged is no longer the tab about to be acted on. Clearing
+ * it here would erase the evidence of exactly the event it exists to catch:
+ * `ensureAgentTab` would then open a fresh tab and return it happily, and a
+ * `page_close` gated on tab A would land on tab B — which is the coupling this
+ * whole module was written around. The binding must go on naming the tab the
+ * gate saw, precisely BECAUSE that tab is gone.
+ *
+ * It is also safe to leave: a stale `boundTabId` can only cause a REFUSAL
+ * (`ensureAgentTab` throws on a mismatch), never an action, and it is reset per
+ * command by `beginCommandScope`. It grants nothing, so recycling cannot turn
+ * it into a capability the way `agentTabId` and `createdTabIds` can.
+ *
+ * Exported because it is the listener body, and a listener registered on a
+ * global is otherwise untestable — a test would have to own `chrome` before
+ * this module's top level runs, which ES module hoisting makes impossible.
+ * Same shape as `cdp.handleDetach`, for the same reason.
+ *
+ * @param {number} tabId the id Chrome reports removed
+ */
+export function handleTabRemoved(tabId) {
+  if (typeof tabId !== "number") return;
+  createdTabIds.delete(tabId);
+  if (agentTabId === tabId) agentTabId = null;
+}
+
+// Optional-chained the whole way: this module is imported by tests that have no
+// `chrome` at all. Registered at load rather than per command, because a tab can
+// be closed at any moment, including while nothing is in flight — and the whole
+// point is to learn about it WHEN IT HAPPENS rather than at the next lookup.
+globalThis.chrome?.tabs?.onRemoved?.addListener?.(handleTabRemoved);
 
 /* ------------------------------------------------------------------------- */
 /* URLs                                                                       */
@@ -284,18 +357,17 @@ async function doResolveAgentTab() {
       if (tab && typeof tab.id === "number")
         return { id: tab.id, url: tabUrl(tab) };
     } catch {
-      // The user closed it. Fall through and open a new one.
+      // The tab is gone and `handleTabRemoved` did not run — the worker was
+      // torn down between the close and now, or the listener never registered.
+      // Fall through and open a new one.
       //
-      // The id is dropped from `createdTabIds` too, and since F1 that is a
-      // SECURITY step rather than tidiness: the set is now the capability
-      // record — what the agent may list, adopt, and therefore close or
-      // navigate. A tab the USER closes never goes through `closeTab`, so
-      // without this the id lingers; Chrome reuses tab ids within a session,
-      // and the moment it hands that id to a tab the user opens, the agent
-      // owns it. Same failure as L4 by a different route, and elevating this
-      // set to a capability is exactly what made the second route matter.
-      createdTabIds.delete(agentTabId);
-      agentTabId = null;
+      // A BACKSTOP, NOT THE MECHANISM, and the distinction is the whole of
+      // F1-R. This only fires when the lookup FAILS, and after Chrome has
+      // recycled the id the lookup SUCCEEDS — so relying on it meant the agent
+      // silently adopted whatever tab now wore that number. The listener is
+      // what actually keeps these ids honest; this is what is left for the case
+      // where no listener ran at all, and it must not be mistaken for cover.
+      handleTabRemoved(agentTabId);
     }
   }
 
@@ -581,6 +653,18 @@ async function discardIfUnused(tabId) {
  */
 export async function closeTab(tabId) {
   await chrome.tabs.remove(tabId);
+  // `handleTabRemoved` has almost certainly already done the first two: Chrome
+  // fires `onRemoved` for EVERY removal, including one the extension asked for.
+  // Two mutations proved that by surviving — deleting these lines changes
+  // nothing observable while the listener is registered.
+  //
+  // They stay, and not as decoration. This function's contract is that after it
+  // returns, the module holds no claim on that tab — and delivery of the
+  // listener is Chrome's business, not this function's. Depending on it here
+  // would make an ordinary close correct only as a side effect of an event
+  // handler somewhere else. `boundTabId` in particular is NOT touched by the
+  // listener at all (see `handleTabRemoved` for why), so that line is the only
+  // thing that clears it and is not redundant with anything.
   if (agentTabId === tabId) agentTabId = null;
   if (boundTabId === tabId) boundTabId = null;
   createdTabIds.delete(tabId);
