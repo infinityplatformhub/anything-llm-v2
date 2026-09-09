@@ -309,6 +309,35 @@ describe("browser-companion agent socket", () => {
     });
   });
 
+  // @edge — the wiring invariant itself, checked at connect time. If the object
+  // the registry holds is ever not the object the protocol is attached to, the
+  // connection must be refused loudly rather than served as a browser that looks
+  // connected and silently swallows every command. Simulated by making the
+  // registry hand back a different object, which is exactly what a wrapper,
+  // proxy or spread copy anywhere in this handler would produce.
+  it("refuses the connection when the registry and the protocol disagree on the socket", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
+    SystemSettings.isMultiUserMode.mockResolvedValue(true);
+    User.get.mockResolvedValue({ id: 7, suspended: false });
+
+    const realResolve = registry.resolve;
+    const spy = jest
+      .spyOn(registry, "resolve")
+      .mockImplementation((args) => ({ socket: fakeSocket(), error: null }));
+
+    let socket;
+    try {
+      socket = await connect("brx-good");
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(socket.closed).toBe(true);
+    expect(socket.closeCode).toBe(1011);
+    // And it must not be left in the registry for an agent run to find.
+    expect(realResolve({ userId: 7, multiUserMode: true }).socket).toBeNull();
+  });
+
   // @edge — a rejected connection must not leave the protocol wired to a socket
   // no agent run can reach.
   it("does not attach the protocol to a socket it rejected", async () => {
