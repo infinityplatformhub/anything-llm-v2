@@ -312,6 +312,57 @@ mutate("contract", "listAgentTabs dropped, as the brief specified", IDX,
 mutate("contract", "switchToTab dropped, as the brief specified", IDX,
   "  switchToTab: socket.switchToTab,\n", "");
 
+// --- axis: durable terminal verdict (M1) -----------------------------------
+mutate("durable", "the terminal verdict is never written", SOCK,
+  "      void rememberTerminal(apiKey, terminal.status, terminal.error);", "");
+mutate("durable", "the stored verdict is never consulted on a cold wake", SOCK,
+  "  if (!config) {\n    const verdict = await terminalVerdictFor(apiKey);",
+  "  if (false) {\n    const verdict = await terminalVerdictFor(apiKey);");
+mutate("durable", "a verdict for ANY key blocks this one", SOCK,
+  "  if (stored.key !== key) {", "  if (false) {");
+mutate("durable", "the raw key is stored instead of a fingerprint", SOCK,
+  "  const key = await fingerprint(apiKey);\n  if (!key) return;\n  try {",
+  "  const key = apiKey;\n  if (!key) return;\n  try {");
+mutate("durable", "a terminal close leaves config set, so keepalive rebuilds it", SOCK,
+  "      config = null;\n      // Durable, so the next worker honours this verdict too.",
+  "      // Durable, so the next worker honours this verdict too.");
+mutate("durable", "a storage read failure blocks the connection instead of failing open", SOCK,
+  "  } catch {\n    // A read failure must not block a connection: failing OPEN is right here,",
+  "  } catch {\n    return { status: \"evicted\", error: \"blocked\" };\n    // A read failure must not block a connection: failing OPEN is right here,");
+mutate("durable", "clearTerminalVerdict removes nothing", SOCK,
+  "    await chrome.storage.local.remove(TERMINAL_STORAGE_KEY);\n    return true;",
+  "    return true;");
+
+// --- axis: orphan tab cleanup (L1) ------------------------------------------
+mutate("orphan", "the abandoned tab is left open", SOCK,
+  "  if (abandoned !== null && abandoned !== tabId) await discardIfUnused(abandoned);",
+  "");
+mutate("orphan", "cleanup ignores whether we opened the tab", SOCK,
+  "  if (!createdTabIds.has(tabId)) return;", "  if (false) return;");
+mutate("orphan", "cleanup ignores whether the agent used the tab", SOCK,
+  "    if (tabUrl(tab) !== BLANK_URL) return; // The agent used it; leave it.",
+  "    // The agent used it; leave it.");
+mutate("orphan", "created tabs are never remembered", SOCK,
+  "  createdTabIds.add(created.id);", "");
+
+// --- axis: index.js listener bodies (M2/L2/L3) ------------------------------
+mutate("listener", "the wrong storage keys are read", IDX,
+  'export const CONFIG_KEYS = Object.freeze(["apiBase", "apiKey"]);',
+  'export const CONFIG_KEYS = Object.freeze(["nope"]);');
+mutate("listener", "the storage listener watches local instead of sync", IDX,
+  'if (area === "sync" && (changes?.apiBase || changes?.apiKey))',
+  'if (area === "local" && (changes?.apiBase || changes?.apiKey))');
+mutate("listener", "the alarm-name guard is inverted", IDX,
+  "if (alarm?.name !== socket.KEEPALIVE_ALARM) return;",
+  "if (alarm?.name === socket.KEEPALIVE_ALARM) return;");
+mutate("listener", "the top-level startCompanion() is deleted", IDX,
+  "\nstartCompanion();\n", "\n");
+mutate("listener", "the cold-wake fallback is dropped", IDX,
+  "  if (!socket.keepalive()) startCompanion();", "  socket.keepalive();");
+mutate("listener", "a storage failure escapes as an unhandled rejection", IDX,
+  "  } catch (error) {\n    // A rejected `storage.sync.get`",
+  "  } finally {\n    // A rejected `storage.sync.get`");
+
 // --- POSITIVE CONTROL -------------------------------------------------------
 // Must be KILLED. If this survives, the harness is not running these tests and
 // every verdict above is worthless.

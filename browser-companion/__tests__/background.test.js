@@ -1,4 +1,4 @@
-import { describe, it, expect } from "@jest/globals";
+import { describe, it, expect, beforeEach } from "@jest/globals";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -22,14 +22,34 @@ import path from "node:path";
  * ======================================================================== */
 
 const listeners = { startup: [], installed: [], storage: [], alarm: [] };
-let syncStore = {};
+// Seeded here rather than reassigned lower down: the module's top-level
+// `startCompanion()` reads this during its own import, so anything written
+// after that import is too late for it. See the L2 case.
+let syncStore = { apiBase: "https://boot.test/api", apiKey: "brx-boot" };
+
+/**
+ * Every socket index.js caused to be constructed.
+ *
+ * A stub that recorded nothing would make "did this listener connect?"
+ * unanswerable, which is the question this whole file now exists to ask.
+ */
+let sockets = [];
 
 globalThis.WebSocket = class {
-  constructor() {
+  constructor(url, protocols) {
+    this.url = url;
+    this.protocols = protocols;
     this.readyState = 0;
+    this.sent = [];
+    sockets.push(this);
   }
-  send() {}
-  close() {}
+  send(frame) {
+    if (this.readyState !== 1) return; // Matches the browser: discard, no throw.
+    this.sent.push(frame);
+  }
+  close() {
+    this.readyState = 3;
+  }
 };
 
 globalThis.chrome = {
@@ -69,8 +89,36 @@ globalThis.chrome = {
   },
 };
 
-const { deps } = await import("../src/background/index.js");
+const {
+  deps,
+  CONFIG_KEYS,
+  startCompanion,
+  onStorageChanged,
+  onAlarm,
+} = await import("../src/background/index.js");
+
+/**
+ * Sockets built by the module's own top-level call, captured before any test
+ * clears the list.
+ *
+ * L2: deleting that top-level `startCompanion()` — the line whose comment says
+ * it is the only thing that rebuilds the socket on a wake — survived the whole
+ * suite. It is only observable at module load, so the evidence has to be taken
+ * here and asserted later.
+ */
+// Several macrotasks, not one: the load-time connect awaits storage and
+// `crypto.subtle` before it builds anything, so a single turn captures an empty
+// list and the case fails saying the module never connected.
+for (let i = 0; i < 20 && sockets.length === 0; i += 1)
+  await new Promise((resolve) => setImmediate(resolve));
+const socketsAtLoad = [...sockets];
 const socket = await import("../src/background/socket.js");
+
+/** Let a real async chain (crypto.subtle, storage) settle. */
+const settle = async () => {
+  for (let i = 0; i < 3; i += 1)
+    await new Promise((resolve) => setImmediate(resolve));
+};
 
 /**
  * The accessors dispatch.js ACTUALLY calls, scraped from its source.
@@ -229,5 +277,171 @@ describe("the service worker's listeners", () => {
 
   it("wakes on the keepalive alarm", () => {
     expect(listeners.alarm).toHaveLength(1);
+  });
+
+  // Registration is not behaviour. The listener REGISTERED is the exported
+  // body, so the cases below invoke that same function with the arguments
+  // Chrome passes.
+  it("registers the exported bodies, not anonymous copies", () => {
+    expect(listeners.startup[0]).toBe(startCompanion);
+    expect(listeners.installed[0]).toBe(startCompanion);
+    expect(listeners.storage[0]).toBe(onStorageChanged);
+    expect(listeners.alarm[0]).toBe(onAlarm);
+  });
+
+  // @edge — L2. A wake RE-RUNS this module, and by then onStartup/onInstalled
+  // have long since fired, so the top-level call is the only thing that
+  // rebuilds the socket. Deleting it survived the entire suite, because its
+  // effect exists only at module load — which is why this asserts on evidence
+  // captured there rather than on anything a test can trigger.
+  it("connects at module load, not only from the listeners", () => {
+    expect(socketsAtLoad).toHaveLength(1);
+    expect(socketsAtLoad[0].url).toBe(
+      "wss://boot.test/api/browser-companion/agent-socket"
+    );
+  });
+});
+
+/* ===========================================================================
+ * M2 — the listener BODIES, invoked.
+ *
+ * A review found three mutations surviving a 487-test suite: reading the wrong
+ * storage keys (the companion NEVER connects — both values arrive `undefined`
+ * and `connect` returns idle without a word), listening on `local` instead of
+ * `sync` (saving a key in the popup does nothing), and inverting the alarm-name
+ * guard (the keepalive becomes a no-op while every OTHER alarm reconnects). Two
+ * of those are total feature failures, not degradations, and the suite asserted
+ * only that each listener EXISTED.
+ *
+ * Invoking a captured listener is not an MV3 lifecycle simulation — it is a
+ * function call, and it is the whole difference between "the wiring is there"
+ * and "the wiring works". What is still NOT modelled: whether Chrome delivers
+ * these events at all, and when.
+ * ======================================================================== */
+describe("the listener bodies actually do their job", () => {
+  beforeEach(async () => {
+    await settle();
+    sockets = [];
+    syncStore = {};
+    socket.__reset();
+  });
+
+  it("reads the storage keys the popup actually writes", async () => {
+    // Asserted against the exported constant AND against behaviour, so a
+    // rename that misses one of the two cannot pass.
+    expect([...CONFIG_KEYS]).toEqual(["apiBase", "apiKey"]);
+
+    syncStore.apiBase = "https://x.test/api";
+    syncStore.apiKey = "brx-abc";
+    await startCompanion();
+    await settle();
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0].url).toBe(
+      "wss://x.test/api/browser-companion/agent-socket"
+    );
+  });
+
+  it("stays idle, without throwing, when nothing is configured yet", async () => {
+    await startCompanion();
+    await settle();
+    expect(sockets).toHaveLength(0);
+    expect(socket.state().status).toBe("idle");
+  });
+
+  // @edge — a rejected `storage.sync.get` (offline profile, disabled sync
+  // account) would otherwise be an unhandled rejection in the service worker,
+  // leaving no trace anywhere the user can see.
+  it("survives storage.sync being unavailable", async () => {
+    const realGet = globalThis.chrome.storage.sync.get;
+    globalThis.chrome.storage.sync.get = async () => {
+      throw new Error("sync unavailable");
+    };
+    await expect(startCompanion()).resolves.toBeUndefined();
+    globalThis.chrome.storage.sync.get = realGet;
+    expect(sockets).toHaveLength(0);
+  });
+
+  it("reconnects when the popup writes a key to sync", async () => {
+    syncStore.apiBase = "https://x.test/api";
+    syncStore.apiKey = "brx-abc";
+    onStorageChanged({ apiKey: { newValue: "brx-abc" } }, "sync");
+    await settle();
+    expect(sockets).toHaveLength(1);
+  });
+
+  it("reconnects when only the server address changes", async () => {
+    syncStore.apiBase = "https://x.test/api";
+    syncStore.apiKey = "brx-abc";
+    onStorageChanged({ apiBase: { newValue: "https://x.test/api" } }, "sync");
+    await settle();
+    expect(sockets).toHaveLength(1);
+  });
+
+  // @edge — the area check. `local` is where the allowlist and the audit log
+  // live, and both change constantly during ordinary agent work; reconnecting
+  // on those would rebuild the socket on every recorded command.
+  it("ignores changes in the local area", async () => {
+    syncStore.apiBase = "https://x.test/api";
+    syncStore.apiKey = "brx-abc";
+    onStorageChanged({ apiKey: { newValue: "brx-abc" } }, "local");
+    await settle();
+    expect(sockets).toHaveLength(0);
+  });
+
+  it("ignores a sync change to some unrelated key", async () => {
+    syncStore.apiBase = "https://x.test/api";
+    syncStore.apiKey = "brx-abc";
+    onStorageChanged({ theme: { newValue: "dark" } }, "sync");
+    await settle();
+    expect(sockets).toHaveLength(0);
+  });
+
+  // @edge — L3. `keepalive()` returning false is its documented cold-wake
+  // signal: the worker woke with no config, so the config has to come from
+  // storage, which is index.js's job and not socket.js's.
+  it("re-reads storage when the alarm wakes a cold worker", async () => {
+    syncStore.apiBase = "https://x.test/api";
+    syncStore.apiKey = "brx-abc";
+    expect(socket.keepalive()).toBe(false); // cold: no config in the module
+    onAlarm({ name: socket.KEEPALIVE_ALARM });
+    await settle();
+    expect(sockets).toHaveLength(1);
+  });
+
+  // @edge — the alarm-name guard, inverted, made the keepalive a no-op while
+  // every other alarm triggered a reconnect. Both halves are asserted.
+  it("does nothing for an alarm that is not the keepalive", async () => {
+    syncStore.apiBase = "https://x.test/api";
+    syncStore.apiKey = "brx-abc";
+    onAlarm({ name: "someOtherExtensionAlarm" });
+    await settle();
+    expect(sockets).toHaveLength(0);
+  });
+
+  it("does nothing for a malformed alarm", async () => {
+    syncStore.apiBase = "https://x.test/api";
+    syncStore.apiKey = "brx-abc";
+    onAlarm(undefined);
+    onAlarm({});
+    await settle();
+    expect(sockets).toHaveLength(0);
+  });
+
+  // @edge — a warm worker must be PINGED, not reconnected: rebuilding a live
+  // socket on every keepalive tick would drop the connection every 15 seconds.
+  it("pings instead of reconnecting when the socket is already live", async () => {
+    syncStore.apiBase = "https://x.test/api";
+    syncStore.apiKey = "brx-abc";
+    await startCompanion();
+    await settle();
+    expect(sockets).toHaveLength(1);
+    sockets[0].readyState = 1; // OPEN
+
+    onAlarm({ name: socket.KEEPALIVE_ALARM });
+    await settle();
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0].sent.map((raw) => JSON.parse(raw))).toEqual([
+      { event: "ping" },
+    ]);
   });
 });

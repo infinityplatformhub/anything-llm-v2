@@ -182,6 +182,12 @@ let commandQueue = Promise.resolve();
 
 /** The tab id this module believes is the agent's. */
 let agentTabId = null;
+/**
+ * Tabs THIS module opened, so cleanup can never close one the user opened.
+ * Per-worker like everything else here: after a teardown a previously created
+ * tab is simply not a cleanup candidate, which fails safe.
+ */
+const createdTabIds = new Set();
 /** The in-flight `resolveAgentTab`, so concurrent callers cannot open two tabs. */
 let resolving = null;
 /** The tab id `agentTabUrl` reported inside the current command scope. See `ensureAgentTab`. */
@@ -293,6 +299,7 @@ async function doResolveAgentTab() {
       "Chrome did not return a tab id for the agent's tab; the agent has no page to act on."
     );
   agentTabId = created.id;
+  createdTabIds.add(created.id);
   return { id: created.id, url: tabUrl(created) };
 }
 
@@ -397,12 +404,48 @@ export async function listAgentTabs() {
  * @param {number} tabId
  */
 export async function switchToTab(tabId) {
+  const abandoned = agentTabId;
   await chrome.tabs.update(tabId, { active: true });
   agentTabId = tabId;
   // The gate for THIS command judged the matched tab, and the command is done;
   // leaving a binding that names the previous tab would fail the next
   // `ensureAgentTab` in this scope for no reason.
   boundTabId = tabId;
+
+  // Clean up the tab this switch just abandoned, if it was one WE opened and
+  // the agent never used. `handle` calls `ensureAgentTab()` before every
+  // command's `run`, including page_switch — so on a cold worker a switch
+  // creates a blank agent tab and then adopts a different one, abandoning the
+  // blank. One stray tab per cold-start switch, accumulating across worker
+  // restarts, and the user has no way to know where it came from.
+  if (abandoned !== null && abandoned !== tabId) await discardIfUnused(abandoned);
+}
+
+/**
+ * Close a tab only if this module opened it and nothing has happened in it.
+ *
+ * THREE CONDITIONS, and every one is load-bearing — this closes a real tab in
+ * the user's browser, so a false positive destroys something they were using:
+ *   1. we opened it (`createdTabIds`), so a tab the user opened is never a
+ *      candidate no matter what it currently shows;
+ *   2. it is still on `about:blank`, so a tab the agent navigated somewhere —
+ *      and which may hold state the user can see — is left alone;
+ *   3. it still exists.
+ * Anything unexpected means "do not touch it": every failure path here leaves
+ * the tab open, because a leaked blank tab is a cosmetic problem and a wrongly
+ * closed tab is not.
+ */
+async function discardIfUnused(tabId) {
+  if (!createdTabIds.has(tabId)) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tabUrl(tab) !== BLANK_URL) return; // The agent used it; leave it.
+    await chrome.tabs.remove(tabId);
+    createdTabIds.delete(tabId);
+  } catch {
+    // Already closed, or Chrome refused. Either way there is nothing to clean
+    // up and nothing worth telling anyone about.
+  }
 }
 
 /**
@@ -418,6 +461,7 @@ export async function closeTab(tabId) {
   await chrome.tabs.remove(tabId);
   if (agentTabId === tabId) agentTabId = null;
   if (boundTabId === tabId) boundTabId = null;
+  createdTabIds.delete(tabId);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -458,6 +502,39 @@ function enqueueCommand(run) {
     });
   return commandQueue;
 }
+
+/**
+ * Where the terminal verdict is remembered ACROSS a worker teardown.
+ *
+ * WHY THIS EXISTS. Everything else in this module is per-worker by design, and
+ * for a socket that is right — it has to be rebuilt on every wake anyway. A
+ * terminal close is the one exception, and a review reproduced why: 4409 sets
+ * `status = "evicted"`, the worker is torn down ~30s later, the wake reads the
+ * key that is still sitting in `chrome.storage.sync`, and reconnects. Which is
+ * the slot fight the terminal decision exists to prevent, restarted by the
+ * lifecycle rather than by a stale alarm. Same for 4401: the rejected key is
+ * retried on every wake, which is the login-attempt flood this module says it
+ * refuses. Not server-triggerable and not a bypass — a durability gap.
+ *
+ * `local`, never `sync`: this is a verdict about THIS browser (which browser
+ * lost the slot), and syncing it would evict the user's other machines too.
+ */
+const TERMINAL_STORAGE_KEY = "companionTerminalClose";
+
+/**
+ * The stored verdict is keyed to a FINGERPRINT of the key it was reached with,
+ * never the key itself.
+ *
+ * Storing the key would put a live, long-lived credential in a second place at
+ * rest for no gain — `storage.local` is not encrypted, and the whole point of
+ * the subprotocol transport is that this credential stays out of places it does
+ * not need to be. A digest answers the only question asked of it: "is this the
+ * same key that was already rejected?"
+ *
+ * Truncated to 32 hex characters (128 bits). Far past collision relevance here,
+ * and short enough to keep the record small.
+ */
+const KEY_FINGERPRINT_CHARS = 32;
 
 /**
  * How much of a thrown message may be echoed back to the server.
@@ -510,6 +587,120 @@ function replyForFailedCommand(message, error) {
       MAX_ECHOED_CHARS
     )}" and could not record it in the audit log: ${reason}. The action may or may not have taken effect — check the page with page_state before retrying, rather than repeating the command.`,
   };
+}
+
+/**
+ * A stable, non-reversible fingerprint of an API key.
+ *
+ * @param {string} apiKey
+ * @returns {Promise<string|null>} null when no digest is available, which is
+ *   the caller's signal to fall back to per-worker behaviour rather than to
+ *   invent a weaker fingerprint.
+ */
+async function fingerprint(apiKey) {
+  const digest = globalThis.crypto?.subtle?.digest;
+  if (typeof digest !== "function") return null;
+  try {
+    const bytes = await globalThis.crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(apiKey)
+    );
+    return [...new Uint8Array(bytes)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")
+      .slice(0, KEY_FINGERPRINT_CHARS);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remember a terminal verdict so the next worker does not undo it.
+ *
+ * WHAT HAPPENS IF THE WRITE FAILS, stated because task 6 learned the hard way
+ * that a storage write is not a thing to assume: the failure is logged and
+ * SWALLOWED, and this connection stays terminal for the life of this worker.
+ * The cost of the failure is precisely the M1 behaviour — the verdict does not
+ * survive the teardown and the next wake reconnects — so a failed write leaves
+ * the code no worse than it was before this function existed, and never worse
+ * than that. It deliberately does NOT throw: this runs inside `onclose`, and a
+ * throw there would take out the state assignment the popup reads, trading a
+ * durability gap for an immediate visible failure. There is nothing for a
+ * caller to do about it either, which is the other half of why it is not
+ * raised.
+ *
+ * No read-back verification, unlike `saveAllowlist`. That one verifies because
+ * believing a lie there means believing access was revoked when it was not —
+ * a security claim. Here a lost write costs a redundant reconnect attempt,
+ * which the server answers by closing again with the same code.
+ */
+async function rememberTerminal(apiKey, status, error) {
+  const key = await fingerprint(apiKey);
+  if (!key) return;
+  try {
+    await chrome.storage.local.set({
+      [TERMINAL_STORAGE_KEY]: { key, status, error, at: new Date().toISOString() },
+    });
+  } catch (failure) {
+    console.error(
+      "[AnythingLLM Companion] could not remember that this connection was refused; it may be retried after the extension restarts:",
+      failure
+    );
+  }
+}
+
+/**
+ * The stored verdict, if it applies to THIS key.
+ *
+ * A verdict for a different fingerprint is not merely ignored, it is DELETED:
+ * that is the mechanism by which an evicted user gets back in. They reconnect
+ * in AnythingLLM, the popup writes a new key to `storage.sync`, the storage
+ * listener calls `connect`, the fingerprints differ, and the block is gone. No
+ * reinstall, and nothing for the user to find or clear by hand.
+ *
+ * @returns {Promise<{status: string, error: string}|null>}
+ */
+async function terminalVerdictFor(apiKey) {
+  const key = await fingerprint(apiKey);
+  if (!key) return null;
+  let stored;
+  try {
+    stored = (await chrome.storage.local.get([TERMINAL_STORAGE_KEY]))?.[
+      TERMINAL_STORAGE_KEY
+    ];
+  } catch {
+    // A read failure must not block a connection: failing OPEN is right here,
+    // because the alternative is an extension that cannot connect at all when
+    // storage is unhealthy, and the server refuses the connection again anyway
+    // if the verdict was real.
+    return null;
+  }
+  if (!stored || typeof stored !== "object") return null;
+  if (stored.key !== key) {
+    // A different key: the user has reconnected. Clear the block.
+    try {
+      await chrome.storage.local.remove(TERMINAL_STORAGE_KEY);
+    } catch {
+      // The mismatch check above already makes this verdict inert for the new
+      // key, so a failed cleanup costs a stale record, not a blocked user.
+    }
+    return null;
+  }
+  return { status: stored.status, error: stored.error };
+}
+
+/** Forget any terminal verdict. Exported for the popup's "try again". */
+export async function clearTerminalVerdict() {
+  try {
+    await chrome.storage.local.remove(TERMINAL_STORAGE_KEY);
+    return true;
+  } catch (error) {
+    console.error(
+      "[AnythingLLM Companion] could not clear the stored connection refusal:",
+      error
+    );
+    return false;
+  }
 }
 
 /**
@@ -612,6 +803,32 @@ export async function connect({ apiBase, apiKey, onCommand } = {}) {
   const alive =
     socket && (socket.readyState === 0 || socket.readyState === WS_OPEN);
   if (sameConfig && alive) return;
+
+  // THE DURABLE HALF OF THE TERMINAL REFUSAL. Checked before a socket is built
+  // and before `config` is set, so a worker that woke after a terminal close
+  // does not reconnect and restart the fight that decision refused to start.
+  // The in-memory `status` guard is the same rule within one worker lifetime;
+  // this is what makes it survive a teardown. A verdict for a DIFFERENT key
+  // clears itself here, which is how an evicted user gets back in.
+  //
+  // Scoped to a COLD entry — no `config` yet, i.e. this worker has not already
+  // established that this key is usable. That is not an optimisation, it is
+  // required: the reconnect timer calls `connect`, and awaiting storage on that
+  // path would make every retry depend on a storage round trip completing,
+  // which reorders the retry relative to its own timer. A reconnect is already
+  // inside a session that passed this check, and a terminal close clears
+  // `config`, so a retry can never skip a verdict that applies to it.
+  if (!config) {
+    const verdict = await terminalVerdictFor(apiKey);
+    if (verdict) {
+      status = verdict.status;
+      lastError = verdict.error;
+      closeExisting();
+      clearReconnectTimer();
+      disarmKeepalive();
+      return;
+    }
+  }
 
   config = { apiBase, apiKey, onCommand };
   clearReconnectTimer();
@@ -731,6 +948,16 @@ export async function connect({ apiBase, apiKey, onCommand } = {}) {
       // `connect` and re-arms everything.
       disarmKeepalive();
       clearReconnectTimer();
+      // Dropped so nothing can reconnect with a key the server just refused:
+      // `keepalive()` reconnects from `config`, and `connect`'s cold-entry
+      // check is gated on `config` being absent. Leaving it set would let this
+      // worker rebuild the very connection this branch is refusing.
+      config = null;
+      // Durable, so the next worker honours this verdict too. Fire-and-forget
+      // for the same reason as the audit write below: this is a close handler,
+      // and a storage failure must not stop the state above from being set.
+      // See `rememberTerminal` for exactly what a failed write costs.
+      void rememberTerminal(apiKey, terminal.status, terminal.error);
       // Written to the log the user reads, because a browser that has gone
       // quiet with no window open is otherwise indistinguishable from a broken
       // extension. Fire-and-forget: this is a close handler, and a storage
@@ -836,11 +1063,27 @@ export function __reset() {
   agentTabId = null;
   resolving = null;
   boundTabId = null;
+  createdTabIds.clear();
 }
 
 /** Test-only: the queue, so a test can await the command it just delivered. */
 export function __commandQueue() {
   return commandQueue;
+}
+
+/**
+ * Test-only: whether this worker still holds a config it could reconnect with.
+ *
+ * Exposed because a terminal close defends against reconnecting TWO ways — no
+ * timer is scheduled, and `config` is dropped, which the timer callback and
+ * `keepalive` both require. Either alone suffices, so removing either alone is
+ * invisible through behaviour and a mutation run proved it: both single
+ * removals survived, only the pair reconnected. Redundancy nobody can see is
+ * how one half gets deleted as dead code and the other then follows as
+ * harmless, so each half is asserted directly instead.
+ */
+export function __hasConfig() {
+  return config !== null;
 }
 
 export {

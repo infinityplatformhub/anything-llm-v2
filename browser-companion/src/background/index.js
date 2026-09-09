@@ -22,6 +22,14 @@ import * as pageState from "./pageState.js";
 import * as socket from "./socket.js";
 
 /**
+ * The `chrome.storage.sync` keys the popup writes the server address and key
+ * to. Exported so a test asserts against the real values rather than restating
+ * them: reading the wrong keys makes the companion silently never connect —
+ * both values arrive `undefined` and `connect` returns idle without a word.
+ */
+export const CONFIG_KEYS = Object.freeze(["apiBase", "apiKey"]);
+
+/**
  * The dependency bundle `dispatch.handle` runs against.
  *
  * ALL FIVE TAB ACCESSORS ARE SUPPLIED HERE, and dispatch.js deliberately
@@ -61,12 +69,9 @@ export const deps = {
  * no-ops when an equivalent socket is already live, which is what keeps the
  * five call sites from leaving five sockets open.
  */
-async function startCompanion() {
+export async function startCompanion() {
   try {
-    const { apiBase, apiKey } = await chrome.storage.sync.get([
-      "apiBase",
-      "apiKey",
-    ]);
+    const { apiBase, apiKey } = await chrome.storage.sync.get(CONFIG_KEYS);
     await socket.connect({
       apiBase,
       apiKey,
@@ -83,20 +88,38 @@ async function startCompanion() {
   }
 }
 
-chrome.runtime.onStartup.addListener(startCompanion);
-chrome.runtime.onInstalled.addListener(startCompanion);
+/**
+ * The two listener BODIES, named and exported rather than written inline.
+ *
+ * A review found all three of the original inline bodies unmeasured: the suite
+ * asserted each listener was REGISTERED and never invoked one, so reading the
+ * wrong storage keys (never connects), listening on `local` instead of `sync`
+ * (the popup's reconnect does nothing), and inverting the alarm-name guard (the
+ * keepalive becomes a no-op) all survived 487 tests. Two of those are total
+ * feature failures, not degradations.
+ *
+ * Exporting them makes each a function a test can call with the arguments
+ * Chrome would pass. That is not a simulation of the MV3 lifecycle — it is a
+ * function call, and it is the difference between asserting the wiring exists
+ * and asserting it works.
+ */
+export function onStorageChanged(changes, area) {
+  if (area === "sync" && (changes?.apiBase || changes?.apiKey))
+    startCompanion();
+}
 
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && (changes.apiBase || changes.apiKey)) startCompanion();
-});
-
-chrome.alarms.onAlarm.addListener((alarm) => {
+export function onAlarm(alarm) {
   if (alarm?.name !== socket.KEEPALIVE_ALARM) return;
   // `false` means this worker woke cold and socket.js has no config to
   // reconnect with — so the config has to come from storage, which is this
   // file's job and not that module's.
   if (!socket.keepalive()) startCompanion();
-});
+}
+
+chrome.runtime.onStartup.addListener(startCompanion);
+chrome.runtime.onInstalled.addListener(startCompanion);
+chrome.storage.onChanged.addListener(onStorageChanged);
+chrome.alarms.onAlarm.addListener(onAlarm);
 
 // Not only from the listeners: a wake re-runs this module, and by then
 // `onStartup`/`onInstalled` have long since fired. Without this the socket is

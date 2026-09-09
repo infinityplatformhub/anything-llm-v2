@@ -188,6 +188,8 @@ let localStore;
 let syncStore;
 /** Set to an Error to make every `storage.local.set` reject. */
 let localSetFails;
+/** Set to an Error to make every `storage.local.remove` reject. */
+let localRemoveFails;
 /** Set to an Error to make `storage.sync.get` reject. */
 let syncGetFails;
 
@@ -221,6 +223,10 @@ globalThis.chrome = {
         if (localSetFails) throw localSetFails;
         Object.assign(localStore, patch);
       },
+      async remove(keys) {
+        if (localRemoveFails) throw localRemoveFails;
+        for (const key of [].concat(keys)) delete localStore[key];
+      },
     },
     sync: {
       async get(keys) {
@@ -243,11 +249,49 @@ const { STORAGE_KEY: ALLOWLIST_KEY } = await import(
 );
 
 /** Let every already-resolved promise settle. */
+/**
+ * Let every already-resolved promise settle.
+ *
+ * `setImmediate`, not a spin of `await Promise.resolve()`. The durable terminal
+ * write goes through `crypto.subtle.digest`, which is a REAL async primitive
+ * resolving on a later macrotask — spinning microtasks cannot drain it however
+ * many turns you spin, and the write silently had not happened yet. That
+ * produced a failure reading as "the module never wrote the verdict" when the
+ * truth was "the assertion ran too early", which is exactly the kind of false
+ * signal that sends a debugging session at the wrong file.
+ */
 const flush = async () => {
-  for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  for (let i = 0; i < 3; i += 1)
+    await new Promise((resolve) => setImmediate(resolve));
 };
 
-beforeEach(() => {
+/**
+ * Wait for a condition rather than for a fixed number of turns.
+ *
+ * Used where the thing being awaited is a real async chain of unspecified
+ * length (`crypto.subtle.digest` and the storage write behind it). A fixed
+ * flush there is a race that passes on a fast machine and fails on a slow one,
+ * and the failure reads as a missing feature rather than as an early
+ * assertion. Throws on timeout, so a condition that never becomes true is a
+ * loud failure and never a silent pass.
+ */
+const waitFor = async (predicate, label = "condition") => {
+  for (let i = 0; i < 200; i += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`waitFor: ${label} never became true`);
+};
+
+// The durable terminal write is fire-and-forget through `crypto.subtle`, so it
+// can land AFTER the test that triggered it has finished. A synchronous
+// `beforeEach` would then reset `localStore` and the late write would drop the
+// verdict into the NEXT test's store — where it silently blocks `connect` and
+// the failure reads as "the module refused to build a socket" in a test that
+// never mentioned a terminal close. Draining first is what keeps each case
+// measuring its own setup rather than the previous one's leftovers.
+beforeEach(async () => {
+  await new Promise((resolve) => setImmediate(resolve));
   sockets = [];
   constructorThrows = null;
   globalThis.chrome.tabs = makeTabs();
@@ -256,6 +300,7 @@ beforeEach(() => {
   localStore = {};
   syncStore = {};
   localSetFails = null;
+  localRemoveFails = null;
   syncGetFails = null;
   auditLog.resetWriteFailure();
   socket.__reset();
@@ -484,13 +529,18 @@ describe("close codes", () => {
     ["4401", 4401],
     ["4403", 4403],
   ])("schedules no reconnect at all after %s", async (_label, code) => {
+    // Connect under REAL timers first. `connect`'s cold-entry check awaits
+    // crypto.subtle, which settles on a macrotask that fake timers stub out —
+    // starting them any earlier means no socket is ever built, and the failure
+    // reads as "the module did not connect" rather than "the setup froze the
+    // clock before the setup finished".
+    await socket.connect({
+      apiBase: "https://x.test/api",
+      apiKey: "brx-abc",
+      onCommand: async () => ({}),
+    });
     j.useFakeTimers();
     try {
-      await socket.connect({
-        apiBase: "https://x.test/api",
-        apiKey: "brx-abc",
-        onCommand: async () => ({}),
-      });
       sockets[0].open();
       sockets[0].serverClose(code);
       // Well past RECONNECT_MAX_MS: if any timer was armed, it has fired.
@@ -498,7 +548,69 @@ describe("close codes", () => {
       expect(sockets).toHaveLength(1);
     } finally {
       j.useRealTimers();
+      // The terminal close fired a durable write that could not settle while
+      // the clock was frozen. Drain it HERE, inside the case that caused it,
+      // rather than leaving it to land in whichever case runs next — where it
+      // blocks that case's `connect` and the failure names the wrong test.
+      await flush();
+      await socket.clearTerminalVerdict();
     }
+  });
+
+  // @edge — two SURVIVORS the harness found, and the reason they survived is
+  // worth stating: a terminal close now has TWO independent guards against
+  // reconnecting — it schedules no timer, AND it drops `config`, which the
+  // timer callback requires. Either alone is sufficient, so removing either
+  // alone changes nothing observable and no test could see it. Removing BOTH
+  // reconnects.
+  //
+  // That is a redundancy worth keeping (the two protect different callers:
+  // `scheduleReconnect` and `keepalive`), but redundancy with nothing pinning
+  // the pieces is how one of them gets deleted as dead code and the other then
+  // gets deleted as harmless. These assert each mechanism directly rather than
+  // through its effect, which is the only way to tell them apart.
+  it.each([
+    ["4409", 4409],
+    ["4401", 4401],
+    ["4403", 4403],
+  ])("drops the config on %s, so nothing can rebuild the connection", async (_label, code) => {
+    const { ws } = await connectAndOpen();
+    expect(socket.__hasConfig()).toBe(true);
+    ws.serverClose(code);
+    await flush();
+    // Asserted on the mechanism, not on its effect: the terminal `status` guard
+    // in `keepalive` would mask a config that was still set, so going through
+    // `keepalive` here could not tell the two guards apart.
+    expect(socket.__hasConfig()).toBe(false);
+  });
+
+  // The other half of the same pair: no timer is ARMED. Distinct from the
+  // "schedules no reconnect" cases above, which pass as long as EITHER guard
+  // holds — this one fails if a timer was armed even though the dropped config
+  // renders it inert.
+  //
+  // Observed through `setTimeout` itself rather than through a socket
+  // appearing, because that is the only way to separate "no timer was armed"
+  // from "a timer was armed and then found no config".
+  it.each([
+    ["4409", 4409],
+    ["4401", 4401],
+    ["4403", 4403],
+  ])("arms no reconnect timer on %s", async (_label, code) => {
+    const { ws } = await connectAndOpen();
+    const realSetTimeout = globalThis.setTimeout;
+    const armed = [];
+    globalThis.setTimeout = (fn, delay) => {
+      armed.push(delay);
+      return realSetTimeout(fn, delay);
+    };
+    try {
+      ws.serverClose(code);
+      await flush();
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+    expect(armed).toEqual([]);
   });
 
   it("does not reconnect on the keepalive tick after being evicted", async () => {
@@ -510,6 +622,170 @@ describe("close codes", () => {
     // Still exactly the one socket: the alarm must not resurrect the fight.
     expect(sockets).toHaveLength(1);
     expect(socket.state().status).toBe("evicted");
+  });
+
+  /* ---------------------------------------------------------------------
+   * M1 — the terminal verdict must OUTLIVE the worker.
+   *
+   * `socket.__reset()` here is not a convenience: it is the closest model this
+   * suite has of an MV3 teardown, and it is exactly what the module header
+   * says a teardown does — every scrap of per-worker state gone, `chrome`
+   * storage untouched. That is a MODEL of the teardown, not the teardown; what
+   * it does not reproduce is Chrome's own timing, the loss of pending
+   * microtasks, and the alarm's next tick.
+   *
+   * Before this, a review drove the real sequence: 4409 → evicted → teardown →
+   * wake reads storage.sync → SECOND socket, status "connecting". The slot
+   * fight the terminal decision refuses to start, restarted by the lifecycle.
+   * ------------------------------------------------------------------ */
+  it.each([
+    ["4409", 4409, "evicted"],
+    ["4401", 4401, "unauthorized"],
+    ["4403", 4403, "unauthorized"],
+  ])(
+    "remembers a %s across a worker teardown instead of reconnecting on the next wake",
+    async (_label, code, expected) => {
+      const { ws } = await connectAndOpen();
+      ws.serverClose(code);
+      // Waits for the durable record itself, not a fixed number of turns: this
+      // case asserts the verdict SURVIVES a teardown, so a teardown modelled
+      // before the write lands would test nothing and still go green.
+      await waitFor(
+        () => "companionTerminalClose" in localStore,
+        "the terminal verdict was written"
+      );
+      expect(socket.state().status).toBe(expected);
+
+      // --- the worker dies; storage survives, as it does in Chrome ---
+      socket.__reset();
+      sockets = [];
+      expect(socket.state().status).toBe("idle");
+
+      // --- the wake: index.js reads storage.sync and calls connect ---
+      await socket.connect({
+        apiBase: "https://x.test/api",
+        apiKey: "brx-abc",
+        onCommand: async () => ({}),
+      });
+
+      // No socket at all. This is the whole point: the fight does not resume.
+      expect(sockets).toHaveLength(0);
+      expect(socket.state().status).toBe(expected);
+      expect(socket.state().lastError).toEqual(expect.any(String));
+    }
+  );
+
+  // @edge — THE WAY BACK IN. An evicted user who reconnects in AnythingLLM gets
+  // a NEW key, and that must clear the block with no reinstall and nothing to
+  // find by hand. Keyed on a fingerprint, so this is what makes the durable
+  // refusal safe to ship at all.
+  it("lets a different key through, and clears the stored refusal", async () => {
+    const { ws } = await connectAndOpen();
+    ws.serverClose(4409);
+    // Without this wait the whole case is vacuous: if no verdict was ever
+    // stored, "a different key connects" is trivially true and proves nothing
+    // about clearing anything.
+    await waitFor(
+      () => "companionTerminalClose" in localStore,
+      "the terminal verdict was written"
+    );
+    socket.__reset();
+    sockets = [];
+
+    await socket.connect({
+      apiBase: "https://x.test/api",
+      apiKey: "brx-a-brand-new-key",
+      onCommand: async () => ({}),
+    });
+    expect(sockets).toHaveLength(1);
+    expect(socket.state().status).toBe("connecting");
+
+    // The record is gone, not merely bypassed: the OLD key connects again too,
+    // which is what proves it was cleared rather than shadowed.
+    socket.__reset();
+    sockets = [];
+    await socket.connect({
+      apiBase: "https://x.test/api",
+      apiKey: "brx-abc",
+      onCommand: async () => ({}),
+    });
+    expect(sockets).toHaveLength(1);
+  });
+
+  // @edge — the key itself must NOT be written to storage. storage.local is not
+  // encrypted, and the whole point of the subprotocol transport is keeping this
+  // credential out of places it does not need to be.
+  it("stores a fingerprint, never the key", async () => {
+    const { ws } = await connectAndOpen({ apiKey: "brx-secret-value" });
+    ws.serverClose(4409);
+    // Waits for the RECORD rather than a fixed number of turns. The digest and
+    // the write behind it take an unspecified number of macrotasks, so a fixed
+    // flush is a race that passes on a fast machine and fails on a slow one —
+    // and when it failed it read as "the module never wrote the verdict".
+    await waitFor(() => "companionTerminalClose" in localStore);
+    const dumped = JSON.stringify(localStore);
+    expect(dumped).not.toContain("brx-secret-value");
+    expect(dumped).toContain("companionTerminalClose");
+  });
+
+  // @edge — task 6 learned that a storage write is not a thing to assume. A
+  // failed write must not stop the popup learning this connection was refused;
+  // the cost is only that the verdict does not survive the teardown, which is
+  // no worse than not having tried.
+  it("still reports the terminal state when the durable write fails", async () => {
+    const { ws } = await connectAndOpen();
+    localSetFails = new Error("QUOTA_BYTES quota exceeded");
+    ws.serverClose(4409);
+    await flush();
+    expect(socket.state().status).toBe("evicted");
+  });
+
+  // @edge — a storage READ failure must fail OPEN. The alternative is an
+  // extension that cannot connect at all when storage is unhealthy, and the
+  // server refuses the connection again anyway if the verdict was real.
+  it("connects when the stored verdict cannot be read", async () => {
+    const { ws } = await connectAndOpen();
+    ws.serverClose(4409);
+    // A verdict must actually exist, or "it connected anyway" is not evidence
+    // that a READ failure fails open — there would be nothing to read.
+    await waitFor(
+      () => "companionTerminalClose" in localStore,
+      "the terminal verdict was written"
+    );
+    socket.__reset();
+    sockets = [];
+
+    const realGet = globalThis.chrome.storage.local.get;
+    globalThis.chrome.storage.local.get = async () => {
+      throw new Error("storage unavailable");
+    };
+    await socket.connect({
+      apiBase: "https://x.test/api",
+      apiKey: "brx-abc",
+      onCommand: async () => ({}),
+    });
+    globalThis.chrome.storage.local.get = realGet;
+    expect(sockets).toHaveLength(1);
+  });
+
+  it("clearTerminalVerdict lets the same key connect again", async () => {
+    const { ws } = await connectAndOpen();
+    ws.serverClose(4409);
+    // Same reason: clearing nothing and then connecting proves nothing.
+    await waitFor(
+      () => "companionTerminalClose" in localStore,
+      "the terminal verdict was written"
+    );
+    socket.__reset();
+    sockets = [];
+
+    await expect(socket.clearTerminalVerdict()).resolves.toBe(true);
+    await socket.connect({
+      apiBase: "https://x.test/api",
+      apiKey: "brx-abc",
+      onCommand: async () => ({}),
+    });
+    expect(sockets).toHaveLength(1);
   });
 
   it("writes a terminal close to the audit log the user reads", async () => {
@@ -850,6 +1126,60 @@ describe("the agent's tab", () => {
   // recovery is a deliberate create and not a rescued throw — is what makes it
   // observable, and the stale-id assertion below is what proves the state was
   // actually cleared rather than merely worked around.
+  // @edge — L1. `handle` calls `ensureAgentTab()` before EVERY command's run,
+  // page_switch included, so on a cold worker a switch creates a blank agent
+  // tab and then adopts a different one — abandoning the blank. One stray tab
+  // per cold-start switch, accumulating across worker restarts, and the user
+  // has no idea where it came from.
+  it("does not leave an orphan blank tab behind when it switches away", async () => {
+    const created = await socket.ensureAgentTab(); // the cold-start blank tab
+    const target = await chrome.tabs.create({
+      url: "https://other.test/",
+      active: false,
+    });
+
+    await socket.switchToTab(target.id);
+
+    expect(tabs.has(created)).toBe(false);
+    expect(tabs.has(target.id)).toBe(true);
+    expect(await socket.ensureAgentTab()).toBe(target.id);
+  });
+
+  // @edge — the three conditions on that cleanup are what stop it destroying
+  // something the user was using. A tab the agent NAVIGATED may hold state the
+  // user can see, so it is left alone even though we opened it.
+  it("keeps an abandoned tab the agent actually used", async () => {
+    const used = await socket.ensureAgentTab();
+    tabs.get(used).url = "https://linkedin.com/feed/"; // the agent navigated it
+    const target = await chrome.tabs.create({
+      url: "https://other.test/",
+      active: false,
+    });
+
+    await socket.switchToTab(target.id);
+
+    expect(tabs.has(used)).toBe(true);
+  });
+
+  // @edge — and a tab the USER opened is never a candidate, whatever it shows.
+  // A blank tab the user opened themselves looks identical to ours.
+  it("never closes a blank tab the user opened", async () => {
+    const usersBlank = await chrome.tabs.create({
+      url: "about:blank",
+      active: false,
+    });
+    // Adopt it the way page_switch would, then switch away again.
+    await socket.switchToTab(usersBlank.id);
+    const target = await chrome.tabs.create({
+      url: "https://other.test/",
+      active: false,
+    });
+
+    await socket.switchToTab(target.id);
+
+    expect(tabs.has(usersBlank.id)).toBe(true);
+  });
+
   it("forgets the agent tab when it is the one closed", async () => {
     const id = await socket.ensureAgentTab();
     await socket.closeTab(id);
