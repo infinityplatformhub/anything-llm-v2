@@ -304,59 +304,126 @@ describe("the dependency bundle handed to dispatch", () => {
   });
 
   /**
-   * EVERY tab-taking dep, not just `cdp`.
+   * THE WIRING IS THE SOURCE OF TRUTH FOR WHICH DEPS EXIST.
    *
    * A `cdp`-only version of this check passed while `pageState` was wired raw
    * and `page_read` disclosed a non-allowlisted page — `pageState` imports
    * `evaluate` straight from cdp.js, so it never appears on the frozen surface
-   * a cdp-only test inspects. Enumerating the WIRING instead is what makes a
-   * future `screenshot` or `getCookies` fail here rather than ship.
+   * a cdp-only test inspects. The fix for that was to name `pageState` here
+   * too, and THAT WAS THE SAME BUG WITH A LONGER FUSE: a hand-written list of
+   * two mirrors the wiring today and misses the third dep the day someone adds
+   * it. A reviewer's probe proved it — `shots: { grab: async (tabId) => ... }`
+   * added to the real `deps`, and the whole suite stayed green.
    *
-   * Each entry names a dep object in `deps` and the methods knowingly left
-   * unguarded, with the reason. "Knowingly" is the load-bearing word: a name
-   * has to be argued into that list, and anything neither guarded nor listed
-   * fails.
+   * So what is written below is no longer a list of deps. It is a list of
+   * RULINGS, and the deps themselves come from `Object.entries(deps)`.
+   * Judgement — which methods are knowingly unguarded, and why — is written
+   * down because it cannot be derived. Existence is derived, because it can be.
+   *
+   * TOP-LEVEL FUNCTION DEPS GET THEIR OWN MAP rather than being folded into
+   * the object walk: they have no surface to enumerate, and which of them take
+   * a tab id cannot be derived from arity — `fn.length` lies for rest and
+   * default parameters, the same reason `guardTabActs` refuses a shape check.
+   * So they are ruled by name too, and the same existence check applies.
    */
-  const TAB_TAKING_DEPS = [
-    {
-      name: "cdp",
-      surface: () => cdp,
+  const DEP_OBJECT_RULINGS = {
+    cdp: {
       // detach: page_close detaches before closing, and refusing it would
       // strand an attachment on a tab that is going away. detachAll: takes no
-      // tab id at all — it is the kill switch's sweep.
-      knowinglyUnguarded: ["detach", "detachAll"],
+      // tab id at all — it is the kill switch's sweep. attachedTabIds: reports
+      // our own bookkeeping and names no tab to act on.
+      knowinglyUnguarded: ["detach", "detachAll", "attachedTabIds"],
     },
-    {
-      name: "pageState",
-      surface: async () => await import("../src/background/pageState.js"),
+    pageState: {
       // invalidate: cleanup that must never be refused — a refused
       // invalidation strands a stale map, which is the exact failure the map's
       // own existence is designed to prevent. hasMap: a boolean about our own
       // bookkeeping, touching no page and naming no act.
       knowinglyUnguarded: ["invalidate", "hasMap"],
-      // Constants exported alongside the functions.
-      ignore: ["MAX_ELEMENTS", "MAX_TEXT_CHARS", "MAX_LABEL_CHARS"],
     },
-  ];
+  };
 
-  it.each(TAB_TAKING_DEPS.map((d) => [d.name, d]))(
-    "guards every tab-taking method on %s",
-    async (_label, entry) => {
-      const surface = await entry.surface();
-      const methods = Object.keys(surface).filter(
-        (name) =>
-          typeof surface[name] === "function" &&
-          !(entry.ignore ?? []).includes(name)
-      );
+  const TOP_LEVEL_DEP_RULINGS = {
+    // Takes a tab id and acts on it. Both must be wrapped.
+    closeTab: "guarded",
+    lookup: "guarded",
+    // Not guarded, and each for its own reason — none of them "it looked
+    // harmless".
+    //
+    // agentTabUrl / ensureAgentTab RESOLVE an id rather than acting on one.
+    // They take no tab id, they return one, and what they return is fresh by
+    // construction; guarding them would be guarding the wrong end of the very
+    // window this check exists to close.
+    agentTabUrl: "takes no tab id — it produces one",
+    ensureAgentTab: "takes no tab id — it produces one",
+    listAgentTabs: "takes no tab id",
+    // switchToTab DOES take a tab id, and is deliberately not wrapped: since
+    // F1 it carries its OWN ownership refusal at its set-building site, where
+    // it used to adopt whatever it focused. Wrapping it would duplicate a
+    // check it already makes and would replace its specific refusal message
+    // with the wrapper's generic one.
+    switchToTab: "refuses unowned tabs itself, at its own set-building site",
+    loadAllowlist: "takes no tab id",
+    record: "takes no tab id",
+  };
+
+  const isFn = (v) => typeof v === "function";
+  /** Every dep that is an object of functions, taken from the real wiring. */
+  const depObjects = () =>
+    Object.entries(deps).filter(
+      ([, v]) => v && typeof v === "object" && Object.values(v).some(isFn)
+    );
+
+  // THE ASSERTION THAT WOULD HAVE CAUGHT ALL FOUR ROUNDS OF THIS. Every one of
+  // them was a name that existed in the wiring and not in a list beside it.
+  it("has a ruling for every dep object in the real wiring", () => {
+    expect(depObjects().map(([name]) => name).sort()).toEqual(
+      Object.keys(DEP_OBJECT_RULINGS).sort()
+    );
+  });
+
+  it("has a ruling for every top-level function dep in the real wiring", () => {
+    const wired = Object.entries(deps)
+      .filter(([, v]) => isFn(v))
+      .map(([name]) => name)
+      .sort();
+    expect(wired).toEqual(Object.keys(TOP_LEVEL_DEP_RULINGS).sort());
+  });
+
+  it("guards every top-level dep whose ruling says guarded", () => {
+    const guarded = Object.entries(TOP_LEVEL_DEP_RULINGS)
+      .filter(([, ruling]) => ruling === "guarded")
+      .map(([name]) => name);
+    expect(guarded.length).toBeGreaterThan(0);
+    for (const name of guarded)
+      expect(() => deps[name](4242, 1)).toThrow(/closed while this command/);
+  });
+
+  it("guards every tab-taking method on every dep object", () => {
+    for (const [depName, surface] of depObjects()) {
+      const ruling = DEP_OBJECT_RULINGS[depName];
+      // The existence test above owns a missing ruling; without this guard the
+      // same failure would surface here as a confusing TypeError instead.
+      if (!ruling) continue;
+
+      const methods = Object.keys(surface).filter((n) => isFn(surface[n]));
       expect(methods.length).toBeGreaterThan(0);
 
-      for (const name of methods)
+      for (const name of methods) {
         expect(
           socket.TAB_ID_ACTS.has(name) ||
-            entry.knowinglyUnguarded.includes(name)
+            ruling.knowinglyUnguarded.includes(name)
         ).toBe(true);
+        // Named in the set is not the same as WIRED through the wrapper —
+        // `pageState` was wired raw while every one of its names was already
+        // in the set. Called with an id we do not own, it must refuse.
+        if (socket.TAB_ID_ACTS.has(name))
+          expect(() => surface[name](4242, 1)).toThrow(
+            /closed while this command/
+          );
+      }
     }
-  );
+  });
 
   // @edge — the WIRING, not the wrapper. Two mutations survived here: wiring
   // `pageState` raw again, and reaching `lookup` around the wrapper. The socket
@@ -398,12 +465,16 @@ describe("the dependency bundle handed to dispatch", () => {
   // This caught `evaluate` in the set's first draft — cdp.js exports it, but
   // the frozen surface does not carry it, so it would have been dead weight
   // that read as protection.
-  it("lists no name that is not on some guarded surface", async () => {
-    const pageStateModule = await import("../src/background/pageState.js");
+  //
+  // Built from the WIRING for the same reason the forward check is: a
+  // hand-listed pair of surfaces would stop covering a name the day a third
+  // dep supplies it, and the set would quietly go back to being unchecked.
+  it("lists no name that is not on some guarded surface", () => {
     const everywhere = new Set([
-      ...Object.keys(cdp),
-      ...Object.keys(pageStateModule),
-      "closeTab", // supplied by socket.js, not by a dep module
+      ...depObjects().flatMap(([, surface]) => Object.keys(surface)),
+      ...Object.entries(deps)
+        .filter(([, v]) => isFn(v))
+        .map(([name]) => name),
     ]);
     for (const name of socket.TAB_ID_ACTS) expect([...everywhere]).toContain(name);
   });

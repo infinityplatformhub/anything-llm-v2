@@ -357,6 +357,13 @@ const TAB_ID_ACTS = new Set([
   // a point derived from a page that is gone, aimed at a tab that is now
   // someone else's. Guarding it costs one Set lookup and removes the need to
   // reason about whether the map and the tab can ever disagree.
+  //
+  // AND THAT GUARD IS LOAD-BEARING, not belt-and-braces: `pageState.capture`
+  // writes `maps.set(tabId, points)` AFTER its own await, so a removal landing
+  // inside that await invalidates a map that does not exist yet and the write
+  // then creates it. The map is born after its own invalidation, on an id that
+  // may already have been recycled — `handleTabRemoved` has run and cannot run
+  // again. `lookup` is the only thing standing between that map and a click.
   "lookup",
 ]);
 
@@ -406,8 +413,18 @@ const TAB_ID_ACTS = new Set([
  * a method wrapped wrongly is DEAD — it throws on every call, as `detachAll`
  * did, and hides until whatever calls it changes — while a missing one fails in
  * a way that is recoverable and, crucially, TESTABLE. Which is why the test
- * below is the real protection and this default is only the tie-breaker: it
- * checks this set against EVERY tab-taking dep in the wiring, not just `cdp`.
+ * below is the real protection and this default is only the tie-breaker.
+ *
+ * WHAT THAT TEST ACTUALLY CHECKS, stated precisely, because an earlier version
+ * of this line said "EVERY tab-taking dep in the wiring" while the test held a
+ * HAND-WRITTEN list of two dep names. That list mirrored the wiring without
+ * being checked against it, which is the same defect as the one it was added
+ * to fix, one dep further out: a third tab-taking dep added to `deps` passed
+ * unnoticed when it was probed. The test now WALKS `Object.entries(deps)` and
+ * requires a written ruling for every dep it finds — each object of functions,
+ * and each top-level function — so a new dep FAILS rather than passing
+ * silently. It still cannot see a tab act reached without going through
+ * `deps` at all; nothing in this file can.
  * `evaluate` is exactly the method that escaped a `cdp`-only check.
  *
  * (An argument-shape check — "wrap it if it has at least one parameter" — was

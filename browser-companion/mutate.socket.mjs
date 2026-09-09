@@ -477,6 +477,18 @@ mutate("disclose", "pageState is wired raw again", IDX,
 mutate("disclose", "lookup is wired around the wrapper", IDX,
   "  lookup: guardedPageState.lookup,", "  lookup: pageState.lookup,");
 
+// --- axis: an UNRULED dep in the wiring (the list-mirrors-nothing defect) ---
+// The previous rounds all had this shape: a name present in `deps` and absent
+// from a hand-written list beside it, with nothing comparing the two. These
+// mutations add a tab-taking dep to the real wiring and must be caught by the
+// existence checks, not by anyone remembering to update a literal.
+mutate("unruled", "a new tab-taking dep OBJECT is added to the wiring", IDX,
+  "  cdp: socket.guardTabActs(cdp),",
+  "  cdp: socket.guardTabActs(cdp),\n  shots: { grab: async (tabId) => \"PNG\" },");
+mutate("unruled", "a new tab-taking top-level FUNCTION dep is added", IDX,
+  "  lookup: guardedPageState.lookup,",
+  "  lookup: guardedPageState.lookup,\n  grabShot: async (tabId) => \"PNG\",");
+
 // --- POSITIVE CONTROL -------------------------------------------------------
 // Must be KILLED. If this survives, the harness is not running these tests and
 // every verdict above is worthless.
