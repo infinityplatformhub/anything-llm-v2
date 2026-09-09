@@ -289,8 +289,16 @@ mutate("connect", "a malformed apiBase leaves the worker in connecting", SOCK,
 // --- axis: index.js wiring --------------------------------------------------
 mutate("wiring", "drop listAgentTabs from deps", IDX,
   "  listAgentTabs: socket.listAgentTabs,\n", "");
+// Re-anchored for TOCTOU-1: `closeTab` is now supplied through the ownership
+// wrapper rather than as the bare function, so the old anchor no longer exists.
 mutate("wiring", "drop closeTab from deps", IDX,
-  "  closeTab: socket.closeTab,\n", "");
+  "  closeTab: socket.guardTabActs({ closeTab: socket.closeTab }).closeTab,\n",
+  "");
+mutate("wiring", "closeTab bypasses the ownership wrapper", IDX,
+  "  closeTab: socket.guardTabActs({ closeTab: socket.closeTab }).closeTab,",
+  "  closeTab: socket.closeTab,");
+mutate("wiring", "the cdp surface bypasses the ownership wrapper", IDX,
+  "  cdp: socket.guardTabActs(cdp),", "  cdp,");
 mutate("wiring", "pass isAllowed through deps (defeats the boundary)", IDX,
   "const deps = {\n  loadAllowlist,",
   "const deps = {\n  isAllowed: () => true,\n  loadAllowlist,");
@@ -422,9 +430,11 @@ mutate("stale", "removal drops the current handle but not the grant", SOCK,
 mutate("stale", "removal drops the grant but not the current handle", SOCK,
   "  createdTabIds.delete(tabId);\n  if (agentTabId === tabId) agentTabId = null;",
   "  createdTabIds.delete(tabId);");
+// Re-anchored: handleTabRemoved now also drops the element map, so its last
+// line moved.
 mutate("stale", "removal clears the gate binding, erasing the mismatch evidence", SOCK,
-  "  if (agentTabId === tabId) agentTabId = null;\n}",
-  "  if (agentTabId === tabId) agentTabId = null;\n  if (boundTabId === tabId) boundTabId = null;\n}");
+  "  pageState.invalidate(tabId);\n}",
+  "  pageState.invalidate(tabId);\n  if (boundTabId === tabId) boundTabId = null;\n}");
 // NOT MUTATED: the `typeof tabId !== "number"` guard in handleTabRemoved is
 // INERT and removing it survives. Driven and confirmed rather than assumed —
 // `Set.delete` and `===` already reject every non-numeric value, and when a tab
@@ -433,6 +443,21 @@ mutate("stale", "removal clears the gate binding, erasing the mismatch evidence"
 // pinned by tests; the guard is one cheap line on a listener fed by an external
 // event source, and it becomes load-bearing the moment this function grows a
 // Map lookup or a `find`.
+
+// --- axis: the act-time ownership check (TOCTOU-1) -------------------------
+mutate("toctou", "no ownership check before the act", SOCK,
+  "      assertStillOwned(tabId);", "");
+mutate("toctou", "the check runs but its verdict is discarded", SOCK,
+  "  if (createdTabIds.has(tabId)) return;\n  throw new Error(",
+  "  if (true) return;\n  throw new Error(");
+mutate("toctou", "detach is wrapped too, so a closing tab keeps its attachment", SOCK,
+  'if (typeof fn !== "function" || name === "detach") {',
+  'if (typeof fn !== "function") {');
+mutate("toctou", "the check is awaited, reopening the window it closes", SOCK,
+  "    guarded[name] = (tabId, ...rest) => {",
+  "    guarded[name] = async (tabId, ...rest) => {\n      await Promise.resolve();");
+mutate("toctou", "the element map survives a removed tab", SOCK,
+  "  pageState.invalidate(tabId);", "");
 
 // --- POSITIVE CONTROL -------------------------------------------------------
 // Must be KILLED. If this survives, the harness is not running these tests and

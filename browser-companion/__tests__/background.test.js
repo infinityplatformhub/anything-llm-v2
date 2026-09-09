@@ -121,6 +121,7 @@ for (let i = 0; i < 20 && sockets.length === 0; i += 1)
   await new Promise((resolve) => setImmediate(resolve));
 const socketsAtLoad = [...sockets];
 const socket = await import("../src/background/socket.js");
+const { cdp } = await import("../src/background/cdp.js");
 const control = await import("../src/background/control.js");
 
 /**
@@ -229,7 +230,40 @@ describe("the dependency bundle handed to dispatch", () => {
     expect(deps.ensureAgentTab).toBe(socket.ensureAgentTab);
     expect(deps.listAgentTabs).toBe(socket.listAgentTabs);
     expect(deps.switchToTab).toBe(socket.switchToTab);
-    expect(deps.closeTab).toBe(socket.closeTab);
+  });
+
+  // `closeTab` and the cdp acts are WRAPPED, so identity is the wrong
+  // assertion for them — but "not identical" must not be allowed to mean
+  // "wired to something else entirely", which is what the identity check was
+  // protecting against. So it is checked by behaviour instead: the wrapper
+  // refuses a tab the agent does not own, which nothing but the real
+  // ownership-guarded path does.
+  // The guard throws SYNCHRONOUSLY, before the wrapped call is made — that is
+  // the point: there must be no await between the check and the act. Both
+  // shapes are caught by `handle`'s try/catch, which is what turns it into a
+  // recorded refusal the agent reads.
+  it("wraps the destructive acts in the ownership check", () => {
+    expect(typeof deps.closeTab).toBe("function");
+    expect(deps.closeTab).not.toBe(socket.closeTab);
+    expect(() => deps.closeTab(4242)).toThrow(/closed while this command/);
+    for (const name of [
+      "attach",
+      "click",
+      "type",
+      "key",
+      "scroll",
+      "navigate",
+      "fetch",
+    ])
+      expect(() => deps.cdp[name](4242)).toThrow(/closed while this command/);
+  });
+
+  // @edge — `detach` is deliberately NOT wrapped: page_close detaches before
+  // closing, and refusing that would leave a debugger attachment on a tab that
+  // is going away. It cannot harm a recycled tab either, because cdp.detach
+  // returns early for an id it never attached.
+  it("leaves detach unwrapped, so a closing tab can still be released", () => {
+    expect(deps.cdp.detach).toBe(cdp.detach);
   });
 
   // THE ACCESSOR CONTRACT, stated executably here because task 7 exports none.

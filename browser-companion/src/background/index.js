@@ -57,8 +57,19 @@ export const deps = {
   ensureAgentTab: socket.ensureAgentTab,
   listAgentTabs: socket.listAgentTabs,
   switchToTab: socket.switchToTab,
-  closeTab: socket.closeTab,
-  cdp,
+  // Ownership is re-checked at the moment of the act, not only when the tab id
+  // is resolved. `dispatch.handle` resolves an id once and then awaits several
+  // times before using it — real CDP IPC round trips — so a tab removal AND a
+  // recycle can both land inside that window, after which the captured local
+  // names someone else's tab. `handleTabRemoved` cannot help there: it fixes
+  // STORED ids, and this one is already in a local.
+  //
+  // Wrapped here rather than checked inside dispatch.js because the check
+  // belongs immediately before the act, and the acts are these functions. That
+  // also covers the awaits INSIDE `spec.run`, which a check in `handle` would
+  // miss — the same "looked complete" shape this branch has hit before.
+  closeTab: socket.guardTabActs({ closeTab: socket.closeTab }).closeTab,
+  cdp: socket.guardTabActs(cdp),
   pageState,
   lookup: pageState.lookup,
 };

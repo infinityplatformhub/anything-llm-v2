@@ -43,6 +43,8 @@
  *     shipping blocker for the Web Store build and is recorded as such.
  */
 import { record as auditRecord } from "./auditLog.js";
+// No cycle: pageState imports only cdp, and cdp imports nothing.
+import * as pageState from "./pageState.js";
 
 /**
  * Path the server mounts the agent socket on, relative to `apiBase`.
@@ -242,10 +244,20 @@ let boundTabId = null;
  * whole module was written around. The binding must go on naming the tab the
  * gate saw, precisely BECAUSE that tab is gone.
  *
- * It is also safe to leave: a stale `boundTabId` can only cause a REFUSAL
- * (`ensureAgentTab` throws on a mismatch), never an action, and it is reset per
- * command by `beginCommandScope`. It grants nothing, so recycling cannot turn
- * it into a capability the way `agentTabId` and `createdTabIds` can.
+ * It is also safe to leave, but the reason has to be stated exactly, because
+ * the obvious version of it is FALSE. "A stale binding can only cause a
+ * refusal, never an action" is what an earlier draft of this comment said, and
+ * driving it disproves it: when the replacement tab this module opens is handed
+ * the recycled id, `boundTabId` MATCHES, and a click gated on the old page
+ * proceeds against the new one. It is an action, not a refusal.
+ *
+ * The invariant that actually holds, and the one worth relying on: A STALE
+ * BINDING CAN NEVER REACH A TAB THE MODULE DOES NOT OWN. A user's tab taking
+ * the recycled id gets a fresh id from this module's point of view, which
+ * mismatches, which refuses. The only tab a stale binding can let through is
+ * one this module opened itself — so the worst case is the agent acting on its
+ * own fresh `about:blank`, which is inert. That is why leaving it set is safe;
+ * "it can never cause an action" is not why, and was not true.
  *
  * Exported because it is the listener body, and a listener registered on a
  * global is otherwise untestable — a test would have to own `chrome` before
@@ -258,6 +270,95 @@ export function handleTabRemoved(tabId) {
   if (typeof tabId !== "number") return;
   createdTabIds.delete(tabId);
   if (agentTabId === tabId) agentTabId = null;
+  // The element map is keyed by tab id, so a surviving map resolves element
+  // coordinates for a RECYCLED id — the agent asks for element [3] and gets a
+  // point from a page that is gone, on a tab that is now someone else's.
+  // Dropped here because this is the event that invalidates it, the same reason
+  // the ids are dropped here.
+  pageState.invalidate(tabId);
+}
+
+/**
+ * Refuse a tab id that is no longer one the agent owns.
+ *
+ * WHY THIS EXISTS ON TOP OF THE LISTENER. `handleTabRemoved` fixes STORED ids.
+ * It cannot reach an id already captured in a local — and `dispatch.handle`
+ * captures one: `const tabId = await d.ensureAgentTab()`, then awaits
+ * `cdp.attach(tabId)` and `spec.run({tabId})`. Those are real IPC round trips,
+ * so a removal AND a `tabs.create` can both land inside them. Driving it shows
+ * a recycle inside `cdp.detach` CLOSING the user's tab and one inside
+ * `cdp.attach` CLICKING it.
+ *
+ * WHY MEMBERSHIP AND NOT A GENERATION COUNTER. A counter answers "has anything
+ * been removed since this id was read?", which is a proxy. This answers the
+ * actual question — "is this id still ours?" — and the difference is not
+ * academic: with a counter, the user closing ANY unrelated tab mid-command
+ * aborts a command that was never in danger, and on a busy browser that is a
+ * steady drip of failures with no cause the user can see. Membership has no
+ * such false positives, and it is already maintained correctly by the listener,
+ * so it needs no second source of truth to drift from the first.
+ *
+ * It is also strictly stronger in the case that matters. A counter would let a
+ * captured id through whenever the removal happened before the id was read; the
+ * question this asks is true or false at the moment of the act, whatever
+ * happened before it.
+ *
+ * Called immediately before an act, with no await between the check and the
+ * call it guards — a check with an await after it is the bug, not the fix.
+ *
+ * @param {number} tabId
+ * @throws {Error} when the tab is no longer the agent's
+ */
+export function assertStillOwned(tabId) {
+  if (createdTabIds.has(tabId)) return;
+  throw new Error(
+    "The agent's tab was closed while this command was running, and the id now belongs to a different tab. Nothing was done; call page_state and try again."
+  );
+}
+
+/**
+ * Wrap every tab-taking method so it re-checks ownership at the moment it acts.
+ *
+ * THE CHOKE POINT IS WHERE THE ACT HAPPENS, NOT WHERE THE ID IS CAPTURED, and
+ * that is the whole reason this is a wrapper rather than two patched call
+ * sites. `dispatch.handle` resolves a tab id once and then awaits several
+ * times before anything happens with it — `cdp.attach`, then `spec.run`, which
+ * awaits again inside itself. Guarding the two awaits visible in `handle`
+ * would leave the ones inside `run` open, which is exactly the shape of "the
+ * fix looked complete" that this branch has now hit three times.
+ *
+ * Every act on a tab goes through a function whose FIRST ARGUMENT is the tab
+ * id — `cdp.attach/detach/click/type/key/scroll/navigate/fetch` and `closeTab`.
+ * Wrapping on that shape means the check lands immediately before the act with
+ * no await in between, at every current call site AND at every future one,
+ * without dispatch.js having to remember anything.
+ *
+ * `detach` is deliberately NOT wrapped. It is the one act that is safe on a
+ * tab we no longer own and unsafe to skip: `page_close` detaches before
+ * closing, and refusing the detach would leave a debugger attachment behind on
+ * a tab that is going away. It also cannot harm a recycled tab — detaching
+ * from a tab nobody attached is a no-op inside `cdp.detach`, which returns
+ * early when the id is not in its own `attached` set. The CLOSE that follows it
+ * is wrapped, which is the act that actually destroys something.
+ *
+ * @param {object} tabTakers methods whose first argument is a tab id
+ * @returns {object} the same shape, ownership-checked
+ */
+export function guardTabActs(tabTakers) {
+  const guarded = {};
+  for (const [name, fn] of Object.entries(tabTakers)) {
+    if (typeof fn !== "function" || name === "detach") {
+      guarded[name] = fn;
+      continue;
+    }
+    guarded[name] = (tabId, ...rest) => {
+      // Synchronous, and immediately before the call it guards. A check with an
+      // await between it and the act would reintroduce the window it closes.
+      assertStillOwned(tabId);
+      return fn(tabId, ...rest);
+    };
+  }
+  return guarded;
 }
 
 // Optional-chained the whole way: this module is imported by tests that have no
@@ -357,9 +458,15 @@ async function doResolveAgentTab() {
       if (tab && typeof tab.id === "number")
         return { id: tab.id, url: tabUrl(tab) };
     } catch {
-      // The tab is gone and `handleTabRemoved` did not run — the worker was
-      // torn down between the close and now, or the listener never registered.
-      // Fall through and open a new one.
+      // The tab is gone and `handleTabRemoved` did not run. The ONLY way that
+      // happens is that the listener never registered — `chrome.tabs.onRemoved`
+      // missing in a stripped environment, or a shim that does not deliver.
+      //
+      // An earlier version of this comment also blamed "the worker was torn
+      // down between the close and now". That case is impossible and saying it
+      // made the backstop look broader than it is: a teardown wipes
+      // `agentTabId` along with everything else in this module, so there is no
+      // stale id left for this branch to catch. Fall through and open a new one.
       //
       // A BACKSTOP, NOT THE MECHANISM, and the distinction is the whole of
       // F1-R. This only fires when the lookup FAILS, and after Chrome has

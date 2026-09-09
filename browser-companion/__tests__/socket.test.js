@@ -62,6 +62,8 @@ import { describe, it, expect, beforeEach, jest as j } from "@jest/globals";
 let sockets = [];
 /** Set to an Error to make the next `new WebSocket(...)` throw. */
 let constructorThrows = null;
+/** What chrome.debugger.sendCommand resolves as its evaluated value. */
+let evaluateResult = null;
 
 class FakeSocket {
   static CONNECTING = 0;
@@ -253,7 +255,9 @@ globalThis.chrome = {
     onDetach: { addListener: () => {} },
     attach: async () => {},
     detach: async () => {},
-    sendCommand: async () => ({ result: { value: null } }),
+    // Injectable so a test can capture a real element map. Default null keeps
+    // every other case exactly as it was.
+    sendCommand: async () => ({ result: { value: evaluateResult } }),
   },
   storage: {
     local: {
@@ -350,6 +354,7 @@ beforeEach(async () => {
   localStore = {};
   syncStore = {};
   localSetFails = null;
+  evaluateResult = null;
   localRemoveFails = null;
   syncGetFails = null;
   auditLog.resetWriteFailure();
@@ -1722,6 +1727,134 @@ describe("agentTabUrl and ensureAgentTab name the same tab", () => {
     expect(closedResult.ok).toBe(true);
     expect(log.closed ?? []).not.toContain(usersTab.id);
     expect(tabs.has(usersTab.id)).toBe(true);
+  });
+
+  /* ---------------------------------------------------------------------
+   * TOCTOU-1 — the same class one layer down, and the listener cannot reach it.
+   *
+   * `dispatch.handle` does `const tabId = await d.ensureAgentTab()` and then
+   * awaits again before anything happens with it — `cdp.attach(tabId)`, then
+   * `spec.run`, which awaits inside itself. Those are real IPC round trips, so
+   * a removal AND a `tabs.create` can both land inside them. `handleTabRemoved`
+   * fixes STORED ids; this one is already captured in a local, so nothing the
+   * listener does can save it.
+   *
+   * The recycle is driven from INSIDE the awaited call, which is the only place
+   * it reproduces. The two windows fail differently and are therefore separate
+   * cases: a recycle inside `attach` gets the user's tab CLICKED, one inside
+   * `detach` gets it CLOSED.
+   * ------------------------------------------------------------------ */
+
+  /** Close the agent's tab and hand its id straight to a tab the user opens. */
+  const recycleOnto = (agentTab, url) => {
+    userClosesTab(agentTab);
+    nextTabId = agentTab;
+    return chrome.tabs.create({ url, active: false });
+  };
+
+  it("does not click a user tab that took the agent's id during cdp.attach", async () => {
+    localStore[ALLOWLIST_KEY] = ["allowed.test"];
+    const agentTab = await agentOpenedTab("https://allowed.test/agent-page");
+
+    let usersTab;
+    const clicked = [];
+    const result = await handle(
+      { requestId: "w1", cmd: "click", id: 1 },
+      {
+        loadAllowlist: (await import("../src/background/allowlist.js"))
+          .loadAllowlist,
+        record: auditLog.record,
+        agentTabUrl: socket.agentTabUrl,
+        ensureAgentTab: socket.ensureAgentTab,
+        listAgentTabs: socket.listAgentTabs,
+        switchToTab: socket.switchToTab,
+        closeTab: socket.closeTab,
+        cdp: socket.guardTabActs({
+          // The window: the id was resolved, and the recycle happens while this
+          // await is outstanding.
+          attach: async () => {
+            usersTab = await recycleOnto(
+              agentTab,
+              "https://allowed.test/user-secret"
+            );
+          },
+          detach: async () => {},
+          click: async (id) => clicked.push(id),
+        }),
+        pageState: { invalidate: () => {} },
+        lookup: async () => ({ x: 10, y: 20 }),
+      }
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/closed while this command/);
+    expect(clicked).not.toContain(usersTab.id);
+    expect(clicked).toEqual([]);
+    expect(tabs.has(usersTab.id)).toBe(true);
+  });
+
+  it("does not close a user tab that took the agent's id during cdp.detach", async () => {
+    localStore[ALLOWLIST_KEY] = ["allowed.test"];
+    const agentTab = await agentOpenedTab("https://allowed.test/agent-page");
+
+    let usersTab;
+    const closed = [];
+    const result = await handle(
+      { requestId: "w2", cmd: "close" },
+      {
+        loadAllowlist: (await import("../src/background/allowlist.js"))
+          .loadAllowlist,
+        record: auditLog.record,
+        agentTabUrl: socket.agentTabUrl,
+        ensureAgentTab: socket.ensureAgentTab,
+        listAgentTabs: socket.listAgentTabs,
+        switchToTab: socket.switchToTab,
+        closeTab: socket.guardTabActs({
+          closeTab: async (id) => {
+            closed.push(id);
+            await socket.closeTab(id);
+          },
+        }).closeTab,
+        cdp: socket.guardTabActs({
+          attach: async () => {},
+          // page_close detaches before it closes, so this is the window.
+          detach: async () => {
+            usersTab = await recycleOnto(
+              agentTab,
+              "https://allowed.test/user-secret"
+            );
+          },
+        }),
+        pageState: { invalidate: () => {} },
+      }
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/closed while this command/);
+    expect(closed).toEqual([]);
+    expect(tabs.has(usersTab.id)).toBe(true);
+    expect(tabs.get(usersTab.id).url).toBe("https://allowed.test/user-secret");
+  });
+
+  // @edge — the element map is keyed by tab id, so a surviving map resolves
+  // coordinates for a RECYCLED id: the agent asks for element [3] and gets a
+  // point from a page that no longer exists, on a tab that is now someone
+  // else's. Dropped by the same listener, for the same reason.
+  it("drops the element map for a removed tab", async () => {
+    const realPageState = await import("../src/background/pageState.js");
+    const mine = await agentOpenedTab("https://allowed.test/one");
+    evaluateResult = {
+      url: "https://allowed.test/one",
+      title: "One",
+      elements: [{ id: 1, tag: "button", text: "Go", x: 10, y: 20 }],
+    };
+    await realPageState.capture(mine);
+    expect(realPageState.hasMap(mine)).toBe(true);
+
+    socket.handleTabRemoved(mine);
+
+    expect(realPageState.hasMap(mine)).toBe(false);
+    await expect(realPageState.lookup(mine, 1)).resolves.toBeNull();
   });
 
   // The listener itself, at the unit level: both handles are given up, and the
