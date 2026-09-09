@@ -80,6 +80,15 @@ test.describe("the popup a user actually sees", () => {
     await expect(
       popup.getByRole("switch", { name: "www.linkedin.com" })
     ).toHaveAttribute("aria-checked", "false");
+
+    // AND THE COST OF THAT DESIGN IS DISCLOSED, on the screen, next to the
+    // switch. What is stored IS the allowed list — `allowlist.js` has no
+    // disabled state and a second stored list would be a second source of
+    // truth beside a gate that reads only the first — so switching a domain
+    // off really removes it and closing the popup loses the row. A review
+    // found this stated only in a source comment, which is nowhere a user
+    // looks. Asserted here so the sentence cannot quietly go missing again.
+    await expect(popup.getByText(/หายไปจากรายการเมื่อปิดหน้าต่างนี้/)).toBeVisible();
   });
 
   test("switching a domain on writes it to the allowlist the gate reads", async ({
@@ -141,6 +150,52 @@ test.describe("the popup a user actually sees", () => {
     ).toHaveAttribute("aria-checked", "false");
   });
 
+  test("a failed save re-reads storage rather than trusting the screen @edge", async ({
+    popup,
+  }) => {
+    // THE OTHER HALF OF THE FAILED-SAVE PROMISE, pinned on its own.
+    //
+    // A review found that deleting `await refresh()` from `commit()` survived
+    // the case above: that assertion only bites when the component ALSO writes
+    // optimistically, so it tests the conjunction and neither half alone. The
+    // re-read would then be deletable as dead code today and load-bearing the
+    // moment someone makes the toggle optimistic — the invisible-redundancy
+    // shape task 8 was bitten by.
+    //
+    // Pinned by making storage disagree with the screen. The popup shows the
+    // domain OFF; storage really holds it ON (another popup, or the worker,
+    // changed it). A failed save must then render STORAGE's answer — on —
+    // which is neither the state on screen before the click nor the state the
+    // click asked for, so only a genuine re-read can produce it.
+    await ready(popup);
+    await popup.getByRole("tab", { name: "โดเมน" }).click();
+    await popup.getByRole("button", { name: /เพิ่มโดเมน/ }).click();
+    await popup.getByRole("textbox", { name: /โดเมน/ }).fill("www.linkedin.com");
+    await popup.getByRole("button", { name: /^บันทึก$/ }).click();
+
+    const toggle = popup.getByRole("switch", { name: "www.linkedin.com" });
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+
+    // Storage now says ALLOWED, behind the popup's back, and writes then start
+    // failing. Both through the real chrome.storage API.
+    await popup.evaluate(async () => {
+      await chrome.storage.local.set({
+        companionAllowlist: ["www.linkedin.com"],
+      });
+      chrome.storage.local.set = async () => {
+        throw new Error("QUOTA_BYTES quota exceeded");
+      };
+    });
+
+    // The user asks to turn it ON. The write fails.
+    await toggle.click();
+    await expect(popup.getByRole("alert")).toContainText(/did not take effect/i);
+
+    // WITHOUT the re-read the switch stays on the popup's stale `false`. With
+    // it, the switch reports what the gate is really enforcing: true.
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+  });
+
   test("a silent audit log says so instead of looking empty @edge", async ({
     popup,
     context,
@@ -181,7 +236,28 @@ test.describe("the popup a user actually sees", () => {
     // A user reading a short log must know it is short because writes FAILED,
     // not because nothing happened. An audit log that quietly stops is worse
     // than none, because it is trusted.
-    await expect(popup.getByRole("alert")).toContainText(/ไม่ครบ/);
+    const banner = popup.getByRole("alert");
+    await expect(banner).toContainText(/ไม่ครบ/);
+
+    // THE SPECIFICS, asserted rather than just the word "incomplete".
+    //
+    // A review stripped the timestamp, the reason and the `recovered` branch
+    // down to a bare "ไม่ครบ" and everything still passed — so the promise to
+    // surface getWriteFailure() VERBATIM was only half covered. A user
+    // investigating a short log needs to know WHEN it started and WHY: "quota
+    // exceeded at 14:32" and "the extension crashed" call for different
+    // actions, and a bare "incomplete" cannot tell them apart.
+    //
+    // The reason, from the real rejection this test caused:
+    await expect(banner).toContainText(/quota/i);
+    // A real clock time, not an empty slot where `at` should have been. The
+    // popup renders it through `toLocaleTimeString`, so the digits are what
+    // survive a formatting change; an unrendered `at` leaves no digits at all.
+    await expect(banner).toContainText(/\d{1,2}:\d{2}/);
+    // And the recovery branch, which changes what the user should expect next:
+    // "older entries were dropped so writing works again" is a different
+    // situation from "it may still be failing".
+    await expect(banner).toContainText(/ลบของเก่าทิ้ง|ยังเขียนไม่ได้/);
   });
 
   test("pause offers a way to reach the agent's tab", async ({ popup }) => {
@@ -192,6 +268,29 @@ test.describe("the popup a user actually sees", () => {
     await expect(
       popup.getByRole("button", { name: /ไปที่แท็บของ agent/ })
     ).toBeVisible();
+  });
+
+  test("the go-to-agent-tab button reports honestly with no agent tab @edge", async ({
+    popup,
+  }) => {
+    // THE BUTTON'S ACTION, not just its presence. A review replaced
+    // `await focusAgentTab()` with a hardcoded `{ok: true}` and everything
+    // passed, so the only thing under test was that a button existed.
+    //
+    // This pins the reachable half. The agent holds no tab here — there is no
+    // server to drive one — and "no agent tab" is an ordinary state of this
+    // browser rather than an error, so the button must SAY so. A stubbed
+    // `{ok: true}` renders no alert and fails this.
+    //
+    // WHAT THIS DOES NOT COVER, stated rather than implied: the success path,
+    // where a real agent tab is focused. Reaching it needs the agent to have
+    // opened a tab, which needs a server. `control.test.js` covers it against
+    // the real accessor ("focuses the agent's tab when there is one" asserts
+    // the exact `chrome.tabs.update(id, {active: true})` call).
+    await ready(popup);
+    await popup.getByRole("tab", { name: "กำลังทำ" }).click();
+    await popup.getByRole("button", { name: /ไปที่แท็บของ agent/ }).click();
+    await expect(popup.getByRole("alert")).toContainText(/no tab/i);
   });
 
   test("pausing really stops commands, it is not just a label", async ({
@@ -231,30 +330,137 @@ test.describe("the popup a user actually sees", () => {
     // slot back from the browser that just claimed it, which reconnects and
     // takes it back again. Refusing to retry is right, and it leaves the user
     // stuck unless the popup offers a way back — which is what this asserts.
+    //
+    // THIS CASE WAS VACUOUS AND IS NOW NOT. It used to seed only the terminal
+    // record and then assert `getByText(/socket/)` — a STATIC row label
+    // rendered in every state. Deleting the reconnect button outright left it
+    // green. The cause was the setup, not the assertion: with no
+    // apiBase/apiKey in storage.sync, `connect()` returns at its first two
+    // lines and never reads the terminal key, so the evicted state was never
+    // entered. A setup that does not create the state being asserted about.
+    //
+    // The fix is to seed BOTH. The key must be the one the verdict was
+    // recorded against, or `terminalVerdictFor` treats the mismatch as "the
+    // user reconnected", deletes the record and connects — which is correct
+    // behaviour and would make this case vacuous a second way.
     const [worker] = context.serviceWorkers();
-    await worker.evaluate(async () => {
+    const API_KEY = "brx-evicted-test-key";
+
+    await worker.evaluate(async (apiKey) => {
+      // The SHA-256 fingerprint socket.js keys the verdict on, computed the
+      // same way it does — never the key itself, which is why the stored
+      // record cannot simply carry it.
+      const bytes = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(apiKey)
+      );
+      const key = [...new Uint8Array(bytes)]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("")
+        .slice(0, 32);
+
       await chrome.storage.local.set({
         companionTerminalClose: {
-          // The fingerprint will not match any key, which is deliberate: this
-          // asserts the popup's rendering of a terminal state, and the key
-          // matching is socket.js's own tested behaviour.
-          key: "0".repeat(32),
+          key,
           status: "evicted",
           error: "Another browser connected with this account and took over.",
           at: new Date().toISOString(),
         },
       });
-    });
+      // The config `connect` needs to get past its early returns and actually
+      // consult the verdict. The host is unreachable on purpose: the terminal
+      // check happens before any socket is built, so nothing dials out.
+      await chrome.storage.sync.set({
+        apiBase: "https://evicted.invalid/api",
+        apiKey,
+      });
+    }, API_KEY);
 
     await popup.reload();
     await ready(popup);
-    await popup.getByRole("tab", { name: "กำลังทำ" }).click();
 
-    // The button exists even before a socket has reached the evicted state,
-    // because a user who cannot reconnect has no path back short of
-    // reinstalling. It appears on the connection tab, where the socket lives.
+    // The state is really entered now — asserted through the worker's own
+    // status, so a future change that stops reaching `evicted` fails here
+    // rather than silently making the assertions below untestable.
+    await expect
+      .poll(async () =>
+        popup.evaluate(
+          async () =>
+            (await chrome.runtime.sendMessage({ type: "companion:getStatus" }))
+              ?.data?.socket?.status
+        )
+      )
+      .toBe("evicted");
+
+    // The user is TOLD, in the socket's own words.
     await popup.getByRole("tab", { name: "เชื่อมต่อ" }).click();
-    await expect(popup.getByText(/socket/)).toBeVisible();
+    await expect(popup.getByText(/took over/i)).toBeVisible();
+
+    // And offered a way back. Asserted BY NAME: deleting this button was what
+    // the old version of this case failed to notice.
+    await expect(
+      popup.getByRole("button", { name: /ต่อใหม่จากเบราว์เซอร์นี้/ })
+    ).toBeVisible();
+
+    // The activity tab tells them too, since that is where they will be
+    // looking when the agent goes quiet.
+    await popup.getByRole("tab", { name: "กำลังทำ" }).click();
+    await expect(popup.getByRole("alert")).toContainText(/แย่งสิทธิ์/);
+  });
+
+  test("reconnecting after an eviction clears the block that caused it", async ({
+    popup,
+    context,
+  }) => {
+    // The other half of the way back: pressing the button must actually clear
+    // the stored verdict, or the next wake is refused again and the button is
+    // decorative. `control.test.js` pins both halves in isolation; this pins
+    // that the popup's button reaches them.
+    const [worker] = context.serviceWorkers();
+    const API_KEY = "brx-evicted-test-key-2";
+
+    await worker.evaluate(async (apiKey) => {
+      const bytes = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(apiKey)
+      );
+      const key = [...new Uint8Array(bytes)]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("")
+        .slice(0, 32);
+      await chrome.storage.local.set({
+        companionTerminalClose: {
+          key,
+          status: "evicted",
+          error: "Another browser connected with this account and took over.",
+          at: new Date().toISOString(),
+        },
+      });
+      await chrome.storage.sync.set({
+        apiBase: "https://evicted.invalid/api",
+        apiKey,
+      });
+    }, API_KEY);
+
+    await popup.reload();
+    await ready(popup);
+    await popup.getByRole("tab", { name: "เชื่อมต่อ" }).click();
+    await popup
+      .getByRole("button", { name: /ต่อใหม่จากเบราว์เซอร์นี้/ })
+      .click();
+
+    // The durable verdict is gone from REAL storage, which is what lets the
+    // next worker try again rather than honouring a decision the user has
+    // since overruled.
+    await expect
+      .poll(async () =>
+        popup.evaluate(
+          async () =>
+            (await chrome.storage.local.get(["companionTerminalClose"]))
+              .companionTerminalClose ?? null
+        )
+      )
+      .toBeNull();
   });
 
   test("the audit log explains why switch denials are vague", async ({
@@ -296,7 +502,11 @@ test.describe("what the built artefact itself has to be", () => {
   // Not a UI assertion, and it belongs in this file rather than a unit test:
   // it is a fact about the bundle the browser above actually loaded, which
   // only exists once a real build has run.
-  test("the popup document loads the bundle, not the raw source @edge", async ({
+  // Deliberately NOT tagged @edge. A review judged the old label an overstatement
+  // and it was right: this asserts a property of the build artefact, not an edge
+  // case of the product's behaviour. The tag is something a person puts on a case
+  // they thought hard about; padding it devalues every other one.
+  test("the popup document loads the bundle, not the raw source", async ({
     popup,
   }) => {
     const dist = path.join(HERE, "..", "dist");

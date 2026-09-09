@@ -87,3 +87,12 @@ Set `COMPANION_CHROME` to override the browser binary, and `COMPANION_TOOLCHAIN`
 to point at a checkout whose `node_modules` has vite, `@vitejs/plugin-react`,
 react and react-dom (needed only when this package's own `node_modules` is not
 installed, e.g. in a shared-install git worktree).
+
+**Known gap: the E2E may not build with the vite this package declares.**
+`package.json` asks for vite ^5. When `COMPANION_TOOLCHAIN` points at a checkout
+holding vite 4 — which is the case in this repo's shared-install worktree, where
+the suite currently builds with 4.5.3 — the E2E exercises a different major
+version from the one a fresh `yarn install && yarn build` would use. The build
+works on both (verified), but CI is then not proving the shipped path. The build
+prints a warning whenever the two majors differ. Closing it properly means
+running `yarn install` here so the default toolchain applies.

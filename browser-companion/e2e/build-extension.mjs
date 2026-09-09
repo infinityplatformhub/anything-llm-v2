@@ -14,10 +14,11 @@
  * failure invisible to such a test. Building the real artefact and loading it
  * as a real unpacked extension is what makes the run mean anything.
  */
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import {
   PACKAGE_ROOT,
+  TOOLCHAIN_ROOT,
   importTool,
   reactAliases,
   toolchainStatus,
@@ -39,10 +40,33 @@ export async function buildExtension() {
     );
   }
 
-  const { build } = await importTool("vite");
+  const { build, version: viteVersion } = await importTool("vite");
   const reactPluginModule = await importTool("@vitejs/plugin-react");
   const react = reactPluginModule.default ?? reactPluginModule;
   const { entries, entryFileNames } = await import("../build.entries.js");
+
+  // THE BUILD MAY NOT BE THE ONE THIS PACKAGE DECLARES, and silence about that
+  // is how the next person loses an afternoon.
+  //
+  // `package.json` asks for vite ^5, but COMPANION_TOOLCHAIN can point at a
+  // checkout holding vite 4 — which is exactly the case in this repository's
+  // shared-install worktree layout, where the E2E currently builds with 4.5.3.
+  // The output is a working extension either way (verified), but a major
+  // version the E2E has never exercised is a real gap between what CI proves
+  // and what `yarn install && yarn build` produces. Said out loud, on every
+  // run, rather than left to be discovered when the two disagree.
+  const declared = JSON.parse(
+    readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf8")
+  ).devDependencies?.vite;
+  const declaredMajor = String(declared ?? "").match(/(\d+)/)?.[1];
+  const actualMajor = String(viteVersion ?? "").match(/(\d+)/)?.[1];
+  if (declaredMajor && actualMajor && declaredMajor !== actualMajor) {
+    console.warn(
+      `[browser-companion e2e] building with vite ${viteVersion} from ` +
+        `${TOOLCHAIN_ROOT}, but package.json declares "${declared}". The E2E is ` +
+        `not exercising the major version a fresh \`yarn install\` would use.`
+    );
+  }
 
   // Removed rather than relied on `emptyOutDir`, so a stale bundle from an
   // earlier run can never be what the browser loads — which would be a green

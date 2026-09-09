@@ -177,6 +177,26 @@ export default function DomainsTab({ onError, onNotice }) {
           <p className="companion-row-s" style={{ margin: "0 0 4px" }}>
             ปิดหมดตั้งแต่แรก เปิดเองทีละอัน
           </p>
+          {/*
+            THE COST OF THE ONE-SOURCE-OF-TRUTH DECISION, said out loud on the
+            screen rather than only in a source comment.
+
+            What is stored IS the list of allowed hosts, because `allowlist.js`
+            has no notion of a disabled entry and a second stored "disabled"
+            list would be a second source of truth beside a gate that reads only
+            the first. The consequence is that switching a domain off really
+            removes it, and closing the popup loses the row.
+
+            A user who does not know that switches a domain off, closes, reopens,
+            and finds it gone — on the one screen whose whole job is to be
+            legible about what access exists. A review found this stated nowhere
+            a user could see it.
+          */}
+          <p className="companion-row-s" style={{ margin: "0 0 4px" }}>
+            โดเมนที่ปิดสวิตช์ไว้จะหายไปจากรายการเมื่อปิดหน้าต่างนี้
+            เพราะรายการที่เก็บไว้คือรายการที่<b>อนุญาตแล้ว</b>เท่านั้น
+            ถ้าต้องการใช้อีกให้พิมพ์เพิ่มใหม่
+          </p>
           {entries.map((host) => {
             const on = enabled.includes(host);
             return (
