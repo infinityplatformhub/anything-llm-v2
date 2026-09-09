@@ -88,7 +88,12 @@ function startHarness(mode) {
 
 /**
  * Opens a real ws client and resolves once it is open. No credentials are ever
- * sent: reaching `open` on an unmatched path is itself part of what is proven.
+ * sent: reaching `open` on an unmatched path is itself part of what is proven,
+ * and this promise is where that is proven - it rejects if the socket closes
+ * before opening. Do NOT re-assert it afterwards by reading `readyState`:
+ * express-ws closes a route-less socket immediately, so that value is OPEN only
+ * within the same tick and decays to CLOSING and then CLOSED. An assertion on it
+ * reads as "the socket survived" but only means "we got here fast enough".
  */
 function connect(port, route) {
   return new Promise((resolve, reject) => {
@@ -127,14 +132,21 @@ describe("websocket bootstrap under hostile frames", () => {
   it("survives a malformed frame with no ws route registered at all", async () => {
     harness = await startHarness("no-route");
 
-    // No route exists on this path - and the upgrade still completes, which is
-    // exactly why nothing per-route can defend against this.
+    // No route exists on this path, and connect() resolving is the proof that
+    // the upgrade completed anyway - which is exactly why nothing per-route can
+    // defend against this.
     const attacker = await connect(harness.port, "/no/such/route/at/all");
-    expect(attacker.readyState).toBe(WebSocket.OPEN);
 
     attacker._socket.write(MALFORMED_FRAME);
     await delay(SETTLE_MS);
 
+    // No readyState assertion anywhere in this file, deliberately. It cannot
+    // mean what it appears to: express-ws closes a route-less socket itself, and
+    // on a matched route `ws` closes the socket on a protocol error even when
+    // the guard only logs - measured. So the closed state is never attributable
+    // to our guard, and asserting it would test the library, not the fix.
+    // What the guard is responsible for is the process staying alive and the
+    // cause reaching the log, and that is what is asserted.
     expect(harness.exit).toBeNull();
     // Contained, not swallowed: the cause must stay diagnosable from logs.
     const logged = await waitForStderr(harness, /WS_ERR_INVALID_OPCODE/);
