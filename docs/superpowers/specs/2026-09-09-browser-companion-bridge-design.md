@@ -56,6 +56,43 @@ queue ใน DB = แตะ schema
 - server ถือ `apiKeyId → socket` ใน memory → หลาย replica ต้อง sticky session
   dev2 รัน replica เดียว ยังไม่เจ็บ **แต่บิลมาถึงตอน scale — ต้องเขียนไว้ใน README ของ endpoint**
 
+### agent หาเบราว์เซอร์ของใคร — route ตาม user ไม่ใช่ workspace
+
+**server ไม่ถือ session ของเว็บปลายทางเลย** — session อยู่ใน Chrome ของผู้ใช้ฝั่งเดียว
+extension คือแขนที่ยืมมือ Chrome นั้นกด นี่คือความต่างสำคัญจากการที่ server เก็บ cookie ไว้เอง:
+server ที่ถูก compromise ไม่มี session ของใครให้ขโมย
+
+การ route: `browser_extension_api_keys.user_id` ↔ `workspaceAgentInvocation.user_id`
+คน A ถาม agent → สั่งได้แค่เบราว์เซอร์ของ A คน B ในเวิร์กสเปซเดียวกันไม่ถูกแตะ
+**workspace แชร์กันไม่เกี่ยว เพราะ socket ผูกคน ไม่ได้ผูก workspace**
+
+**ข้อบังคับ 3 ข้อที่มาจากการอ่านโค้ดจริง ไม่ใช่การเดา:**
+
+1. **key ที่ `user_id` เป็น `null` ใช้ได้เฉพาะตอน single-user mode**
+   `BrowserExtensionApiKey.create()` รับ `userId = null` เป็น default และ `workspaceAgentInvocation.new()`
+   ก็เขียน `user_id: user?.id` → ทั้งสองเป็น `null` ใน single-user mode ถ้าเปิด multi-user ทีหลัง
+   key เก่าที่ `null` จะ match ใครก็ได้ ต้องปฏิเสธชัดเจน ไม่ใช่ปล่อยให้ match
+2. **agent ที่ไม่มี user (scheduled job) ต้องได้คำตอบ offline** — ห้ามหยิบ socket ของใครก็ได้ที่ต่ออยู่
+   นี่เป็น privilege escalation ที่เงียบที่สุดในงานนี้: job ที่ไม่มีเจ้าของยืมเบราว์เซอร์ของคนที่บังเอิญออนไลน์
+3. **หนึ่ง user = หนึ่ง socket (รอบนี้)** — เครื่องที่ 2 ต่อเข้ามาเตะเครื่องแรกออก popup ของเครื่องที่ถูกเตะ
+   ต้องบอกว่าโดนเตะ ไม่ใช่เงียบไป
+   ที่เลือกแบบนี้เพราะผู้ใช้ยืนยันว่าลงเครื่องเดียว (2026-09-09) — **บิลมาถึงตอนอยากใช้หลายเครื่อง:**
+   ต้องเพิ่ม UI ตั้งชื่อเครื่อง + param เลือกเครื่องใน tool ทุกตัว protocol รองรับอยู่แล้ว (`requestId` แยกคำสั่งได้)
+   จึงเป็นการเพิ่ม UI ไม่ใช่รื้อ
+
+### แท็บที่ agent ทำงาน
+
+agent **เปิดแท็บใหม่ของตัวเอง** ไม่แตะแท็บที่ผู้ใช้เปิดอยู่ — profile เดียวกันจึงได้ cookie/session
+เหมือนกันทุกอย่าง งานของผู้ใช้ไม่หาย และ infobar "DevTools is debugging" โผล่แค่แท็บของ agent
+
+ผลตามมาที่ต้องรับ: ผู้ใช้สลับมือ (captcha/OTP) ต้องไปกดที่แท็บของ agent — popup ต้องมีปุ่มพาไปแท็บนั้น
+ไม่ใช่ปล่อยให้หาเอง
+
+### เมื่อเบราว์เซอร์ไม่ได้ต่อ
+
+tool ตอบว่า browser offline ให้ agent หาทางอื่น (fallback ไป `web-scraping` หรือบอกผู้ใช้) —
+**ไม่รอ ไม่ retry เงียบ** เพราะการรอ 30 วิทุกคำสั่งตอน Chrome ปิดจริงคือ agent ค้าง
+
 ### wire protocol
 
 server → extension:
@@ -150,19 +187,24 @@ security review (Opus)** ไม่ใช่แค่ final review
 
 | # | task | ไฟล์ | พึ่งงานไหน |
 |---|---|---|---|
-| 1 | WS route + socket registry + auth | `server/endpoints/browserExtension.js` | — |
+| 1 | WS route + socket registry + auth (route ตาม user_id, กัน null key, เตะ socket เก่า) | `server/endpoints/browserExtension.js` | — |
 | 2 | wire protocol + requestId correlation (ทั้งสองฝั่ง) | server + extension bg | 1 |
 | 3 | extension: `debugger` permission + attach/detach + allowlist gate | `browser-extension/` manifest + bg | — |
 | 4 | extension: CDP input (click/type/key/scroll) + `page_fetch` (GET only) + human delay | `browser-extension/` bg | 3 |
 | 5 | extension: `page_state` element map + `[id]` | `browser-extension/` bg | 3 |
-| 6 | extension popup UI 4 แท็บ (ตาม mockup) + kill switch + audit log | `browser-extension/src/` | 3 |
+| 6 | extension popup UI 4 แท็บ (ตาม mockup) + kill switch + audit log + ปุ่มพาไปแท็บ agent + แจ้งเมื่อถูกเตะ | `browser-extension/src/` | 3 |
 | 7 | agent plugin 11 tool | `server/utils/agents/aibitat/plugins/browser-companion.js` | 1, 2 |
 | 8 | keepalive + reconnect (MV3 service worker) | `browser-extension/` bg | 1, 3 |
 
 ## หลักฐานที่จะพิสูจน์ว่างานเสร็จ
 
-evidence contract: unit test ของ allowlist gate + wire protocol correlation + `page_fetch` ปฏิเสธ
-method ที่ไม่ใช่ GET ต้องเขียว
+evidence contract: unit test ต้องเขียวทั้งหมด —
+
+- allowlist gate ปฏิเสธโดเมนที่ไม่ได้เปิด
+- `requestId` จับคู่ผลถูกคู่เมื่อมีคำสั่งซ้อนกัน
+- `page_fetch` ปฏิเสธ method ที่ไม่ใช่ GET
+- **key ที่ `user_id` เป็น null ถูกปฏิเสธเมื่อ multi-user mode เปิด**
+- **agent ที่ไม่มี user ได้ offline ไม่ได้ socket ของคนอื่น**
 เพราะ contract ที่ต้อง attach Chrome จริงไม่สามารถรันใน gate อัตโนมัติได้ (ต้องมีคน login อยู่)
 
 E2E headed (`gate-e2e`) ครอบ popup UI — allowlist toggle, kill switch, pause/resume, `@edge` = โดเมนไม่อยู่ใน
