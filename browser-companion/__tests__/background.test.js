@@ -855,11 +855,38 @@ describe("the listener bodies actually do their job", () => {
  * WHAT IT STILL CANNOT SEE, so nobody inherits it as a guarantee:
  *   - `import(expr)` where the specifier is computed. Nothing in this codebase
  *     does that, and it would be a strange way to reach a debugger surface.
+ *   - A SPECIFIER THIS PATTERN DOES NOT RECOGNISE. Two genuine working forms:
+ *     a path-traversing `"../background/cdp.js"`, and a query-suffixed
+ *     `"./cdp.js?v=1"`. Both import the same module and neither matches. Both
+ *     are strictly harder to reach than the second hop below, and both are the
+ *     same boundary: the pattern matches a SPELLING, not a resolved module.
+ *     (Extensionless `"./cdp"` is NOT in this list. It looks like a hole under
+ *     jest and is not one — raw Node gives ERR_MODULE_NOT_FOUND, so it cannot
+ *     run in the extension at all. That is the instrument lying, not the check
+ *     failing, and it is the same trap as the missing NODE_OPTIONS flag
+ *     earlier on this branch arriving from another direction.)
  *   - RE-EXPORT LAUNDERING: module A imports a tab act and re-exports it,
  *     module B imports A. B's edge is invisible here. That is exactly
  *     pageState's own shape, which is why pageState.js is treated as a
  *     supplier below and not only as an importer — one more hop is covered,
- *     not all of them.
+ *     not all of them. THE SECOND HOP COSTS TWO LINES ON ALREADY-RULED EDGES,
+ *     and it is written out here because a limit someone can reproduce is
+ *     worth more than a limit gestured at:
+ *
+ *         // socket.js — a ruled importer, clause unchanged
+ *         export const grabPage = (tabId) => pageState.capture(tabId);
+ *         // control.js — a ruled importer, clause unchanged
+ *         socket.grabPage(tabId);
+ *
+ *     That puts an unguarded `capture` in control.js with this suite fully
+ *     green: both edges are ruled, both clauses match, and neither file's
+ *     import line changed. Closing it needs a parser and a reachability walk,
+ *     not a wider regex. Anyone widening this check should start here.
+ *
+ * AND THE OUTER BOUNDARY, which is the honest end of what ANY source-level
+ * import check can promise: A MODULE REACHING `globalThis.chrome.debugger`
+ * DIRECTLY HAS NO IMPORT EDGE TO FIND. Nothing outside cdp.js does that today,
+ * and no import check ever could see it.
  * ======================================================================== */
 const BACKGROUND_DIR = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
