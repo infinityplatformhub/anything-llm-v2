@@ -246,8 +246,14 @@ mutate("tab", "closeTab forgets nothing", SOCK,
 mutate("tab", "a tab with no url reports the empty string", SOCK,
   'return typeof tab?.url === "string" && tab.url ? tab.url : BLANK_URL;',
   "return tab?.url;");
-mutate("tab", "listAgentTabs filters instead of leaving it to the gate", SOCK,
-  "    .filter((tab) => typeof tab?.id === \"number\")",
+// Replaced after F1. This axis used to assert the OPPOSITE — that listAgentTabs
+// must not filter at all — which was the contract before ownership became a
+// capability boundary. The narrowing it now performs is required, so the
+// mutation worth running is one that narrows it to the WRONG set: current-tab
+// only, which would silently break page_switch and page_tabs while still
+// looking like "the agent's tabs".
+mutate("tab", "listAgentTabs reports only the current tab, not every owned tab", SOCK,
+  "    .filter((tab) => typeof tab?.id === \"number\" && createdTabIds.has(tab.id))",
   "    .filter((tab) => typeof tab?.id === \"number\" && tab.id === agentTabId)");
 
 // --- axis: command serialisation -------------------------------------------
@@ -337,8 +343,11 @@ mutate("durable", "clearTerminalVerdict removes nothing", SOCK,
 mutate("orphan", "the abandoned tab is left open", SOCK,
   "  if (abandoned !== null && abandoned !== tabId) await discardIfUnused(abandoned);",
   "");
-mutate("orphan", "cleanup ignores whether we opened the tab", SOCK,
-  "  if (!createdTabIds.has(tabId)) return;", "  if (false) return;");
+// NOT MUTATED, and recorded rather than quietly dropped: the ownership check at
+// the top of discardIfUnused is UNREACHABLE since F1 — switchToTab, its only
+// caller, refuses an unowned tab first — so removing it is an equivalent mutant
+// and would always survive. Scoring it as a survivor would be noise. Its own
+// comment explains why the line stays anyway.
 mutate("orphan", "cleanup ignores whether the agent used the tab", SOCK,
   "    if (tabUrl(tab) !== BLANK_URL) return; // The agent used it; leave it.",
   "    // The agent used it; leave it.");
@@ -372,6 +381,25 @@ mutate("orphan", "a mid-navigation tab is treated as unused", SOCK,
 mutate("orphan", "a pending navigation to about:blank spares the tab", SOCK,
   '    if (typeof pending === "string" && pending && pending !== BLANK_URL) return;',
   '    if (typeof pending === "string") return;');
+
+// --- axis: tab ownership (F1) ----------------------------------------------
+mutate("ownership", "listAgentTabs reports every tab in the browser again", SOCK,
+  '    .filter((tab) => typeof tab?.id === "number" && createdTabIds.has(tab.id))',
+  '    .filter((tab) => typeof tab?.id === "number")');
+mutate("ownership", "switchToTab adopts any tab it is handed", SOCK,
+  "  if (!createdTabIds.has(tabId)) {\n    throw new Error(",
+  "  if (false) {\n    throw new Error(");
+mutate("ownership", "a user-closed agent tab keeps its ownership", SOCK,
+  "      createdTabIds.delete(agentTabId);\n      agentTabId = null;",
+  "      agentTabId = null;");
+
+// --- axis: the null-reply convention (F3) ----------------------------------
+mutate("nullreply", "a null reply is stringified onto the wire", SOCK,
+  "      if (result === null || result === undefined) return;",
+  "");
+mutate("nullreply", "only undefined is treated as no-reply", SOCK,
+  "      if (result === null || result === undefined) return;",
+  "      if (result === undefined) return;");
 
 // --- POSITIVE CONTROL -------------------------------------------------------
 // Must be KILLED. If this survives, the harness is not running these tests and

@@ -285,6 +285,16 @@ async function doResolveAgentTab() {
         return { id: tab.id, url: tabUrl(tab) };
     } catch {
       // The user closed it. Fall through and open a new one.
+      //
+      // The id is dropped from `createdTabIds` too, and since F1 that is a
+      // SECURITY step rather than tidiness: the set is now the capability
+      // record — what the agent may list, adopt, and therefore close or
+      // navigate. A tab the USER closes never goes through `closeTab`, so
+      // without this the id lingers; Chrome reuses tab ids within a session,
+      // and the moment it hands that id to a tab the user opens, the agent
+      // owns it. Same failure as L4 by a different route, and elevating this
+      // set to a capability is exactly what made the second route matter.
+      createdTabIds.delete(agentTabId);
       agentTabId = null;
     }
   }
@@ -418,24 +428,49 @@ export async function focusAgentTab() {
 }
 
 /**
- * Every tab in the browser, for `page_tabs` and `page_switch`.
+ * The tabs the AGENT opened — not every tab in the browser.
  *
- * Unfiltered ON PURPOSE: `dispatch` filters the result against the allowlist
- * itself, and it must be the one doing it. Filtering here as well would give a
- * future reader two places to look for the boundary and invite the belief that
- * this one can be relaxed.
+ * TWO DIFFERENT FILTERS, TWO DIFFERENT OWNERS. Do not collapse them:
+ *
+ *   - OWNERSHIP ("is this the agent's tab?") is filtered HERE, because
+ *     `createdTabIds` is this module's own record and exists nowhere else. It
+ *     is a capability question: which tabs the agent may act on at all.
+ *   - THE ALLOWLIST ("may the agent act on this url?") is still judged only by
+ *     `dispatch`, never here. That is the security boundary, and putting any
+ *     part of it in two places invites the belief that this copy can be
+ *     relaxed.
+ *
+ * WHY THE NARROWING IS HERE AND NOT AT THE CONSUMERS. A final review drove the
+ * real seam: `listAgentTabs` returned `chrome.tabs.query({})` — every tab — and
+ * `switchToTab` adopts whatever it focuses, so `page_switch` could adopt a tab
+ * the USER opened, after which `page_close` closed it and `page_navigate` took
+ * it somewhere else. Both halves were correct alone; the pair granted something
+ * neither declared, and both tool descriptions and the spec explicitly deny it
+ * ("agent เปิดแท็บใหม่ของตัวเอง ไม่แตะแท็บที่ผู้ใช้เปิดอยู่").
+ *
+ * Filtering at the SET-BUILDING site rather than at each consumer is the same
+ * shape as task 7's fix for the tab-order channel: narrow before the search, so
+ * a user's tab cannot influence which tab is found, in what order, or whether
+ * one is found at all. A consumer-side filter would leave the user's tabs
+ * visible to the resolver, and any future selection path could still reach one.
+ *
+ * NAMED COST, because it is a real capability reduction and it is the one that
+ * was asked for: the agent can no longer enumerate or reach tabs the user
+ * opened. `page_tabs` shows only the agent's own. If the user wants the agent on
+ * a page, the agent navigates its own tab there — which is gated on the
+ * destination — rather than taking over the window the user is reading.
  *
  * @returns {Promise<Array<{id: number, url: string, title: string}>>}
  */
 export async function listAgentTabs() {
   const tabs = await chrome.tabs.query({});
   return (Array.isArray(tabs) ? tabs : [])
-    .filter((tab) => typeof tab?.id === "number")
+    .filter((tab) => typeof tab?.id === "number" && createdTabIds.has(tab.id))
     .map((tab) => ({ id: tab.id, url: tabUrl(tab), title: tab.title ?? "" }));
 }
 
 /**
- * Make a tab both focused AND the agent's tab.
+ * Make one of the AGENT'S OWN tabs both focused and current.
  *
  * Adopting it is the load-bearing half. Without it `page_switch` would focus a
  * tab that every following command then ignores, acting on the old agent tab
@@ -444,9 +479,27 @@ export async function listAgentTabs() {
  * `matchedTab` resolver before this runs, so the adopted tab is one the
  * allowlist admitted.
  *
+ * THE OWNERSHIP CHECK IS A SECOND LINE, and deliberately not merely a
+ * consequence of `listAgentTabs` being filtered. Adoption is the step that
+ * makes a tab reachable by `page_close` and `page_navigate`, so it is the step
+ * that must refuse — a check that lived only in the set-building site would be
+ * undone by any future caller that obtains a tab id some other way. Refusing
+ * here means there is NO PATH to owning a tab the agent did not open, which is
+ * a stronger statement than "the current selection path cannot find one".
+ *
+ * Throws rather than returning false: `handle` catches, records it in the audit
+ * log, and answers the agent with the reason. A silent no-op would leave the
+ * agent believing it had switched.
+ *
  * @param {number} tabId
+ * @throws {Error} when the tab is not one the agent opened
  */
 export async function switchToTab(tabId) {
+  if (!createdTabIds.has(tabId)) {
+    throw new Error(
+      "That tab was not opened by the agent, and the agent only acts on its own tabs. Use page_navigate to open the page in the agent's own tab instead."
+    );
+  }
   const abandoned = agentTabId;
   await chrome.tabs.update(tabId, { active: true });
   agentTabId = tabId;
@@ -486,6 +539,21 @@ export async function switchToTab(tabId) {
  * closed tab is not.
  */
 async function discardIfUnused(tabId) {
+  // KEPT DELIBERATELY THOUGH CURRENTLY UNREACHABLE, and said plainly because
+  // this branch has twice found a comment over-claiming what a line does.
+  //
+  // Since F1 the only caller is `switchToTab`, which refuses a tab it does not
+  // own BEFORE reaching here — so `abandoned` is always owned and a mutation
+  // removing this line survives. It is not redundancy with a second live
+  // guard; it is this function refusing to assume its caller checked.
+  //
+  // The reason it stays rather than being deleted as dead code: this function
+  // CLOSES A TAB, and the cost of the two errors is wildly asymmetric. An
+  // unreachable check costs one comparison; a future second caller that
+  // forgets the ownership check costs the user a tab. The `createdTabIds`
+  // membership is also the only thing here that distinguishes our blank tab
+  // from an identical one the user opened, so a caller-side check is not a
+  // substitute for it.
   if (!createdTabIds.has(tabId)) return;
   try {
     const tab = await chrome.tabs.get(tabId);
@@ -971,8 +1039,20 @@ export async function connect({ apiBase, apiKey, onCommand } = {}) {
         result = await onCommand(message);
       } catch (error) {
         result = replyForFailedCommand(message, error);
-        if (!result) return; // No requestId: see `replyForFailedCommand`.
       }
+
+      // `null` MEANS "DO NOT REPLY", ON THE SHARED PATH AND NOT ONLY IN ONE
+      // BRANCH. Handlers return it for a frame that carried no requestId — a
+      // paused browser's guard does, and so does `replyForFailedCommand` — and
+      // a reply with no id settles nothing on the server, whose `pending` map is
+      // keyed by it. Without this the value reached `sendOn` and
+      // `JSON.stringify(null)` wrote the literal string "null" onto the wire.
+      // The server drops it harmlessly, so it was cosmetic; the reason it is
+      // fixed here rather than in each handler is that the convention was
+      // honoured by one branch's own early return and by nothing else, so the
+      // next handler to return null would have inherited the same bug.
+      if (result === null || result === undefined) return;
+
       // `ws`, never the module-level `socket`: if a reconnect replaced it while
       // this command ran, the reply must NOT go out on the new socket. The
       // server matches a reply to its command by socket identity and would log
@@ -1131,6 +1211,21 @@ export function __reset() {
   resolving = null;
   boundTabId = null;
   createdTabIds.clear();
+}
+
+/**
+ * Test-only: drop the handle on the current tab WITHOUT closing it or giving up
+ * ownership.
+ *
+ * Exists because `ensureAgentTab` reuses the one tab the module holds, so after
+ * F1 there is no path that gives the agent two live tabs at once — and the
+ * ownership rules for the two-tab case still have to be right before anyone
+ * adds one. This produces exactly that state and nothing else: the tab stays
+ * open and stays in `createdTabIds`.
+ */
+export function __forgetCurrentTab() {
+  agentTabId = null;
+  boundTabId = null;
 }
 
 /** Test-only: the queue, so a test can await the command it just delivered. */

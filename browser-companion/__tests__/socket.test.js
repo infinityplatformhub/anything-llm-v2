@@ -329,6 +329,52 @@ beforeEach(async () => {
   socket.__reset();
 });
 
+/**
+ * Open a tab the way the AGENT does, and put it on `url`.
+ *
+ * Deliberately goes through `ensureAgentTab` + `chrome.tabs.update` rather than
+ * calling `chrome.tabs.create` directly or poking `createdTabIds`. Since F1,
+ * "the agent opened it" is a real capability boundary — a tab created directly
+ * is a USER's tab and the module must refuse to adopt it. A helper that
+ * fabricated membership would quietly re-grant exactly the capability F1
+ * removed, and every test built on it would then be asserting against a state
+ * production can never reach.
+ *
+ * @returns {Promise<number>} the tab id
+ */
+async function agentOpenedTab(url = "about:blank") {
+  const id = await socket.ensureAgentTab();
+  if (url !== "about:blank") {
+    await chrome.tabs.update(id, { url });
+    globalThis.chrome.tabs.__commit(id);
+  }
+  return id;
+}
+
+/**
+ * Stage a SECOND tab the agent owns.
+ *
+ * Worth being blunt about what this models. `ensureAgentTab` reuses the one tab
+ * the module holds, so after F1 there is no production path that gives the
+ * agent two live tabs at once — which means `page_switch` currently has at most
+ * one tab it could ever switch to. That is a real consequence of restricting
+ * the agent to its own tabs, it is reported rather than papered over, and it is
+ * a product call about whether page_switch should still exist.
+ *
+ * These tests still cover the two-tab shape, because the ownership rules must
+ * be right if such a path is ever added, and because getting them right is what
+ * stops the next person adding one from re-opening F1. The staging is the
+ * honest minimum: the module's handle on the current tab is dropped while the
+ * tab itself stays open and stays in `createdTabIds`, which is exactly the
+ * state a second agent tab would produce.
+ */
+async function stageSecondAgentTab(url) {
+  const previous = await socket.ensureAgentTab();
+  socket.__forgetCurrentTab();
+  const next = await agentOpenedTab(url);
+  return { previous, next };
+}
+
 /** Connect and get the socket the module just built, opened. */
 async function connectAndOpen(overrides = {}) {
   const onCommand = overrides.onCommand ?? j.fn(async () => ({ ok: true }));
@@ -1116,29 +1162,103 @@ describe("the agent's tab", () => {
     );
   });
 
-  it("lists every tab unfiltered, leaving the filtering to the gate", async () => {
-    await chrome.tabs.create({ url: "https://allowed.test/a", active: false });
+  // F1. This case previously asserted the OPPOSITE — that every tab in the
+  // browser is listed, with all filtering left to the gate. A final review
+  // drove the seam that made that wrong: `switchToTab` adopts what it focuses,
+  // so an unfiltered list let `page_switch` adopt a tab the USER opened, after
+  // which `page_close` closed it and `page_navigate` moved it. Both tool
+  // descriptions and the spec deny that outright ("agent เปิดแท็บใหม่ของตัวเอง
+  // ไม่แตะแท็บที่ผู้ใช้เปิดอยู่"), and the user chose that behaviour explicitly at
+  // design time — so the code was wrong, not the descriptions.
+  //
+  // The two filters are still separate: OWNERSHIP is answered here, because
+  // `createdTabIds` exists nowhere else; the ALLOWLIST is still judged only by
+  // dispatch. The case below asserts both halves of that split.
+  it("lists only tabs the agent opened, whatever the user has open", async () => {
+    const mine = await agentOpenedTab("https://allowed.test/a");
+    // Two tabs the user opened: one allowlisted, one not. Neither is the
+    // agent's, so the allowlist is not what decides here — ownership is.
+    await chrome.tabs.create({ url: "https://allowed.test/user", active: false });
     await chrome.tabs.create({ url: "https://forbidden.test/b", active: false });
+
     const listed = await socket.listAgentTabs();
-    expect(listed.map((t) => t.url)).toEqual([
-      "https://allowed.test/a",
-      "https://forbidden.test/b",
-    ]);
+    expect(listed.map((t) => t.id)).toEqual([mine]);
+    expect(listed.map((t) => t.url)).toEqual(["https://allowed.test/a"]);
+  });
+
+  // The ownership filter must not be mistaken for an allowlist filter: an
+  // agent tab on a forbidden url is still LISTED here, and it is dispatch that
+  // refuses to act on it. Collapsing the two would put the security boundary
+  // in a second place.
+  it("still leaves the allowlist judgement to the gate", async () => {
+    const forbidden = await agentOpenedTab("https://forbidden.test/mine");
+    const listed = await socket.listAgentTabs();
+    expect(listed.map((t) => t.id)).toEqual([forbidden]);
+  });
+
+  // @edge — "the agent's tabs" is EVERY tab it owns, not just the one it is
+  // currently on. Narrowing to `agentTabId` would still read as "the agent's
+  // tabs" and would silently leave page_switch with nothing to switch to and
+  // page_tabs showing one row — a mutation proved the suite could not tell.
+  it("lists every tab the agent owns, not only the current one", async () => {
+    const first = await agentOpenedTab("https://allowed.test/one");
+    socket.__forgetCurrentTab();
+    const second = await agentOpenedTab("https://allowed.test/two");
+    expect(second).not.toBe(first);
+
+    const listed = await socket.listAgentTabs();
+    expect(listed.map((t) => t.id).sort()).toEqual([first, second].sort());
   });
 
   // @edge — switching without ADOPTING the tab would leave every following
   // command acting on the old one: the agent believes it is on the page it
   // switched to and reads, clicks and closes somewhere else.
-  it("adopts the tab it switches to, so later commands act on it", async () => {
+  it("adopts a tab it owns, so later commands act on it", async () => {
+    const { previous, next } = await stageSecondAgentTab("https://other.test/");
+    expect(next).not.toBe(previous);
+    // Currently on `next`; switch back to the one it owned before.
+    await socket.switchToTab(previous);
+    expect(tabs.get(previous).active).toBe(true);
+    expect(await socket.ensureAgentTab()).toBe(previous);
+  });
+
+  // @edge — F1, at the accessor. Adoption is the step that makes a tab
+  // reachable by page_close and page_navigate, so it is the step that refuses.
+  it("refuses to adopt a tab the agent did not open", async () => {
     await socket.ensureAgentTab();
-    const other = await chrome.tabs.create({
-      url: "https://other.test/",
+    const usersTab = await chrome.tabs.create({
+      url: "https://allowed.test/user-draft",
       active: false,
     });
-    await socket.switchToTab(other.id);
-    expect(tabs.get(other.id).active).toBe(true);
-    expect(await socket.ensureAgentTab()).toBe(other.id);
-    expect(await socket.agentTabUrl()).toBe("https://other.test/");
+    await expect(socket.switchToTab(usersTab.id)).rejects.toThrow(
+      /only acts on its own tabs/
+    );
+    // And it did not half-apply: the tab is neither focused nor adopted.
+    expect(tabs.get(usersTab.id).active).toBeUndefined();
+    expect(await socket.ensureAgentTab()).not.toBe(usersTab.id);
+  });
+
+  // @edge — the id of an agent tab the USER closes must leave the capability
+  // set. Chrome reuses tab ids within a session, so a lingering id would let a
+  // user's new tab inherit the agent's ownership of it — L4 by another route,
+  // and it only became reachable when this set became a capability record.
+  it("gives up ownership of an agent tab the user closed", async () => {
+    const mine = await socket.ensureAgentTab();
+    tabs.delete(mine); // the user closes it; closeTab is never called
+    await socket.ensureAgentTab(); // the module notices and opens a fresh one
+
+    // Chrome recycles the old id onto a tab the user opens.
+    nextTabId = mine;
+    const usersTab = await chrome.tabs.create({
+      url: "https://allowed.test/user-draft",
+      active: false,
+    });
+    expect(usersTab.id).toBe(mine);
+
+    await expect(socket.switchToTab(usersTab.id)).rejects.toThrow(
+      /only acts on its own tabs/
+    );
+    expect((await socket.listAgentTabs()).map((t) => t.id)).not.toContain(mine);
   });
 
   // @edge — a SURVIVOR the harness found. This originally asserted only that a
@@ -1155,31 +1275,32 @@ describe("the agent's tab", () => {
   // per cold-start switch, accumulating across worker restarts, and the user
   // has no idea where it came from.
   it("does not leave an orphan blank tab behind when it switches away", async () => {
-    const created = await socket.ensureAgentTab(); // the cold-start blank tab
-    const target = await chrome.tabs.create({
-      url: "https://other.test/",
-      active: false,
-    });
+    // Two agent-owned tabs: one settled on a page, one a fresh blank. Switching
+    // to the settled one must not leave the blank behind.
+    const settled = await agentOpenedTab("https://other.test/");
+    socket.__forgetCurrentTab();
+    const blank = await socket.ensureAgentTab();
+    expect(blank).not.toBe(settled);
 
-    await socket.switchToTab(target.id);
+    await socket.switchToTab(settled);
 
-    expect(tabs.has(created)).toBe(false);
-    expect(tabs.has(target.id)).toBe(true);
-    expect(await socket.ensureAgentTab()).toBe(target.id);
+    expect(tabs.has(blank)).toBe(false);
+    expect(tabs.has(settled)).toBe(true);
+    expect(await socket.ensureAgentTab()).toBe(settled);
   });
 
   // @edge — the three conditions on that cleanup are what stop it destroying
   // something the user was using. A tab the agent NAVIGATED may hold state the
   // user can see, so it is left alone even though we opened it.
   it("keeps an abandoned tab the agent actually used", async () => {
-    const used = await socket.ensureAgentTab();
-    tabs.get(used).url = "https://linkedin.com/feed/"; // the agent navigated it
-    const target = await chrome.tabs.create({
-      url: "https://other.test/",
-      active: false,
-    });
-
-    await socket.switchToTab(target.id);
+    // The tab being abandoned is the one the agent NAVIGATED, so it may hold
+    // state the user can see and must survive the switch.
+    const used = await agentOpenedTab("https://linkedin.com/feed/");
+    socket.__forgetCurrentTab();
+    const target = await agentOpenedTab("https://other.test/");
+    socket.__forgetCurrentTab();
+    await socket.switchToTab(used); // current = used
+    await socket.switchToTab(target); // abandons `used`
 
     expect(tabs.has(used)).toBe(true);
   });
@@ -1189,16 +1310,14 @@ describe("the agent's tab", () => {
   // instant ago is indistinguishable from an unused blank one, and the cleanup
   // closes it out from under its own navigation.
   it("keeps an abandoned tab whose navigation has not committed yet", async () => {
+    const target = await agentOpenedTab("https://other.test/");
+    socket.__forgetCurrentTab();
     const navigating = await socket.ensureAgentTab();
     // Exactly what cdp.navigate does. `url` still reads about:blank after it.
     await chrome.tabs.update(navigating, { url: "https://linkedin.com/feed/" });
     expect(tabs.get(navigating).url).toBe("about:blank");
 
-    const target = await chrome.tabs.create({
-      url: "https://other.test/",
-      active: false,
-    });
-    await socket.switchToTab(target.id);
+    await socket.switchToTab(target); // abandons the navigating tab
 
     expect(tabs.has(navigating)).toBe(true);
     // And it really was a live navigation, not a tab that had settled.
@@ -1209,14 +1328,12 @@ describe("the agent's tab", () => {
   // @edge — a pending navigation to about:blank is not a reason to keep a tab:
   // that is where it already is, so the tab is still unused.
   it("still discards a tab whose only pending navigation is to about:blank", async () => {
+    const target = await agentOpenedTab("https://other.test/");
+    socket.__forgetCurrentTab();
     const blank = await socket.ensureAgentTab();
     await chrome.tabs.update(blank, { url: "about:blank" });
 
-    const target = await chrome.tabs.create({
-      url: "https://other.test/",
-      active: false,
-    });
-    await socket.switchToTab(target.id);
+    await socket.switchToTab(target);
 
     expect(tabs.has(blank)).toBe(false);
   });
@@ -1246,33 +1363,48 @@ describe("the agent's tab", () => {
     });
     expect(usersTab.id).toBe(ours);
 
-    // The agent adopts it (as page_switch does) and later switches away.
-    await socket.switchToTab(usersTab.id);
-    const elsewhere = await chrome.tabs.create({
-      url: "https://other.test/",
-      active: false,
-    });
-    await socket.switchToTab(elsewhere.id);
+    // Since F1 the stale id is also a CAPABILITY, so the first thing to prove
+    // is that ownership did not come back with the id: the agent cannot adopt
+    // the user's tab, and cannot see it.
+    await expect(socket.switchToTab(usersTab.id)).rejects.toThrow(
+      /only acts on its own tabs/
+    );
+    expect((await socket.listAgentTabs()).map((t) => t.id)).not.toContain(
+      usersTab.id
+    );
 
-    // The user's tab must still be open.
+    // And the original L4 property: an ordinary switch between the agent's own
+    // tabs must not sweep up the recycled tab either.
+    const elsewhere = await agentOpenedTab("https://other.test/");
+    socket.__forgetCurrentTab();
+    await socket.ensureAgentTab();
+    await socket.switchToTab(elsewhere);
+
     expect(tabs.has(usersTab.id)).toBe(true);
   });
 
   // @edge — and a tab the USER opened is never a candidate, whatever it shows.
   // A blank tab the user opened themselves looks identical to ours.
+  // Since F1 this is guarded twice over: the tab cannot be adopted in the first
+  // place, and even if it somehow became the abandoned tab, the cleanup checks
+  // ownership. The case asserts BOTH, because the first guard alone would make
+  // the second unreachable and therefore deletable.
   it("never closes a blank tab the user opened", async () => {
     const usersBlank = await chrome.tabs.create({
       url: "about:blank",
       active: false,
     });
-    // Adopt it the way page_switch would, then switch away again.
-    await socket.switchToTab(usersBlank.id);
-    const target = await chrome.tabs.create({
-      url: "https://other.test/",
-      active: false,
-    });
+    // Guard one: it cannot be adopted at all.
+    await expect(socket.switchToTab(usersBlank.id)).rejects.toThrow(
+      /only acts on its own tabs/
+    );
 
-    await socket.switchToTab(target.id);
+    // Guard two: an ordinary switch between the agent's own tabs must not
+    // sweep up the user's blank tab, which looks identical to an unused one.
+    const target = await agentOpenedTab("https://other.test/");
+    socket.__forgetCurrentTab();
+    await socket.ensureAgentTab();
+    await socket.switchToTab(target);
 
     expect(tabs.has(usersBlank.id)).toBe(true);
   });
@@ -1335,12 +1467,10 @@ describe("agentTabUrl and ensureAgentTab name the same tab", () => {
   // was gated on an allowed page must not close a different tab.
   it("does not let page_close act on a tab the gate never judged", async () => {
     localStore[ALLOWLIST_KEY] = ["allowed.test"];
-    // The agent's tab is on an allowed page.
-    const agent = await chrome.tabs.create({
-      url: "https://allowed.test/page",
-      active: false,
-    });
-    await socket.switchToTab(agent.id);
+    // The agent's OWN tab, on an allowed page. Opened through the agent's own
+    // path since F1: a tab from `chrome.tabs.create` belongs to the user, and
+    // the module now refuses to adopt one.
+    const agent = await agentOpenedTab("https://allowed.test/page");
 
     const closed = [];
     const deps = {
@@ -1362,14 +1492,11 @@ describe("agentTabUrl and ensureAgentTab name the same tab", () => {
     // Ordinary case first: the gate judged this tab, and this tab is closed.
     const ok = await handle({ requestId: "r1", cmd: "close" }, deps);
     expect(ok.ok).toBe(true);
-    expect(closed).toEqual([agent.id]);
+    expect(closed).toEqual([agent]);
 
     // Now the race: the gate resolves an allowed url, then the tab vanishes.
-    const agent2 = await chrome.tabs.create({
-      url: "https://allowed.test/page",
-      active: false,
-    });
-    await socket.switchToTab(agent2.id);
+    const agent2 = await agentOpenedTab("https://allowed.test/page");
+    // The victim is a tab the USER opened, which is what makes it a victim.
     const victim = await chrome.tabs.create({
       url: "https://bank.test/transfer",
       active: false,
@@ -1379,7 +1506,7 @@ describe("agentTabUrl and ensureAgentTab name the same tab", () => {
       ...deps,
       agentTabUrl: async () => {
         const url = await socket.agentTabUrl();
-        tabs.delete(agent2.id); // The user closes it right here.
+        tabs.delete(agent2); // The user closes it right here.
         return url;
       },
     };
@@ -1388,8 +1515,106 @@ describe("agentTabUrl and ensureAgentTab name the same tab", () => {
     expect(raced.ok).toBe(false);
     expect(raced.error).toMatch(/between the allowlist check and the action/);
     // The unrelated tab is untouched, which is the property that matters.
-    expect(closed).toEqual([agent.id]);
+    expect(closed).toEqual([agent]);
     expect(tabs.has(victim.id)).toBe(true);
+  });
+
+  /* ---------------------------------------------------------------------
+   * F1 — the agent must not be able to adopt, close or navigate a tab the
+   * USER opened.
+   *
+   * Driven through the REAL `dispatch.handle` with the real allowlist, because
+   * the defect lived in the SEAM: task 7's gate judged whatever the resolver
+   * handed it, and task 8's accessor handed it every tab in the browser. Each
+   * half was right alone. A test that only checked `listAgentTabs`' output
+   * would miss the adoption path, which is what actually made the user's tab
+   * reachable — so this drives page_switch itself and then page_close after
+   * it.
+   * ------------------------------------------------------------------ */
+  it("refuses page_switch onto a user tab, and page_close cannot then reach it", async () => {
+    localStore[ALLOWLIST_KEY] = ["allowed.test"];
+    // The agent has its own tab, on an allowed page.
+    await agentOpenedTab("https://allowed.test/agent-page");
+    // The user is working in a tab on the SAME allowlisted domain. The
+    // allowlist therefore cannot be what protects it — only ownership can.
+    const usersDraft = await chrome.tabs.create({
+      url: "https://allowed.test/user-draft",
+      active: false,
+    });
+
+    const closed = [];
+    const deps = {
+      loadAllowlist: (await import("../src/background/allowlist.js"))
+        .loadAllowlist,
+      record: auditLog.record,
+      agentTabUrl: socket.agentTabUrl,
+      ensureAgentTab: socket.ensureAgentTab,
+      listAgentTabs: socket.listAgentTabs,
+      switchToTab: socket.switchToTab,
+      closeTab: async (id) => {
+        closed.push(id);
+        await socket.closeTab(id);
+      },
+      cdp: { attach: async () => {}, detach: async () => {} },
+      pageState: { invalidate: () => {} },
+    };
+
+    // The switch must fail. It is denied at the resolver — the user's tab is
+    // not in the set that is searched — so it reads as "nothing matched",
+    // which is also what a forbidden tab looks like. That sameness is task 7's
+    // opaque denial and is deliberate.
+    const switched = await handle(
+      { requestId: "s1", cmd: "switch", url: "user-draft" },
+      deps
+    );
+    expect(switched.ok).toBe(false);
+
+    // The tab was neither adopted nor focused.
+    expect(tabs.get(usersDraft.id).active).toBeUndefined();
+
+    // And page_close, which acts on "the agent's current tab", cannot have
+    // become the user's tab. This is the assertion that would have caught the
+    // original defect: previously the switch succeeded and this close removed
+    // the user's tab.
+    const closeResult = await handle({ requestId: "s2", cmd: "close" }, deps);
+    expect(closeResult.ok).toBe(true);
+    expect(closed).not.toContain(usersDraft.id);
+    expect(tabs.has(usersDraft.id)).toBe(true);
+  });
+
+  // page_tabs must not even enumerate the user's tabs: the urls a user has
+  // open are exactly what a compromised server would most like to learn, and
+  // ownership now bounds that too.
+  it("does not report the user's tabs to page_tabs", async () => {
+    localStore[ALLOWLIST_KEY] = ["allowed.test"];
+    const mine = await agentOpenedTab("https://allowed.test/agent-page");
+    await chrome.tabs.create({
+      url: "https://allowed.test/user-draft",
+      active: false,
+    });
+
+    const result = await handle(
+      { requestId: "t1", cmd: "tabs" },
+      {
+        loadAllowlist: (await import("../src/background/allowlist.js"))
+          .loadAllowlist,
+        record: auditLog.record,
+        agentTabUrl: socket.agentTabUrl,
+        ensureAgentTab: socket.ensureAgentTab,
+        listAgentTabs: socket.listAgentTabs,
+        switchToTab: socket.switchToTab,
+        closeTab: socket.closeTab,
+        cdp: { attach: async () => {}, detach: async () => {} },
+        pageState: { invalidate: () => {} },
+      }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.data.tabs.map((t) => t.id)).toEqual([mine]);
+    // `withheld` counts what the ALLOWLIST hid, and the user's tab was never in
+    // the set at all — so it must not be reported as withheld either, which
+    // would itself disclose that the user has tabs open.
+    expect(result.data.withheld).toBe(0);
   });
 
   // @edge — page_navigate is the ONE command that never asks for the current
@@ -1705,6 +1930,40 @@ describe("commands on the wire", () => {
     ws.deliver({ requestId: "b", cmd: "state" });
     await socket.__commandQueue();
     expect(ws.frames().map((f) => f.requestId)).toContain("b");
+  });
+
+  // @edge — F3. A handler returning `null` means "do not reply" — a paused
+  // browser's guard returns it for a frame with no requestId, and a reply with
+  // no id settles nothing on the server, whose pending map is keyed by it.
+  // Without the check on the SHARED send path, `JSON.stringify(null)` wrote the
+  // literal string "null" onto the wire. The server drops it, so it was
+  // cosmetic; the reason it matters is that the convention was honoured by one
+  // branch's own early return and by nothing else, so the next handler to
+  // return null would inherit the bug.
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+  ])("writes nothing when the handler returns %s", async (_label, value) => {
+    const { ws } = await connectAndOpen({ onCommand: async () => value });
+    ws.deliver({ requestId: "r1", cmd: "state" });
+    await socket.__commandQueue();
+    expect(ws.sent).toEqual([]);
+    expect(ws.discarded).toEqual([]);
+    expect(socket.state().status).toBe("online");
+  });
+
+  it("still serves the next command after a no-reply", async () => {
+    const { ws } = await connectAndOpen({
+      onCommand: async (command) =>
+        command.requestId === "a"
+          ? null
+          : { requestId: command.requestId, ok: true },
+    });
+    ws.deliver({ requestId: "a", cmd: "state" });
+    await socket.__commandQueue();
+    ws.deliver({ requestId: "b", cmd: "state" });
+    await socket.__commandQueue();
+    expect(ws.frames().map((f) => f.requestId)).toEqual(["b"]);
   });
 
   // @edge — a rejection with no requestId must NOT be answered with an
