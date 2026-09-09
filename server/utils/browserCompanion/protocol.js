@@ -241,8 +241,13 @@ function attach(socket) {
  * @returns {number} how many commands were settled
  */
 function drainSocket(socket) {
-  // A missing socket must not match entries whose socket is undefined for some
-  // other reason, and would drain connections it has nothing to do with.
+  // Declared equivalent mutant: removing this line changes nothing observable,
+  // because the `entry.socket !== socket` filter below already rejects every
+  // entry when `socket` is falsy, and `send` cannot leave an entry carrying a
+  // falsy socket (it throws inside its try and settles immediately, verified:
+  // `send({socket: undefined})` leaves `__pendingCount() === 0`). Kept as an
+  // explicit early return so the intent — never drain on a missing argument —
+  // survives a future change that makes such an entry possible.
   if (!socket) return 0;
 
   let drained = 0;

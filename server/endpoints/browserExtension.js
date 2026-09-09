@@ -375,6 +375,17 @@ function browserExtensionEndpoints(app) {
       // key — a second extension evicts the first with 4409. Correct as designed
       // (single-user mode has one human, so per-instance and per-user are the
       // same statement), but surprising if you assumed keys were per-device.
+      //
+      // This outlives single-user mode. Enabling multi-user runs
+      // `BrowserExtensionApiKey.migrateApiKeysToMultiUser` (endpoints/system.js:695),
+      // whose `updateMany` rewrites EVERY `user_id: null` key to the first
+      // admin's id. So an instance that issued several keys before the switch
+      // ends up with several keys owned by one user, all colliding on the single
+      // registry slot `u:<adminId>` and cycle-evicting each other: one working
+      // extension, the rest reconnecting and displacing it in turn. Fails closed
+      // and routes to nobody else, so it is a documentation matter rather than a
+      // bug — but it is why "one key per device" is not a safe assumption after
+      // a migration either.
 
       // The socket object registered here is the same object handed to
       // `protocol.attach` below and the same one `registry.resolve` returns to

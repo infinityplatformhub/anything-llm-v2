@@ -540,6 +540,77 @@ describe("browser-companion agent socket", () => {
     expect(BrowserExtensionApiKey.validate).not.toHaveBeenCalled();
   });
 
+  // @edge — header ARITY, the axis neither token-count nor token-content covers.
+  //
+  // `browserCompanionKeyFrom` guards `typeof offered === "string"`, so if Node
+  // ever handed this header back as an ARRAY the guard would fall through to the
+  // query path and the subprotocol key would be silently ignored. It does not:
+  // Node joins repeated `sec-websocket-protocol` headers into one
+  // comma-separated string. But that is a per-header property of Node's joining
+  // (`set-cookie`, by contrast, IS handed back as an array), and nothing in this
+  // suite recorded it. Measured against a real `http.Server`:
+  //
+  //   sec-websocket-protocol -> type=string value="anythingllm-browser-companion, brx-KEY123"
+  //   set-cookie             -> type=array  value=["a=1","b=2"]
+  //
+  // This pins the behaviour the implementation depends on, so a Node change or a
+  // proxy that reshapes the header fails loudly here rather than silently
+  // downgrading every extension to the deprecated query path.
+  it("reads the key from a repeated Sec-WebSocket-Protocol header, as Node joins it", async () => {
+    BrowserExtensionApiKey.validate.mockResolvedValue({ id: 1, user_id: 7 });
+    SystemSettings.isMultiUserMode.mockResolvedValue(true);
+    User.get.mockResolvedValue({ id: 7, suspended: 0 });
+
+    const socket = fakeSocket();
+    await wsRoutes[ROUTE](socket, {
+      // Exactly what Node produces for the header sent twice on the wire.
+      headers: {
+        "sec-websocket-protocol": "anythingllm-browser-companion, brx-repeated",
+      },
+      query: {},
+    });
+
+    expect(BrowserExtensionApiKey.validate).toHaveBeenCalledWith("brx-repeated");
+    expect(socket.closed).toBe(false);
+  });
+
+  // The other half of the arity axis: if the header ever DOES arrive as an
+  // array, it must fail closed rather than be coerced. `String(["a","b"])` is
+  // "a,b", which would reach the DB as a real lookup.
+  it("refuses a subprotocol header handed over as an array rather than a string", async () => {
+    const socket = fakeSocket();
+    await wsRoutes[ROUTE](socket, {
+      headers: {
+        "sec-websocket-protocol": [
+          "anythingllm-browser-companion",
+          "brx-array-shaped",
+        ],
+      },
+      query: {},
+    });
+
+    expect(socket.closed).toBe(true);
+    expect(socket.closeCode).toBe(4401);
+    expect(BrowserExtensionApiKey.validate).not.toHaveBeenCalled();
+  });
+
+  // @edge — subprotocol tokens are case-sensitive per RFC 6455, and the marker
+  // comparison is exact. Correct already, but unpinned: a loosened comparison
+  // would widen what counts as a credential offer.
+  it("does not accept the marker in the wrong case", async () => {
+    const socket = fakeSocket();
+    await wsRoutes[ROUTE](socket, {
+      headers: {
+        "sec-websocket-protocol": "AnythingLLM-Browser-Companion, brx-wrongcase",
+      },
+      query: {},
+    });
+
+    expect(socket.closed).toBe(true);
+    expect(socket.closeCode).toBe(4401);
+    expect(BrowserExtensionApiKey.validate).not.toHaveBeenCalled();
+  });
+
   // Sabotage found this gap: the "no marker" test above offers a single token,
   // so dropping the marker check still rejects it (tokens[1] is undefined).
   // Two tokens whose first is NOT the marker is what actually distinguishes
