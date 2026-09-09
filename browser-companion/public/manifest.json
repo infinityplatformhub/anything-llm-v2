@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "AnythingLLM Browser Companion",
+  "version": "0.1.0",
+  "description": "Let an AnythingLLM agent read and click in this browser, on the domains you allow.",
+  "permissions": ["storage", "alarms", "tabs", "debugger"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "index.html"
+  }
+}
