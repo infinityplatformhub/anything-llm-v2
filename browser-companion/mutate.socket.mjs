@@ -167,8 +167,8 @@ mutate("close", "every close is terminal, so 1011 never retries", SOCK,
   "const terminal = TERMINAL_CLOSES.get(event?.code);",
   "const terminal = TERMINAL_CLOSES.get(event?.code) ?? TERMINAL_CLOSES.get(CLOSE_EVICTED);");
 mutate("close", "terminal close still schedules a reconnect", SOCK,
-  "      disarmKeepalive();\n      clearReconnectTimer();",
-  "      disarmKeepalive();\n      clearReconnectTimer();\n      scheduleReconnect();");
+  "      config = null;",
+  "      scheduleReconnect();");
 mutate("close", "the evicted frame no longer sets the state", SOCK,
   'if (message?.event === "evicted") {', "if (false) {");
 mutate("close", "keepalive resurrects an evicted connection", SOCK,
@@ -362,6 +362,16 @@ mutate("listener", "the cold-wake fallback is dropped", IDX,
 mutate("listener", "a storage failure escapes as an unhandled rejection", IDX,
   "  } catch (error) {\n    // A rejected `storage.sync.get`",
   "  } finally {\n    // A rejected `storage.sync.get`");
+
+mutate("orphan", "closeTab keeps the id, so a recycled id closes a user tab", SOCK,
+  "  if (boundTabId === tabId) boundTabId = null;\n  createdTabIds.delete(tabId);",
+  "  if (boundTabId === tabId) boundTabId = null;");
+mutate("orphan", "a mid-navigation tab is treated as unused", SOCK,
+  '    if (typeof pending === "string" && pending && pending !== BLANK_URL) return;',
+  "");
+mutate("orphan", "a pending navigation to about:blank spares the tab", SOCK,
+  '    if (typeof pending === "string" && pending && pending !== BLANK_URL) return;',
+  '    if (typeof pending === "string") return;');
 
 // --- POSITIVE CONTROL -------------------------------------------------------
 // Must be KILLED. If this survives, the harness is not running these tests and

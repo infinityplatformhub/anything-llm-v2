@@ -424,13 +424,20 @@ export async function switchToTab(tabId) {
 /**
  * Close a tab only if this module opened it and nothing has happened in it.
  *
- * THREE CONDITIONS, and every one is load-bearing — this closes a real tab in
+ * FOUR CONDITIONS, and every one is load-bearing — this closes a real tab in
  * the user's browser, so a false positive destroys something they were using:
  *   1. we opened it (`createdTabIds`), so a tab the user opened is never a
- *      candidate no matter what it currently shows;
- *   2. it is still on `about:blank`, so a tab the agent navigated somewhere —
- *      and which may hold state the user can see — is left alone;
- *   3. it still exists.
+ *      candidate no matter what it currently shows. `closeTab` removes the id
+ *      here, which is what stops a RECYCLED id — Chrome reuses tab ids within a
+ *      session — from making a user's new tab look like one of ours;
+ *   2. it is not mid-navigation. `chrome.tabs.update({url})` — which is how
+ *      `cdp.navigate` moves a tab — sets `pendingUrl` to the destination while
+ *      `url` still reads `about:blank`, so without this check a tab the agent
+ *      navigated one instant ago is indistinguishable from an unused blank one
+ *      and gets closed out from under the navigation;
+ *   3. it has not already gone somewhere, so a tab holding state the user can
+ *      see is left alone;
+ *   4. it still exists.
  * Anything unexpected means "do not touch it": every failure path here leaves
  * the tab open, because a leaked blank tab is a cosmetic problem and a wrongly
  * closed tab is not.
@@ -439,6 +446,10 @@ async function discardIfUnused(tabId) {
   if (!createdTabIds.has(tabId)) return;
   try {
     const tab = await chrome.tabs.get(tabId);
+    // Checked before `url`, because during a navigation `url` is the stale
+    // value and `pendingUrl` is the true one.
+    const pending = tab?.pendingUrl;
+    if (typeof pending === "string" && pending && pending !== BLANK_URL) return;
     if (tabUrl(tab) !== BLANK_URL) return; // The agent used it; leave it.
     await chrome.tabs.remove(tabId);
     createdTabIds.delete(tabId);
@@ -947,11 +958,24 @@ export async function connect({ apiBase, apiKey, onCommand } = {}) {
       // again. Recovery is the user reconnecting from the popup, which calls
       // `connect` and re-arms everything.
       disarmKeepalive();
+      // A THIRD LAYER, not a co-equal guard — stated precisely because an
+      // earlier version of this comment over-credited it, and the half whose
+      // necessity cannot be demonstrated is the half a later reader deletes as
+      // dead code. Removing this line alone changes nothing observable: it
+      // survives the whole suite, including the case where a timer really is
+      // armed (1011 schedules one, a config change opens a second socket, 4409
+      // then closes the live one), because `connect` clears the timer
+      // unconditionally on its live path before building anything. So this
+      // covers a window `connect` has already closed. It is kept because it is
+      // one correct line and it makes this branch self-contained: a terminal
+      // close leaves no timer behind regardless of what any other function
+      // happens to do today.
       clearReconnectTimer();
-      // Dropped so nothing can reconnect with a key the server just refused:
-      // `keepalive()` reconnects from `config`, and `connect`'s cold-entry
-      // check is gated on `config` being absent. Leaving it set would let this
-      // worker rebuild the very connection this branch is refusing.
+      // THIS is the guard. Both the reconnect timer's callback and `keepalive`
+      // reconnect FROM `config`, and `connect`'s cold-entry verdict check is
+      // gated on its absence — so dropping it is what stops this worker
+      // rebuilding the very connection this branch is refusing. Pinned by
+      // `__hasConfig`, and removing it is killed.
       config = null;
       // Durable, so the next worker honours this verdict too. Fire-and-forget
       // for the same reason as the audit write below: this is a close handler,
@@ -1074,13 +1098,16 @@ export function __commandQueue() {
 /**
  * Test-only: whether this worker still holds a config it could reconnect with.
  *
- * Exposed because a terminal close defends against reconnecting TWO ways — no
- * timer is scheduled, and `config` is dropped, which the timer callback and
- * `keepalive` both require. Either alone suffices, so removing either alone is
- * invisible through behaviour and a mutation run proved it: both single
- * removals survived, only the pair reconnected. Redundancy nobody can see is
- * how one half gets deleted as dead code and the other then follows as
- * harmless, so each half is asserted directly instead.
+ * `config = null` is THE guard that makes a terminal close terminal: both the
+ * reconnect timer's callback and `keepalive` require a config, so dropping it
+ * is what stops either from rebuilding the connection. Removing it is KILLED.
+ *
+ * It is exposed rather than asserted through behaviour because the terminal
+ * path also calls `clearReconnectTimer()`, which hides it: with no timer armed
+ * there is nothing to observe a live config through. Asserting the mechanism
+ * directly is the only way to tell the two apart. See the terminal branch in
+ * `onclose` for what that second call is actually worth — less than an earlier
+ * version of this comment claimed.
  */
 export function __hasConfig() {
   return config !== null;

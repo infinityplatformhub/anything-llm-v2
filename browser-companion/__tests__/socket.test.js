@@ -169,8 +169,25 @@ function makeTabs() {
     },
     async update(id, patch) {
       if (!tabs.has(id)) throw new Error(`No tab with id: ${id}.`);
-      Object.assign(tabs.get(id), patch);
-      return tabs.get(id);
+      const tab = tabs.get(id);
+      // Models Chrome's real navigation shape: `update({url})` does NOT change
+      // `url` synchronously — it sets `pendingUrl` to the destination and
+      // leaves `url` on the old value until the navigation commits. A double
+      // that swapped `url` immediately would make a mid-navigation tab
+      // indistinguishable from a settled one, and no test could then see a tab
+      // being closed out from under its own navigation.
+      const { url, ...rest } = patch;
+      Object.assign(tab, rest);
+      if (url !== undefined) tab.pendingUrl = url;
+      return tab;
+    },
+    /** Test-only: let a pending navigation commit. */
+    __commit(id) {
+      const tab = tabs.get(id);
+      if (tab?.pendingUrl) {
+        tab.url = tab.pendingUrl;
+        delete tab.pendingUrl;
+      }
     },
     async remove(id) {
       if (!tabs.has(id)) throw new Error(`No tab with id: ${id}.`);
@@ -274,6 +291,12 @@ const flush = async () => {
  * and the failure reads as a missing feature rather than as an early
  * assertion. Throws on timeout, so a condition that never becomes true is a
  * loud failure and never a silent pass.
+ *
+ * IT SPINS `setImmediate`, SO IT DOES NOT ADVANCE TIMERS. Every current use
+ * site waits on a storage write, where the primitive matches. A condition that
+ * only becomes true once a `setTimeout` fires — real or faked — will never be
+ * seen here and will time out after the full 200 turns; use fake timers and
+ * `advanceTimersByTime` for that instead.
  */
 const waitFor = async (predicate, label = "condition") => {
   for (let i = 0; i < 200; i += 1) {
@@ -1159,6 +1182,80 @@ describe("the agent's tab", () => {
     await socket.switchToTab(target.id);
 
     expect(tabs.has(used)).toBe(true);
+  });
+
+  // @edge — a tab MID-NAVIGATION still reports `url: "about:blank"`; the truth
+  // is in `pendingUrl`. Without that check a tab the agent navigated one
+  // instant ago is indistinguishable from an unused blank one, and the cleanup
+  // closes it out from under its own navigation.
+  it("keeps an abandoned tab whose navigation has not committed yet", async () => {
+    const navigating = await socket.ensureAgentTab();
+    // Exactly what cdp.navigate does. `url` still reads about:blank after it.
+    await chrome.tabs.update(navigating, { url: "https://linkedin.com/feed/" });
+    expect(tabs.get(navigating).url).toBe("about:blank");
+
+    const target = await chrome.tabs.create({
+      url: "https://other.test/",
+      active: false,
+    });
+    await socket.switchToTab(target.id);
+
+    expect(tabs.has(navigating)).toBe(true);
+    // And it really was a live navigation, not a tab that had settled.
+    globalThis.chrome.tabs.__commit(navigating);
+    expect(tabs.get(navigating).url).toBe("https://linkedin.com/feed/");
+  });
+
+  // @edge — a pending navigation to about:blank is not a reason to keep a tab:
+  // that is where it already is, so the tab is still unused.
+  it("still discards a tab whose only pending navigation is to about:blank", async () => {
+    const blank = await socket.ensureAgentTab();
+    await chrome.tabs.update(blank, { url: "about:blank" });
+
+    const target = await chrome.tabs.create({
+      url: "https://other.test/",
+      active: false,
+    });
+    await socket.switchToTab(target.id);
+
+    expect(tabs.has(blank)).toBe(false);
+  });
+
+  // @edge — L4. `closeTab` forgetting the id in `createdTabIds` is LOAD-BEARING
+  // and this is the only thing pinning it.
+  //
+  // Chrome REUSES tab ids within a session. So: we open a tab, we close it, and
+  // Chrome hands that same id to a tab the USER opens. If the id was never
+  // removed from `createdTabIds`, the user's tab now satisfies every condition
+  // `discardIfUnused` checks — we "opened" it (stale membership), it is blank,
+  // and it exists — and switching away CLOSES IT.
+  //
+  // This is L1 inverted, and worse: L1 leaked a blank tab, which is cosmetic;
+  // this destroys a real one. Neither of the other two guards saves it, because
+  // both are satisfied by an ordinary blank tab.
+  it("does not close a user tab that reuses a closed tab's id", async () => {
+    const ours = await socket.ensureAgentTab();
+    await socket.closeTab(ours);
+
+    // Chrome recycles the id. `nextTabId` is rewound so the table hands the
+    // same number out again, which is exactly what a real session does.
+    nextTabId = ours;
+    const usersTab = await chrome.tabs.create({
+      url: "about:blank",
+      active: false,
+    });
+    expect(usersTab.id).toBe(ours);
+
+    // The agent adopts it (as page_switch does) and later switches away.
+    await socket.switchToTab(usersTab.id);
+    const elsewhere = await chrome.tabs.create({
+      url: "https://other.test/",
+      active: false,
+    });
+    await socket.switchToTab(elsewhere.id);
+
+    // The user's tab must still be open.
+    expect(tabs.has(usersTab.id)).toBe(true);
   });
 
   // @edge — and a tab the USER opened is never a candidate, whatever it shows.
