@@ -293,6 +293,60 @@ describe("the allowlist gate cannot be bypassed by any command", () => {
     }
   });
 
+  // THE LIST IS INJECTABLE, THE JUDGEMENT IS NOT.
+  //
+  // `loadAllowlist` through deps is harmless — it changes WHICH domains are
+  // allowed. `isAllowed` through deps would not be: any caller, or any future
+  // refactor, could pass a permissive stub and the entire gate would evaporate
+  // with every test still green. That is the failure shape this branch has
+  // found repeatedly — a double standing in for the real thing, agreed with by
+  // a green suite. So dispatch.js imports the judgement directly and these
+  // assert it cannot be reached through the injection seam.
+  it("ignores an isAllowed stub passed through deps", async () => {
+    const permissive = j.fn(() => true);
+    const d = deps({
+      loadAllowlist: async () => [],
+      agentTabUrl: async () => "https://evil.test/x",
+      isAllowed: permissive,
+    });
+    const out = await handle({ requestId: "r_j1", cmd: "state" }, d);
+    expect(out.ok).toBe(false);
+    expect(out.error).toMatch(/^denied:/);
+    // Not consulted at all — the real one was used.
+    expect(permissive).not.toHaveBeenCalled();
+    expect(d.cdp.attach).not.toHaveBeenCalled();
+  });
+
+  it("ignores an isSameOrigin stub passed through deps", async () => {
+    const permissive = j.fn(() => true);
+    const d = deps({
+      loadAllowlist: async () => ["www.linkedin.com", "docs.google.com"],
+      isSameOrigin: permissive,
+    });
+    const out = await handle(
+      { requestId: "r_j2", cmd: "fetch", url: "https://docs.google.com/export" },
+      d
+    );
+    expect(out.ok).toBe(false);
+    expect(out.error).toMatch(/same-origin/i);
+    expect(permissive).not.toHaveBeenCalled();
+    expect(d.cdp.fetch).not.toHaveBeenCalled();
+  });
+
+  it("does not expose the judgement on the resolved dependency object", () => {
+    // Belt and braces: even if a caller passes them, they must not become part
+    // of what the dispatcher hands to a resolver or a run().
+    const d = withDefaults({ isAllowed: () => true, isSameOrigin: () => true });
+    // They may sit on the object (spread from deps) but nothing reads them.
+    // What matters is that the module's own bindings are the imported ones,
+    // which the two behavioural tests above prove. This pins the narrower fact
+    // that no defaulting step ever ADDS them.
+    const bare = withDefaults({});
+    expect(bare.isAllowed).toBeUndefined();
+    expect(bare.isSameOrigin).toBeUndefined();
+    expect(typeof d.loadAllowlist).toBe("function");
+  });
+
   it("never invents a missing cdp or pageState method", () => {
     // A defaulting layer with a fallback for unknown keys would turn a typo in
     // a future command into a silent no-op: the command reports success and
@@ -514,6 +568,70 @@ describe("per-command gate subjects", () => {
     expect(d.cdp.detach).not.toHaveBeenCalled();
   });
 
+  // @edge — THE BLOB BYPASS. task-7-brief.md specified a LOCAL `sameOrigin`
+  // helper doing a bare `new URL(a).origin === new URL(b).origin`. That returns
+  // TRUE for a blob: url against its own page: unlike file: or data:, whose
+  // origins serialise to the string "null", a blob: url reports the REAL origin
+  // it was minted from. Verified by execution — the naive compare says true,
+  // task 6's `isSameOrigin` says false.
+  //
+  // WHAT THESE TESTS ACTUALLY PROVE, stated precisely because the honest answer
+  // is narrower than "the blob bypass is tested". Verified by running the real
+  // dispatcher: a blob: url is refused by the ALLOWLIST's scheme guard
+  // (ALLOWED_SCHEMES is http/https only), which runs BEFORE the same-origin
+  // check. So the same-origin layer is never reached, and these assert
+  // defence-in-depth — the outer gate holds — rather than exercising
+  // `isSameOrigin`'s blob handling.
+  //
+  // A mutation replacing this module's `isSameOrigin` with the brief's naive
+  // helper consequently SURVIVES the suite, and is reported as a survivor
+  // rather than hidden: no dispatch-level input can reach that check with a
+  // blob, because the allowlist eats it first. task 6's own tests cover
+  // `isSameOrigin(blob, page) === false` directly, which is the right place for
+  // it. Asserted on BOTH sides here anyway, since the original defect was
+  // one-sided.
+  it("refuses a blob: url on an allowlisted host as a page_fetch TARGET", async () => {
+    const d = deps();
+    const out = await handle(
+      {
+        requestId: "r_b1",
+        cmd: "fetch",
+        url: "blob:https://www.linkedin.com/1234-abcd",
+      },
+      d
+    );
+    expect(out.ok).toBe(false);
+    expect(d.cdp.fetch).not.toHaveBeenCalled();
+  });
+
+  it("refuses a blob: url on an allowlisted host as the PAGE", async () => {
+    const d = deps({
+      agentTabUrl: async () => "blob:https://www.linkedin.com/1234-abcd",
+    });
+    const out = await handle(
+      {
+        requestId: "r_b2",
+        cmd: "fetch",
+        url: "https://www.linkedin.com/api/x",
+      },
+      d
+    );
+    expect(out.ok).toBe(false);
+    expect(d.cdp.fetch).not.toHaveBeenCalled();
+  });
+
+  it("refuses a blob: page for every page-touching command, not just fetch", async () => {
+    // The allowlist gate refuses the scheme outright, so the blob never
+    // depends on the same-origin rule to be caught.
+    const d = deps({
+      agentTabUrl: async () => "blob:https://www.linkedin.com/1234-abcd",
+    });
+    const out = await handle({ requestId: "r_b3", cmd: "click", id: 12 }, d);
+    expect(out.ok).toBe(false);
+    expect(out.error).toMatch(/allowlist/i);
+    expect(d.cdp.click).not.toHaveBeenCalled();
+  });
+
   // @edge — page_tabs must not become a way to enumerate the user's browsing
   it("hides tabs outside the allowlist from page_tabs but says how many", async () => {
     const d = deps({
@@ -554,6 +672,47 @@ describe("untrusted fields on the frame", () => {
     // undeclared field to ride in on.
     expect(d.cdp.fetch).toHaveBeenCalledWith(391, "https://www.linkedin.com/api/x");
     expect(d.cdp.fetch.mock.calls[0]).toHaveLength(2);
+  });
+
+  // @edge — a huge server-controlled string must not reach the audit log or the
+  // agent transcript at full size. Task 6's auditLog caps its own fields too;
+  // this is the second bound, and the one that also covers the error STRING
+  // this module builds, which the log's cap does not reach.
+  it("bounds a giant url before it reaches the log or the reply", async () => {
+    const huge = `https://evil.test/${"A".repeat(5_000_000)}`;
+    const d = deps();
+    const out = await handle(
+      { requestId: "r_big", cmd: "navigate", url: huge },
+      d
+    );
+    expect(out.ok).toBe(false);
+    expect(out.error.length).toBeLessThan(3000);
+    expect(out.error).toMatch(/truncated/);
+    const [entry] = d.record.mock.calls[0];
+    expect(entry.url.length).toBeLessThan(3000);
+    expect(entry.detail.length).toBeLessThan(3000);
+  });
+
+  it("bounds a giant cmd on the unknown-command path", async () => {
+    // Recorded BEFORE any check passes, so an unbounded cmd is a way to write
+    // arbitrarily large entries into the log without being allowlisted at all.
+    const d = deps();
+    const out = await handle(
+      { requestId: "r_big2", cmd: "x".repeat(5_000_000) },
+      d
+    );
+    expect(out.ok).toBe(false);
+    expect(out.error.length).toBeLessThan(3000);
+    const [entry] = d.record.mock.calls[0];
+    expect(entry.cmd.length).toBeLessThan(3000);
+  });
+
+  it("bounds a giant error message from the browser", async () => {
+    const d = deps();
+    d.cdp.attach.mockRejectedValueOnce(new Error("E".repeat(5_000_000)));
+    const out = await handle({ requestId: "r_big3", cmd: "state" }, d);
+    expect(out.ok).toBe(false);
+    expect(out.error.length).toBeLessThan(3000);
   });
 
   it("refuses a non-string url rather than coercing it", async () => {

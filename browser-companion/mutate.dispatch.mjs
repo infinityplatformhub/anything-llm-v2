@@ -50,6 +50,12 @@ function runSuite() {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, NODE_OPTIONS: "--experimental-vm-modules" },
+      // The bounding tests feed in 5MB strings, so a mutation that removes the
+      // truncation makes jest print a multi-megabyte failure diff. At the
+      // default 1MB that is an ENOBUFS crash — which would abort the run
+      // mid-mutation and, worse, could read as an infrastructure problem rather
+      // than as the mutation being correctly KILLED.
+      maxBuffer: 256 * 1024 * 1024,
     }
   );
   if (done.error) throw done.error;
@@ -193,20 +199,47 @@ mutate("untrusted", "the typed text is written into the audit log", DI,
   "detail: `id ${command.id}, ${text.length} chars`,",
   "detail: `id ${command.id}, ${text}`,");
 
+// --- axis: the judgement is not injectable ---------------------------------
+// The team lead's ruling: the LIST may be injected, the JUDGEMENT may not. A
+// permissive stub arriving through deps would evaporate the gate with every
+// test still green.
+mutate("judgement", "isAllowed becomes injectable through deps", DI,
+  "      if (isAllowed(url, allowlist)) continue;",
+  "      if ((d.isAllowed ?? isAllowed)(url, allowlist)) continue;");
+mutate("judgement", "isSameOrigin becomes injectable through deps", DI,
+  "if (spec.sameOrigin && !isSameOrigin(command.url, await currentUrl())) {",
+  "if (spec.sameOrigin && !(d.isSameOrigin ?? isSameOrigin)(command.url, await currentUrl())) {");
+mutate("judgement", "the brief's naive local sameOrigin replaces task 6's", DI,
+  "if (spec.sameOrigin && !isSameOrigin(command.url, await currentUrl())) {",
+  "const _naive = (a, b) => { try { return new URL(a).origin === new URL(b).origin; } catch { return false; } };\n    if (spec.sameOrigin && !_naive(command.url, await currentUrl())) {");
+
+// --- axis: bounding untrusted echoes ---------------------------------------
+mutate("bound", "echo() stops truncating", DI,
+  "  return text.length > MAX_ECHOED_CHARS", "  return false");
+mutate("bound", "the denied url is recorded unbounded", DI,
+  "        url: typeof url === \"string\" ? echo(url) : null,",
+  "        url: typeof url === \"string\" ? url : null,");
+mutate("bound", "the unknown cmd is recorded unbounded", DI,
+  "      cmd: echo(cmd),", "      cmd: String(cmd),");
+mutate("bound", "a browser error is echoed unbounded", DI,
+  "    const detail = echo(error?.message ?? error);",
+  "    const detail = String(error?.message ?? error);");
+
 // --- axis: audit recording --------------------------------------------------
 mutate("audit", "a denial is not recorded", DI,
-  "      await d.record({\n        cmd,\n        // Recorded as given, including a non-string: the audit log is where the\n        // user finds out what a misbehaving server tried.\n        url: typeof url === \"string\" ? url : null,\n        outcome: \"denied\",\n        detail: `not in allowlist: ${String(url)}`,\n      });",
-  "      void 0;");
+  "      if (isAllowed(url, allowlist)) continue;\n      await d.record({",
+  "      if (isAllowed(url, allowlist)) continue;\n      await Promise.resolve({");
 mutate("audit", "a success is not recorded", DI,
   'await d.record({ cmd, url: urls[0], outcome: "ok", detail });', "void 0;");
 mutate("audit", "an error is not recorded", DI,
-  'await d.record({ cmd, url: null, outcome: "error", detail });', "void 0;");
+  'await d.record({ cmd: echo(cmd), url: null, outcome: "error", detail });',
+  "void 0;");
 mutate("audit", "a denial is recorded as ok", DI,
   'outcome: "denied",\n        detail: `not in allowlist',
   'outcome: "ok",\n        detail: `not in allowlist');
 mutate("audit", "an unknown command is not recorded", DI,
-  '    await d.record({\n      cmd: String(cmd),\n      url: null,\n      outcome: "denied",\n      detail: "unknown command",\n    });',
-  "    void 0;");
+  "    // compromised or mismatched server looks like from here.\n    await d.record({",
+  "    // compromised or mismatched server looks like from here.\n    await Promise.resolve({");
 
 // --- axis: element map / staleness -----------------------------------------
 mutate("map", "the map is never invalidated", DI,
@@ -262,8 +295,8 @@ mutate("deps", "close does not detach before closing the tab", DI,
   "      await deps.cdp.detach(tabId);\n      await deps.closeTab(tabId);",
   "      await deps.closeTab(tabId);");
 mutate("deps", "handle rethrows instead of replying", DI,
-  "  } catch (error) {\n    const detail = String(error?.message ?? error);",
-  "  } catch (error) {\n    if (error) throw error;\n    const detail = String(error?.message ?? error);");
+  "  } catch (error) {\n    // Bounded like every other echoed value",
+  "  } catch (error) {\n    if (error) throw error;\n    // Bounded like every other echoed value");
 
 // --- negative control -------------------------------------------------------
 // Without this the whole run is worthless: a suite failing for an unrelated

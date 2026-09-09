@@ -63,6 +63,31 @@ class CommandError extends Error {}
 /* Argument reading — every value below arrived over a socket                 */
 /* ------------------------------------------------------------------------- */
 
+// How much of an untrusted string may appear in an audit `detail` or an error
+// message this module builds. Task 6's auditLog caps its own fields as of
+// commit 12519095, so this is the SECOND bound, not the only one — and it is
+// deliberate: this module is the trust boundary where socket data enters, and a
+// bound applied here also covers the error STRING returned to the agent, which
+// the audit log's cap does not reach. A 5MB url would otherwise be interpolated
+// into a 5MB refusal message and sent back over the wire.
+//
+// Long enough that a real url survives intact (task 6 uses 2048 for urls);
+// short enough that no single field can crowd out a log or a transcript.
+const MAX_ECHOED_CHARS = 2048;
+
+/**
+ * Render an untrusted value for a message or a log, bounded.
+ *
+ * @param {unknown} value anything off the wire
+ * @returns {string}
+ */
+function echo(value) {
+  const text = typeof value === "string" ? value : String(value);
+  return text.length > MAX_ECHOED_CHARS
+    ? `${text.slice(0, MAX_ECHOED_CHARS)}…[truncated]`
+    : text;
+}
+
 function requireString(value, field) {
   if (typeof value !== "string" || value.length === 0)
     throw new CommandError(`"${field}" must be a non-empty string.`);
@@ -430,14 +455,18 @@ export async function handle(command, deps) {
     // treated as a command. Recorded, because a run of unknown verbs is what a
     // compromised or mismatched server looks like from here.
     await d.record({
-      cmd: String(cmd),
+      // Bounded: `cmd` is server-controlled and is recorded on this path
+      // BEFORE any check has passed, so an unbounded one is a way to write
+      // arbitrarily large entries into the audit log without being allowlisted
+      // for anything.
+      cmd: echo(cmd),
       url: null,
       outcome: "denied",
       detail: "unknown command",
     });
     return reply(requestId, {
       ok: false,
-      error: `Unknown browser command "${String(cmd)}".`,
+      error: `Unknown browser command "${echo(cmd)}".`,
     });
   }
 
@@ -477,28 +506,30 @@ export async function handle(command, deps) {
       if (isAllowed(url, allowlist)) continue;
       await d.record({
         cmd,
-        // Recorded as given, including a non-string: the audit log is where the
-        // user finds out what a misbehaving server tried.
-        url: typeof url === "string" ? url : null,
+        // Recorded as given but bounded, and null for a non-string: the audit
+        // log is where the user finds out what a misbehaving server tried, so
+        // the value is kept — just never at a size that can crowd out the
+        // history around it.
+        url: typeof url === "string" ? echo(url) : null,
         outcome: "denied",
-        detail: `not in allowlist: ${String(url)}`,
+        detail: `not in allowlist: ${echo(url)}`,
       });
       return reply(requestId, {
         ok: false,
-        error: `denied: ${String(url)} is not in the allowlist the user set in the extension. Ask the user to add the domain there if this page should be reachable.`,
+        error: `denied: ${echo(url)} is not in the allowlist the user set in the extension. Ask the user to add the domain there if this page should be reachable.`,
       });
     }
 
     if (spec.sameOrigin && !isSameOrigin(command.url, await currentUrl())) {
       await d.record({
         cmd,
-        url: typeof command.url === "string" ? command.url : null,
+        url: typeof command.url === "string" ? echo(command.url) : null,
         outcome: "denied",
         detail: "cross-origin",
       });
       return reply(requestId, {
         ok: false,
-        error: `denied: page_fetch must be same-origin as the tab it runs in (${String(
+        error: `denied: page_fetch must be same-origin as the tab it runs in (${echo(
           await currentUrl()
         )}). Use page_navigate first, then fetch.`,
       });
@@ -524,10 +555,14 @@ export async function handle(command, deps) {
     await d.record({ cmd, url: urls[0], outcome: "ok", detail });
     return reply(requestId, { ok: true, data });
   } catch (error) {
-    const detail = String(error?.message ?? error);
+    // Bounded like every other echoed value: an error message can carry
+    // page-derived or server-derived text (a CDP failure quotes the url, a
+    // page exception quotes its own throw), so it is untrusted by origin even
+    // though it arrives as an exception.
+    const detail = echo(error?.message ?? error);
     // Recorded before the reply, so a failure the agent papers over is still in
     // the log the user reads.
-    await d.record({ cmd, url: null, outcome: "error", detail });
+    await d.record({ cmd: echo(cmd), url: null, outcome: "error", detail });
     return reply(requestId, { ok: false, error: detail });
   }
 }
