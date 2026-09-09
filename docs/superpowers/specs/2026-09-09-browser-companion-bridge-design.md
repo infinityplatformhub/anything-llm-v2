@@ -15,8 +15,13 @@ agent ในแอปอ่านเว็บได้ (`web-scraping`, `web-bro
 
 ## ทางที่เลือก
 
-ต่อ **extension เดิม** (`browser-extension/`) เข้ากับ `chrome.debugger` API แล้วให้ agent plugin ฝั่ง server
+สร้าง **extension ใหม่** (`browser-companion/`) ต่อกับ `chrome.debugger` API แล้วให้ agent plugin ฝั่ง server
 สั่งผ่าน WebSocket
+
+> **แก้จากที่เขียนไว้ตอนแรก (2026-09-09):** spec ฉบับแรกเขียนว่า "ต่อ extension เดิม (`browser-extension/`)"
+> ตอนลงมือพบว่า `browser-extension/` เป็น git submodule ชี้ไป `Mintplex-Labs/anythingllm-extension.git`
+> — commit ที่ลงในนั้นเข้า repo ของ Mintplex ไม่ใช่ PR นี้ และ gate ของเราครอบไม่ถึง
+> ผู้ใช้ตัดสินให้สร้างใหม่ที่ `browser-companion/` submodule เดิมไม่ถูกแตะเลย (ยืนยันด้วย diff ว่าง)
 
 ### ทำไม `chrome.debugger` ไม่ใช่ทางอื่น
 
@@ -44,7 +49,7 @@ content script กดผ่าน `el.click()` ให้ `isTrusted: false` — 
 
 `app.ws()` มีอยู่แล้วในโปรเจกต์ (express-ws — ดู `server/endpoints/agentWebsocket.js`) ไม่ต้องเพิ่ม infra
 
-route ใหม่: `app.ws("/browser-extension/agent-socket", ...)` auth ด้วย `BrowserExtensionApiKey` ที่มีอยู่ —
+route ใหม่: `app.ws("/browser-companion/agent-socket", ...)` auth ด้วย `BrowserExtensionApiKey` ที่มีอยู่ —
 **ไม่แตะ schema**
 
 ที่เลือก WS ไม่ใช่ long-poll: agent กด 20–30 step ติดกัน long-poll เพิ่ม 0–500ms ต่อ step และต้องมีตาราง
@@ -189,12 +194,12 @@ security review (Opus)** ไม่ใช่แค่ final review
 |---|---|---|---|
 | 1 | WS route + socket registry + auth (route ตาม user_id, กัน null key, เตะ socket เก่า) | `server/endpoints/browserExtension.js` | — |
 | 2 | wire protocol + requestId correlation (ทั้งสองฝั่ง) | server + extension bg | 1 |
-| 3 | extension: `debugger` permission + attach/detach + allowlist gate | `browser-extension/` manifest + bg | — |
-| 4 | extension: CDP input (click/type/key/scroll) + `page_fetch` (GET only) + human delay | `browser-extension/` bg | 3 |
-| 5 | extension: `page_state` element map + `[id]` | `browser-extension/` bg | 3 |
-| 6 | extension popup UI 4 แท็บ (ตาม mockup) + kill switch + audit log + ปุ่มพาไปแท็บ agent + แจ้งเมื่อถูกเตะ | `browser-extension/src/` | 3 |
+| 3 | extension: `debugger` permission + attach/detach + allowlist gate | `browser-companion/` manifest + bg | — |
+| 4 | extension: CDP input (click/type/key/scroll) + `page_fetch` (GET only) + human delay | `browser-companion/` bg | 3 |
+| 5 | extension: `page_state` element map + `[id]` | `browser-companion/` bg | 3 |
+| 6 | extension popup UI 4 แท็บ (ตาม mockup) + kill switch + audit log + ปุ่มพาไปแท็บ agent + แจ้งเมื่อถูกเตะ | `browser-companion/src/` | 3 |
 | 7 | agent plugin 11 tool | `server/utils/agents/aibitat/plugins/browser-companion.js` | 1, 2 |
-| 8 | keepalive + reconnect (MV3 service worker) | `browser-extension/` bg | 1, 3 |
+| 8 | keepalive + reconnect (MV3 service worker) | `browser-companion/` bg | 1, 3 |
 
 ## หลักฐานที่จะพิสูจน์ว่างานเสร็จ
 
