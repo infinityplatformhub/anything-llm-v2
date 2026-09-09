@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "@jest/globals";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -812,5 +812,221 @@ describe("the listener bodies actually do their job", () => {
     expect(sockets[0].sent.map((raw) => JSON.parse(raw))).toEqual([
       { event: "ping" },
     ]);
+  });
+});
+
+/* ===========================================================================
+ * WHO REACHES A TAB ACT WITHOUT GOING THROUGH `deps`.
+ *
+ * The walk above derives its deps from `deps`, so it can only see acts that
+ * arrive that way. The HIGH the reviewer found did NOT: `pageState.js` imports
+ * `evaluate` straight from cdp.js, so `page_read` reached `Runtime.evaluate` on
+ * a captured id with no act-time check, and no test in this repo could see it.
+ * That import is still there — correctly, now that its two callers are guarded
+ * at the wiring — and so are three others. All four are right TODAY. So was the
+ * wiring, right up until pageState grew a second caller.
+ *
+ * Same shape as the deps walk, one level out: the IMPORTERS are derived from
+ * the source, the JUDGEMENT stays in a literal, and an importer with no ruling
+ * fails.
+ *
+ * WHY A REGEX AND NOT A PARSER, since a source-level check is a fair thing to
+ * distrust. `@babel/parser` resolves here — I checked, it imports and parses
+ * under this jest config — but only as a hoisted transitive of jest: it is in
+ * no package.json, and a test that depends on someone else's dependency tree
+ * is a test that breaks on an unrelated upgrade. It cannot be added properly
+ * without an install, and this worktree does not get one.
+ *
+ * What makes the regex sound enough here is the direction of its failures:
+ *
+ *   - ANCHORED TO THE LINE START (`^\s*import` / `^\s*export`). An import
+ *     declaration must be a top-level statement, while a mention inside a
+ *     comment is preceded by `//` or ` *` — which is why the four prose
+ *     mentions of "cdp.js" in socket.js and index.js do not match. Driven both
+ *     ways: `// import { click } from "./cdp.js";` stays green, and a BLOCK
+ *     comment whose inner line starts with the bare keyword reds.
+ *   - THAT FALSE POSITIVE DEMANDS A RULING, which is noisy, visible and
+ *     harmless — a commented-out import is a thing worth being asked about
+ *     anyway. A false negative is the dangerous direction, and reaching it
+ *     needs an import written in a form this misses.
+ *   - Those forms are enumerable and two are covered: `import ... from`,
+ *     `export ... from`, and `import("./cdp.js")` with a literal specifier.
+ *
+ * WHAT IT STILL CANNOT SEE, so nobody inherits it as a guarantee:
+ *   - `import(expr)` where the specifier is computed. Nothing in this codebase
+ *     does that, and it would be a strange way to reach a debugger surface.
+ *   - RE-EXPORT LAUNDERING: module A imports a tab act and re-exports it,
+ *     module B imports A. B's edge is invisible here. That is exactly
+ *     pageState's own shape, which is why pageState.js is treated as a
+ *     supplier below and not only as an importer — one more hop is covered,
+ *     not all of them.
+ * ======================================================================== */
+const BACKGROUND_DIR = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "src/background"
+);
+
+/**
+ * The modules that hand out an act on a specific tab.
+ *
+ * `pageState.js` is here as well as `cdp.js` because it re-exposes the same
+ * capability under different names — `capture` and `read` ARE `Runtime.evaluate`
+ * with a wrapper — and it is the module that produced the disclosure.
+ */
+const TAB_ACT_SUPPLIERS = ["cdp.js", "pageState.js"];
+
+/** `importer.js -> supplier.js` for every direct import in src/background. */
+function directImportEdges() {
+  const edges = [];
+  for (const file of readdirSync(BACKGROUND_DIR).filter((f) => f.endsWith(".js"))) {
+    const source = readFileSync(path.join(BACKGROUND_DIR, file), "utf8");
+    for (const supplier of TAB_ACT_SUPPLIERS) {
+      if (file === supplier) continue; // a module importing itself is not an edge
+      const spec = `\\./${supplier.replace(".", "\\.")}`;
+      const statement = new RegExp(
+        `^\\s*(?:import|export)\\s+([^;\'"]*?)\\s+from\\s+["']${spec}["']`,
+        "gm"
+      );
+      const dynamic = new RegExp(`^\\s*.*\\bimport\\(\\s*["']${spec}["']`, "gm");
+      for (const m of source.matchAll(statement))
+        edges.push({ importer: file, supplier, clause: m[1].trim() });
+      for (const _ of source.matchAll(dynamic))
+        edges.push({ importer: file, supplier, clause: "<dynamic import>" });
+    }
+  }
+  return edges;
+}
+
+const edgeKey = (e) => `${e.importer} -> ${e.supplier}`;
+
+/**
+ * Why each importer is allowed to bypass `deps`, and WHAT it may take.
+ *
+ * `clause` is the import clause verbatim, so a ruled importer that grows a
+ * SECOND tab-taking import fails here too. That distinction is the whole
+ * finding: pageState.js's edge was fine when `evaluate` had one caller and
+ * became a disclosure when it had two.
+ */
+const BYPASS_RULINGS = {
+  // The wiring itself. index.js is where `guardTabActs` is applied, so it must
+  // hold the raw surfaces to wrap them — an index.js that could not import
+  // cdp.js could not guard it.
+  "index.js -> cdp.js": {
+    clause: "{ cdp }",
+    why: "the wiring: it imports the raw surface in order to wrap it",
+  },
+  "index.js -> pageState.js": {
+    clause: "* as pageState",
+    why: "the wiring: wrapped once into guardedPageState and used for both routes",
+  },
+  // dispatch.js fills in real implementations for anything a caller did not
+  // inject, and merges rather than replaces, so an injected `deps.cdp` wins.
+  // In production index.js injects the guarded surfaces, so these defaults are
+  // reached only by tests that supply none.
+  "dispatch.js -> cdp.js": {
+    clause: "{ cdp as realCdp }",
+    why: "withDefaults: a fallback the real wiring always overrides by injection",
+  },
+  "dispatch.js -> pageState.js": {
+    clause: "* as realPageState",
+    why: "withDefaults: same fallback, same override",
+  },
+  // THE ONE THAT PRODUCED THE HIGH, stated plainly rather than softened.
+  // pageState.js reaches `Runtime.evaluate` through this import instead of
+  // through the frozen `cdp` surface, which is precisely why `capture` and
+  // `read` were invisible to a set checked against that surface, and why
+  // `page_read` returned a non-allowlisted page's text to the server.
+  //
+  // The import is not the fix's target and was never removed: pageState needs
+  // evaluate. What changed is that its two callers are now guarded AT THE
+  // WIRING, where index.js runs them through guardTabActs. So this edge is
+  // allowed on the condition that it takes `evaluate` AND NOTHING ELSE — a
+  // second tab-taking name here would be a second unguarded path, and the
+  // clause comparison below is what makes that condition executable rather
+  // than a hope.
+  "pageState.js -> cdp.js": {
+    clause: "{ evaluate }",
+    why: "the disclosure's origin: allowed only because its callers are guarded at the wiring, and only for evaluate",
+  },
+  // FOUND BY THIS CHECK ON ITS FIRST RUN, which is the point of writing it.
+  // socket.js reaches pageState for ONE call: `handleTabRemoved` invalidates
+  // the element map when a tab goes away. That is cleanup on a tab that is
+  // already gone — the same name ruled knowingly-unguarded on the pageState
+  // surface above, for the same reason: a refused invalidation strands a stale
+  // map, which is the exact failure the map's existence prevents. Routing it
+  // through `deps` would also be a cycle, since index.js imports socket.js to
+  // build them.
+  "socket.js -> pageState.js": {
+    clause: "* as pageState",
+    why: "handleTabRemoved's invalidate only: cleanup on a tab already gone, and never refusable",
+  },
+  // control.js is the kill switch. `detachAll` takes no tab id at all and
+  // `attachedTabIds` names none — neither is an act on a specific tab, which
+  // is the same reason both are ruled knowingly-unguarded on the cdp surface
+  // above. Routing them through `deps` would put the user's stop button behind
+  // the socket wiring, which is the thing most likely to be broken when
+  // someone reaches for it.
+  "control.js -> cdp.js": {
+    clause: "{ attachedTabIds, detachAll }",
+    why: "the kill switch: neither name takes a tab id, and it must work when the wiring does not",
+  },
+};
+
+describe("direct imports of the tab-act suppliers", () => {
+  // Guards the instrument. A regex that matched nothing would make every
+  // assertion below vacuously true — the quietest way for this to stop testing
+  // anything — and this check exists precisely because a silent pass is what
+  // the disclosure looked like.
+  it("finds the direct imports that are known to exist", () => {
+    const keys = directImportEdges().map(edgeKey);
+    expect(keys).toContain("pageState.js -> cdp.js");
+    expect(keys).toContain("control.js -> cdp.js");
+    expect(keys.length).toBeGreaterThanOrEqual(6);
+  });
+
+  // Does NOT match the four prose mentions of cdp.js in socket.js/index.js.
+  // If line-anchoring ever stops holding, this is where it shows.
+  // socket.js mentions cdp.js four times in prose and imports it zero times.
+  // A first draft of this test asserted socket.js was not an importer AT ALL,
+  // which is false — it imports pageState.js — and this check caught it. The
+  // narrower claim is the true one, and is what line-anchoring actually buys.
+  it("does not mistake a comment mentioning cdp.js for an import", () => {
+    const cdpImporters = directImportEdges()
+      .filter((e) => e.supplier === "cdp.js")
+      .map((e) => e.importer);
+    expect(cdpImporters).not.toContain("socket.js");
+  });
+
+  it("has a ruling for every direct import of a tab-act supplier", () => {
+    expect(directImportEdges().map(edgeKey).sort()).toEqual(
+      Object.keys(BYPASS_RULINGS).sort()
+    );
+  });
+
+  // The clause, not just the edge: a ruled importer that grows a second
+  // tab-taking import is the pageState shape repeating.
+  it("takes from each supplier exactly what its ruling allows", () => {
+    for (const edge of directImportEdges()) {
+      const ruling = BYPASS_RULINGS[edgeKey(edge)];
+      if (!ruling) continue; // owned by the test above
+      expect(edge.clause).toBe(ruling.clause);
+    }
+  });
+
+  // A ruling is judgement, and judgement about an import that no longer exists
+  // is a comment that reads as protection. Same both-directions discipline as
+  // the deps walk.
+  it("keeps no ruling for an import that no longer exists", () => {
+    const keys = new Set(directImportEdges().map(edgeKey));
+    for (const ruled of Object.keys(BYPASS_RULINGS)) expect(keys).toContain(ruled);
+  });
+
+  it("gives every ruling a stated reason", () => {
+    for (const [key, ruling] of Object.entries(BYPASS_RULINGS)) {
+      expect(typeof ruling.why).toBe("string");
+      expect(ruling.why.length).toBeGreaterThan(20);
+      expect(key).toMatch(/^[\w.]+\.js -> [\w.]+\.js$/);
+    }
   });
 });

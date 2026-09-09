@@ -28,8 +28,13 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const SOCK = "src/background/socket.js";
 const IDX = "src/background/index.js";
+// Targeted only by the `unruled` axis: the import check reads every file in
+// src/background, not only the two this harness otherwise mutates. Both MUST
+// be in `originals` below, or a crash mid-run leaves broken code in the tree.
+const PST = "src/background/pageState.js";
+const AUD = "src/background/auditLog.js";
 const originals = new Map(
-  [SOCK, IDX].map((file) => [file, readFileSync(file, "utf8")])
+  [SOCK, IDX, PST, AUD].map((file) => [file, readFileSync(file, "utf8")])
 );
 const restore = () => {
   for (const [file, text] of originals) writeFileSync(file, text);
@@ -488,6 +493,13 @@ mutate("unruled", "a new tab-taking dep OBJECT is added to the wiring", IDX,
 mutate("unruled", "a new tab-taking top-level FUNCTION dep is added", IDX,
   "  lookup: guardedPageState.lookup,",
   "  lookup: guardedPageState.lookup,\n  grabShot: async (tabId) => \"PNG\",");
+
+mutate("unruled", "a FIFTH module imports a tab act straight from cdp.js", AUD,
+  "export function getWriteFailure() {",
+  'import { click } from "./cdp.js";\nexport function getWriteFailure() {');
+mutate("unruled", "a ruled importer grows a SECOND tab-taking import", PST,
+  'import { evaluate } from "./cdp.js";',
+  'import { evaluate, click } from "./cdp.js";');
 
 // --- POSITIVE CONTROL -------------------------------------------------------
 // Must be KILLED. If this survives, the harness is not running these tests and
