@@ -135,6 +135,14 @@ export const getConfigurableSkills = (
     image: ScheduledJobsImage,
     mode: ["singleUserOnly"],
   },
+  "browser-companion": {
+    title: "Browser companion",
+    description:
+      "Let the agent click, type and read in your own Chrome through the AnythingLLM browser extension. Only the domains you allow in the extension can be touched.",
+    component: GenericSkillPanel,
+    skill: "browser-companion",
+    icon: Browser,
+  },
   "lark-cli": {
     title: "Lark",
     description:
