@@ -1,5 +1,12 @@
-// Sentinel for the single-user-mode key whose user_id is null. A real user id is
-// never null, so this cannot collide with one.
+// Sentinel for the single-user-mode key whose user_id is null.
+//
+// The invariant that protects this module is "every userId reaching it is an
+// integer or null" — true today (browser_extension_api_keys.user_id and
+// workspace_agent_invocations.user_id are both `Int?`), but nothing outside
+// this file guarantees it stays true. So the sentinel does not share a
+// keyspace with user keys: keyFor() prefixes every user key with "u:", which
+// no sentinel value can collide with whatever type a caller passes. `resolve`
+// additionally rejects a non-integer userId outright — see the check there.
 const SINGLE_USER_KEY = "__single_user__";
 
 const NOT_CONNECTED_ERROR = "Browser extension is not connected.";
@@ -8,19 +15,31 @@ const NO_USER_ERROR =
 const LEGACY_KEY_ERROR =
   "This browser extension key predates multi-user mode and is not tied to a user. Reconnect the extension to get a key bound to your account.";
 
-/** @type {Map<number|string, object>} one socket per user — see plan Global Constraints */
+// Per-process state. An AnythingLLM instance running more than one server
+// process does NOT share this map: the extension's WebSocket lands in one
+// process and an agent run may land in another, which reports the extension as
+// offline even though it is connected — an availability bug that presents as a
+// flaky feature. It fails closed, never open, so it is not a security hole.
+// Upgrade path when horizontal scaling is needed: move the map to a shared
+// store (Redis) and replace the socket object with a handle addressable across
+// processes, so `resolve` can return a proxy that forwards to the owning node.
+/** @type {Map<string, object>} one socket per user — see plan Global Constraints */
 const sockets = new Map();
 
+/** Namespaced so no userId of any type can collide with SINGLE_USER_KEY. */
 function keyFor(userId) {
-  return userId === null ? SINGLE_USER_KEY : userId;
+  return userId === null ? SINGLE_USER_KEY : `u:${userId}`;
 }
 
 /**
  * Bind a socket to a user, replacing whatever that user had connected before.
  * @param {{userId: number|null, socket: object}} args
  * @returns {{evicted: object|null}} the socket displaced by this one, if any
+ * @throws {TypeError} when `socket` is missing — storing a blank entry would
+ *   occupy the key and muddle the `evicted` result of the next register.
  */
 function register({ userId, socket }) {
+  if (!socket) throw new TypeError("register() requires a socket.");
   const key = keyFor(userId);
   const previous = sockets.get(key) ?? null;
   sockets.set(key, socket);
@@ -51,11 +70,30 @@ function connectedSocketFor(key) {
  * @param {{userId: number|null|undefined, multiUserMode: boolean}} args
  *   `userId === undefined` means the run has no user at all (e.g. a scheduled job).
  *   `userId === null` is the single-user-mode key.
+ *   `multiUserMode` is required and must be a real boolean — pass
+ *   `await SystemSettings.isMultiUserMode()`.
  * @returns {{socket: object|null, error: string|null}}
+ * @throws {TypeError} when `multiUserMode` is not a boolean.
  */
 function resolve({ userId, multiUserMode }) {
+  // Required, and required to be a boolean: `undefined` is falsy, so an omitted
+  // argument would otherwise silently open the legacy null key in multi-user
+  // mode. A throw rather than a returned error because a non-boolean flag is a
+  // programmer error, and the `error` channel carries text a human reads in an
+  // agent transcript.
+  if (typeof multiUserMode !== "boolean")
+    throw new TypeError(
+      "resolve() requires an explicit boolean multiUserMode — pass await SystemSettings.isMultiUserMode()."
+    );
+
   // No user on the run at all: never fall back to whoever happens to be online.
   if (userId === undefined) return { socket: null, error: NO_USER_ERROR };
+
+  // `resolve` is the lower-trust entry point — its userId is threaded out of an
+  // invocation record through code later tasks will extend, where a string or a
+  // re-parsed JSON field can appear. Fail closed, and leak no detail about why.
+  if (userId !== null && !Number.isInteger(userId))
+    return { socket: null, error: NOT_CONNECTED_ERROR };
 
   if (userId === null) {
     // A null key is legitimate only while the instance has no users to confuse
@@ -64,7 +102,7 @@ function resolve({ userId, multiUserMode }) {
     return connectedSocketFor(SINGLE_USER_KEY);
   }
 
-  return connectedSocketFor(userId);
+  return connectedSocketFor(keyFor(userId));
 }
 
 /** Test-only: clear module state between cases. */

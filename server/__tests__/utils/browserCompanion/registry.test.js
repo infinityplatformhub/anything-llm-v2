@@ -29,6 +29,26 @@ describe("browserCompanion registry", () => {
     expect(evicted).toBe(first);
   });
 
+  it("does not report an eviction when the same socket re-registers", () => {
+    const s = fakeSocket("same");
+    registry.register({ userId: 7, socket: s });
+    expect(registry.register({ userId: 7, socket: s }).evicted).toBeNull();
+  });
+
+  it("register refuses a missing socket rather than storing a blank entry", () => {
+    expect(() => registry.register({ userId: 7 })).toThrow(TypeError);
+    expect(registry.resolve({ userId: 7, multiUserMode: true }).socket).toBeNull();
+  });
+
+  it("unregister removes the socket when it is the one still registered", () => {
+    const s = fakeSocket("live");
+    registry.register({ userId: 7, socket: s });
+    registry.unregister({ userId: 7, socket: s });
+    const { socket, error } = registry.resolve({ userId: 7, multiUserMode: true });
+    expect(socket).toBeNull();
+    expect(error).toMatch(/not connected/i);
+  });
+
   it("unregister ignores a stale socket so it cannot drop the live one", () => {
     const stale = fakeSocket("stale");
     registry.register({ userId: 7, socket: stale });
@@ -58,5 +78,48 @@ describe("browserCompanion registry", () => {
     const { socket, error } = registry.resolve({ userId: undefined, multiUserMode: true });
     expect(socket).toBeNull();
     expect(error).toMatch(/no user/i);
+  });
+
+  // @edge — sentinel ต้องไม่อยู่ keyspace เดียวกับ userId ที่เป็น string
+  it("never lets a string userId reach the single-user socket", () => {
+    const solo = fakeSocket("solo");
+    registry.register({ userId: null, socket: solo });
+    const { socket, error } = registry.resolve({
+      userId: registry.SINGLE_USER_KEY,
+      multiUserMode: true,
+    });
+    expect(socket).toBeNull();
+    expect(error).toMatch(/not connected/i);
+  });
+
+  // @edge — ทิศกลับ: ลงทะเบียนด้วย sentinel string ต้องไม่ตกถึง single-user run
+  it("never hands a socket registered under the sentinel string to a null-user run", () => {
+    registry.register({
+      userId: registry.SINGLE_USER_KEY,
+      socket: fakeSocket("attacker"),
+    });
+    const { socket, error } = registry.resolve({ userId: null, multiUserMode: false });
+    expect(socket).toBeNull();
+    expect(error).toMatch(/not connected/i);
+  });
+
+  it("refuses a non-integer userId rather than looking it up", () => {
+    registry.register({ userId: 7, socket: fakeSocket("a") });
+    const { socket, error } = registry.resolve({ userId: "7", multiUserMode: true });
+    expect(socket).toBeNull();
+    expect(error).toMatch(/not connected/i);
+  });
+
+  // @edge — multiUserMode ที่หายไปต้องไม่ทำให้ gate ปิดเงียบๆ
+  it("throws when multiUserMode is omitted, so the gate cannot fail open", () => {
+    registry.register({ userId: null, socket: fakeSocket("legacy") });
+    expect(() => registry.resolve({ userId: null })).toThrow(TypeError);
+  });
+
+  it("throws when multiUserMode is a non-boolean falsy value", () => {
+    registry.register({ userId: null, socket: fakeSocket("legacy") });
+    expect(() => registry.resolve({ userId: null, multiUserMode: 0 })).toThrow(
+      /explicit boolean multiUserMode/i
+    );
   });
 });
