@@ -451,8 +451,14 @@ mutate("toctou", "the check runs but its verdict is discarded", SOCK,
   "  if (createdTabIds.has(tabId)) return;\n  throw new Error(",
   "  if (true) return;\n  throw new Error(");
 mutate("toctou", "detach is wrapped too, so a closing tab keeps its attachment", SOCK,
-  'if (typeof fn !== "function" || name === "detach") {',
-  'if (typeof fn !== "function") {');
+  '  "fetch",\n  "closeTab",\n]);',
+  '  "fetch",\n  "closeTab",\n  "detach",\n]);');
+mutate("toctou", "back to exclusion, so detachAll is wrapped and can never run", SOCK,
+  'if (typeof fn !== "function" || !TAB_ID_ACTS.has(name)) {',
+  'if (typeof fn !== "function" || name === "detach") {');
+mutate("toctou", "the guarded set is empty, so nothing is checked", SOCK,
+  'const TAB_ID_ACTS = new Set([\n  "attach",',
+  'const TAB_ID_ACTS = new Set([\n  "__none__",\n  "attach_",');
 mutate("toctou", "the check is awaited, reopening the window it closes", SOCK,
   "    guarded[name] = (tabId, ...rest) => {",
   "    guarded[name] = async (tabId, ...rest) => {\n      await Promise.resolve();");

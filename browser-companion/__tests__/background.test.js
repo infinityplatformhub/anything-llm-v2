@@ -266,6 +266,60 @@ describe("the dependency bundle handed to dispatch", () => {
     expect(deps.cdp.detach).toBe(cdp.detach);
   });
 
+  // @edge — `detachAll` takes NO arguments, so wrapping it made
+  // `assertStillOwned(undefined)` run, which is false for every state of
+  // `createdTabIds` — the guarded copy could never execute at all. That is the
+  // kill switch's sweep, and it survived only because control.js imports
+  // detachAll straight from cdp.js rather than through deps.cdp. One import
+  // style away from the user's stop button always throwing.
+  it("leaves detachAll unwrapped, and it actually runs", async () => {
+    expect(deps.cdp.detachAll).toBe(cdp.detachAll);
+    // Not just identity: it must be callable, which is the property that was
+    // broken. Identity alone would pass on a wrapper that happened to be the
+    // same object.
+    await expect(deps.cdp.detachAll()).resolves.toBeUndefined();
+  });
+
+  // The kill switch's own path, asserted end to end: it must sweep whatever
+  // attachments exist without depending on how it imports detachAll.
+  it("lets the kill switch sweep attachments", async () => {
+    const control = await import("../src/background/control.js");
+    // `attachedTabIds` is not on the frozen `cdp` surface, so it is imported
+    // directly — the same way control.js reaches `detachAll`, which is the
+    // import style this whole finding turned on.
+    const { attachedTabIds } = await import("../src/background/cdp.js");
+
+    await cdp.attach(4242);
+    expect(attachedTabIds()).toContain(4242);
+
+    // `killSwitch`, not `setPaused` — the sweep is what makes the stop button a
+    // stop button. A pause alone leaves every tab attached, with Chrome's
+    // debugging bar still up, which reads to the user as "it did not stop".
+    const result = await control.killSwitch();
+
+    expect(attachedTabIds()).toEqual([]);
+    expect(result.detached).toBe(1);
+    expect(result.paused).toBe(true);
+    await control.setPaused(false);
+  });
+
+  // The set and the real surface must agree. A set that drifts from `cdp` is
+  // exactly how detachAll got wrapped: every name here has to exist on the
+  // surface, and every surface method that is NOT here is knowingly unguarded.
+  it("guards exactly the cdp methods that take a tab id", () => {
+    const surface = Object.keys(cdp);
+    const guardedHere = [...socket.TAB_ID_ACTS].filter((n) => n !== "closeTab");
+    for (const name of guardedHere) expect(surface).toContain(name);
+
+    // Everything on the surface is either guarded or knowingly exempt. A new
+    // cdp method fails this until someone decides which it is.
+    const knowinglyUnguarded = ["detach", "detachAll"];
+    for (const name of surface)
+      expect(
+        socket.TAB_ID_ACTS.has(name) || knowinglyUnguarded.includes(name)
+      ).toBe(true);
+  });
+
   // THE ACCESSOR CONTRACT, stated executably here because task 7 exports none.
   //
   // page_close's rule — the tab `agentTabUrl` reports must be the tab

@@ -317,6 +317,32 @@ export function assertStillOwned(tabId) {
 }
 
 /**
+ * The methods whose FIRST ARGUMENT is a tab id, and which therefore act on a
+ * specific tab. Exported so a test can hold it against the real `cdp` surface.
+ *
+ * `detach` is absent on purpose, and `detachAll` and `attachedTabIds` are
+ * absent because they name no tab. See `guardTabActs` for both reasons and for
+ * what a method missing from this set gets.
+ *
+ * `evaluate` is NOT here even though it takes a tab id first: `cdp.js` exports
+ * it, but the frozen `cdp` surface that reaches `deps` does not carry it, so
+ * nothing this module wraps can reach it. Listing it would have been a name
+ * that guards nothing — caught by the test that holds this set against the real
+ * surface, which is the point of having that test rather than trusting the
+ * list. Its one caller, `fetchInPage`, IS on the surface and IS guarded.
+ */
+const TAB_ID_ACTS = new Set([
+  "attach",
+  "click",
+  "type",
+  "key",
+  "scroll",
+  "navigate",
+  "fetch",
+  "closeTab",
+]);
+
+/**
  * Wrap every tab-taking method so it re-checks ownership at the moment it acts.
  *
  * THE CHOKE POINT IS WHERE THE ACT HAPPENS, NOT WHERE THE ID IS CAPTURED, and
@@ -333,21 +359,49 @@ export function assertStillOwned(tabId) {
  * no await in between, at every current call site AND at every future one,
  * without dispatch.js having to remember anything.
  *
- * `detach` is deliberately NOT wrapped. It is the one act that is safe on a
- * tab we no longer own and unsafe to skip: `page_close` detaches before
- * closing, and refusing the detach would leave a debugger attachment behind on
- * a tab that is going away. It also cannot harm a recycled tab — detaching
- * from a tab nobody attached is a no-op inside `cdp.detach`, which returns
- * early when the id is not in its own `attached` set. The CLOSE that follows it
- * is wrapped, which is the act that actually destroys something.
+ * DRIVEN BY AN EXPLICIT SET, NOT BY EXCLUSION. An earlier version wrapped
+ * everything except one name it remembered (`detach`), which meant "every
+ * method is a tab act unless I thought of it" — and `detachAll` was not thought
+ * of. It takes NO arguments, so the wrapper called `assertStillOwned(undefined)`,
+ * which is false for every state of `createdTabIds`: the guarded copy could
+ * never run at all. That is the KILL SWITCH's sweep, and it survived only
+ * because `control.js` imports `detachAll` straight from `cdp.js` rather than
+ * through `deps.cdp` — one import style away from the user's stop button always
+ * throwing, and invisible to the mutation harness because nothing calls the
+ * guarded copy.
  *
- * @param {object} tabTakers methods whose first argument is a tab id
- * @returns {object} the same shape, ownership-checked
+ * WHAT A FUTURE `cdp` METHOD GETS BY DEFAULT: passed through UNWRAPPED. That is
+ * the right default only because of what the two failure modes cost. A method
+ * that takes a tab id and is missing from this set loses one layer of a
+ * defence-in-depth check while the gate, the ownership filter and the listener
+ * all still stand. A method that takes something else and is wrapped anyway is
+ * DEAD — it throws on every call, as `detachAll` did, and the failure hides
+ * until whatever calls it changes. So the default is the recoverable error
+ * rather than the silent one. Adding a tab-taking method means adding its name
+ * here, and `__tests__/socket.test.js` asserts this set against the real `cdp`
+ * surface so the omission is caught rather than trusted to a reader.
+ *
+ * (An argument-shape check — "wrap it if it has at least one parameter" — was
+ * considered and rejected: `fn.length` lies for rest and default parameters, so
+ * it would silently stop guarding a real act the day someone writes
+ * `click(tabId, x, y, options = {})`. A name is checkable; an arity is not.)
+ *
+ * `detach` is IN the surface but deliberately absent from the set. It is the
+ * one act that is safe on a tab we no longer own and unsafe to skip:
+ * `page_close` detaches before closing, and refusing the detach would leave a
+ * debugger attachment behind on a tab that is going away. It also cannot harm a
+ * recycled tab — detaching from a tab nobody attached is a no-op inside
+ * `cdp.detach`, which returns early when the id is not in its own `attached`
+ * set. The CLOSE that follows it is wrapped, which is the act that actually
+ * destroys something.
+ *
+ * @param {object} tabTakers methods to guard, keyed by name
+ * @returns {object} the same shape, with the tab-taking acts ownership-checked
  */
 export function guardTabActs(tabTakers) {
   const guarded = {};
   for (const [name, fn] of Object.entries(tabTakers)) {
-    if (typeof fn !== "function" || name === "detach") {
+    if (typeof fn !== "function" || !TAB_ID_ACTS.has(name)) {
       guarded[name] = fn;
       continue;
     }
@@ -1452,4 +1506,8 @@ export {
   CLOSE_UNAUTHORIZED,
   CLOSE_FORBIDDEN,
   CLOSE_EVICTED,
+  // Exported for one assertion: that this set and the real `cdp` surface agree
+  // about which methods take a tab id. A set that drifts from the surface is
+  // how `detachAll` got wrapped and became unrunnable.
+  TAB_ID_ACTS,
 };
