@@ -460,6 +460,59 @@ function enqueueCommand(run) {
 }
 
 /**
+ * How much of a thrown message may be echoed back to the server.
+ *
+ * The same bound `dispatch.js` applies for the same reason: an error message
+ * can carry page-derived or server-derived text, so it is untrusted by origin
+ * even though it arrives as an exception. Applied again here because THIS path
+ * is the one that runs when dispatch's own bounding did not — the throw escaped
+ * it.
+ */
+const MAX_ECHOED_CHARS = 2048;
+
+/**
+ * Turn a rejected command into the reply the server is waiting for.
+ *
+ * WHY `ok: false` AND NOT A SUCCESS. The audit log exists so a user can later
+ * see what the agent did in their browser. A command whose audit write failed
+ * is a command the extension cannot vouch for, so reporting it as a plain
+ * success would be the extension asserting something it does not know. The
+ * agent reasons over these strings and acts on them.
+ *
+ * WHY THE OUTCOME IS CALLED UNKNOWN, not "failed". By the time `handle` records
+ * anything the action has usually already happened — the click landed, the page
+ * navigated. Telling the agent it FAILED invites a retry, and retrying a click
+ * that already landed clicks twice. "May or may not have taken effect" is the
+ * only honest thing this layer can say, and it is what stops the retry.
+ *
+ * @returns {object|null} the reply, or null when the frame carried no
+ *   requestId. The server keys its pending table on requestId and
+ *   `pending.get(undefined)` is a miss, so a reply built from an id-less frame
+ *   settles nothing and is noise on the wire.
+ */
+function replyForFailedCommand(message, error) {
+  const requestId = message?.requestId;
+  if (requestId === undefined || requestId === null) {
+    console.error(
+      "[AnythingLLM Companion] a command with no requestId failed, so there is nobody to answer:",
+      error
+    );
+    return null;
+  }
+  const reason = String(error?.message ?? error).slice(0, MAX_ECHOED_CHARS);
+  return {
+    requestId,
+    ok: false,
+    error: `The browser extension could not complete "${String(
+      message?.cmd ?? "unknown"
+    ).slice(
+      0,
+      MAX_ECHOED_CHARS
+    )}" and could not record it in the audit log: ${reason}. The action may or may not have taken effect — check the page with page_state before retrying, rather than repeating the command.`,
+  };
+}
+
+/**
  * Write one frame, only if the socket can still carry it.
  *
  * The browser `WebSocket` does NOT throw when `send` is called on a CLOSING or
@@ -629,7 +682,26 @@ export async function connect({ apiBase, apiKey, onCommand } = {}) {
       // One command at a time, so this reset cannot land between another
       // command's gate check and its action.
       beginCommandScope();
-      const result = await onCommand(message);
+
+      // `handle` is DOCUMENTED never to reject, and as of de8cf157 it wraps
+      // every `auditLog.record` call so a full store cannot break that. This
+      // does not depend on either fact. The socket is the last line: a
+      // rejection escaping here would take the connection down and every
+      // command in flight with it, so the guarantee has to hold on this side
+      // even if a future edit to dispatch.js reintroduces a rejecting path.
+      //
+      // Surviving it is not sufficient. Answering NOTHING leaves the server
+      // waiting out its full BROWSER_COMPANION_TIMEOUT_MS for a reply that can
+      // never arrive, and it then reports "timed out after 20000ms" — which
+      // reads as a slow page when the truth is that the extension broke. So a
+      // rejection becomes a reply.
+      let result;
+      try {
+        result = await onCommand(message);
+      } catch (error) {
+        result = replyForFailedCommand(message, error);
+        if (!result) return; // No requestId: see `replyForFailedCommand`.
+      }
       // `ws`, never the module-level `socket`: if a reconnect replaced it while
       // this command ran, the reply must NOT go out on the new socket. The
       // server matches a reply to its command by socket identity and would log

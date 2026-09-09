@@ -286,6 +286,32 @@ mutate("wiring", "agentTabUrl and ensureAgentTab come from different sources", I
   "  ensureAgentTab: socket.ensureAgentTab,",
   "  ensureAgentTab: async () => (await chrome.tabs.create({ url: \"about:blank\" })).id,");
 
+// --- axis: a rejecting command handler (defect 2) --------------------------
+mutate("reject", "a rejecting handler kills the socket again", SOCK,
+  "      } catch (error) {\n        result = replyForFailedCommand(message, error);",
+  "      } catch (error) {\n        throw error;\n        result = replyForFailedCommand(message, error);");
+mutate("reject", "a rejection is answered as a success", SOCK,
+  "    requestId,\n    ok: false,\n    error: `The browser extension could not complete",
+  "    requestId,\n    ok: true,\n    error: `The browser extension could not complete");
+mutate("reject", "a rejection is answered with no requestId", SOCK,
+  "  return {\n    requestId,\n    ok: false,",
+  "  return {\n    requestId: undefined,\n    ok: false,");
+mutate("reject", "an id-less frame is answered anyway", SOCK,
+  "  if (requestId === undefined || requestId === null) {",
+  "  if (false) {");
+mutate("reject", "the reply drops the unknown-outcome warning", SOCK,
+  "The action may or may not have taken effect",
+  "The action failed");
+mutate("reject", "an untrusted throw message is echoed unbounded", SOCK,
+  "String(error?.message ?? error).slice(0, MAX_ECHOED_CHARS)",
+  "String(error?.message ?? error)");
+
+// --- axis: the derived accessor contract (defect 1) ------------------------
+mutate("contract", "listAgentTabs dropped, as the brief specified", IDX,
+  "  listAgentTabs: socket.listAgentTabs,\n", "");
+mutate("contract", "switchToTab dropped, as the brief specified", IDX,
+  "  switchToTab: socket.switchToTab,\n", "");
+
 // --- POSITIVE CONTROL -------------------------------------------------------
 // Must be KILLED. If this survives, the harness is not running these tests and
 // every verdict above is worthless.

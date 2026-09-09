@@ -1163,7 +1163,137 @@ describe("commands on the wire", () => {
     ws.deliver({ requestId: "b", cmd: "state" });
     await socket.__commandQueue();
     expect(seen).toEqual(["a", "b"]);
-    expect(ws.frames().map((f) => f.requestId)).toEqual(["b"]);
+    expect(ws.frames().map((f) => f.requestId)).toContain("b");
+  });
+
+  // @edge — `handle` is DOCUMENTED never to reject, and as of de8cf157 it wraps
+  // every `auditLog.record` call so a full store cannot break that. This case
+  // does not trust either fact: the socket is the last line, and it must hold
+  // even if a future edit to dispatch.js reintroduces a rejecting path.
+  //
+  // Surviving the rejection is not enough on its own. Answering NOTHING leaves
+  // the server waiting out its full BROWSER_COMPANION_TIMEOUT_MS for a reply
+  // that can never arrive, and it then reports "timed out after 20000ms" — which
+  // reads as a slow page when the truth is that the extension broke. So a
+  // rejecting handler must produce a REPLY, carrying the requestId so the
+  // server's correlation table can settle that command rather than every
+  // command.
+  it("answers the server when the command handler rejects", async () => {
+    const { ws } = await connectAndOpen({
+      onCommand: async () => {
+        throw new Error("QUOTA_BYTES quota exceeded");
+      },
+    });
+    ws.deliver({ requestId: "r1", cmd: "click", id: 3 });
+    await socket.__commandQueue();
+
+    expect(ws.frames()).toHaveLength(1);
+    const answer = ws.frames()[0];
+    expect(answer.requestId).toBe("r1");
+    // NOT a success. The agent must not read "the click happened" from a
+    // command whose outcome the extension cannot vouch for.
+    expect(answer.ok).toBe(false);
+    expect(answer.error).toMatch(/QUOTA_BYTES quota exceeded/);
+    // Said in words the agent can act on, since the agent reasons over this
+    // string: it has to learn the action's outcome is UNKNOWN, not merely that
+    // something failed — a retry of a click that already landed clicks twice.
+    expect(answer.error).toMatch(/may or may not/i);
+    expect(socket.state().status).toBe("online");
+  });
+
+  it("keeps the connection and the queue alive after a rejecting handler", async () => {
+    const { ws } = await connectAndOpen({
+      onCommand: async (command) => {
+        if (command.requestId === "a") throw new Error("audit write failed");
+        return { requestId: command.requestId, ok: true };
+      },
+    });
+    ws.deliver({ requestId: "a", cmd: "state" });
+    await socket.__commandQueue();
+    ws.deliver({ requestId: "b", cmd: "state" });
+    await socket.__commandQueue();
+    expect(ws.frames().map((f) => f.requestId)).toEqual(["a", "b"]);
+    expect(ws.frames()[0].ok).toBe(false);
+    expect(ws.frames()[1].ok).toBe(true);
+    expect(socket.state().status).toBe("online");
+  });
+
+  // @edge — a SURVIVOR the harness found: the module bounds the echoed throw
+  // message and nothing tested the bound. An error message can carry
+  // page-derived or server-derived text, so it is untrusted by origin even
+  // though it arrives as an exception — and this path runs precisely when
+  // dispatch.js's own bounding did NOT, because the throw escaped it. A 5MB
+  // message would otherwise be written straight back onto the wire.
+  it("bounds an untrusted throw message instead of echoing it whole", async () => {
+    const { ws } = await connectAndOpen({
+      onCommand: async () => {
+        throw new Error("x".repeat(200_000));
+      },
+    });
+    ws.deliver({ requestId: "r1", cmd: "state" });
+    await socket.__commandQueue();
+    const answer = ws.frames()[0];
+    expect(answer.ok).toBe(false);
+    // Bounded, but still long enough to carry a real message.
+    expect(answer.error.length).toBeLessThan(5_000);
+    expect(answer.error.length).toBeGreaterThan(100);
+  });
+
+  // @edge — also bounded: `cmd` is server-controlled and reaches this reply on
+  // a path where no check has passed.
+  it("bounds a server-controlled cmd in the failure reply", async () => {
+    const { ws } = await connectAndOpen({
+      onCommand: async () => {
+        throw new Error("broke");
+      },
+    });
+    ws.deliver({ requestId: "r1", cmd: "z".repeat(200_000) });
+    await socket.__commandQueue();
+    expect(ws.frames()[0].error.length).toBeLessThan(10_000);
+  });
+
+  // @edge — the queue's own last-resort catch, which the harness showed was no
+  // longer reachable through `onCommand` once the inner try/catch landed. It IS
+  // still reachable: an error object whose `message` getter throws makes the
+  // reply BUILDER throw. That is not contrived — an error's message can be
+  // page-derived, and a hostile or merely exotic object reaches here as data.
+  // The socket must survive it and keep serving.
+  it("survives an error object that throws while being read", async () => {
+    const hostile = {
+      get message() {
+        throw new Error("message getter exploded");
+      },
+    };
+    const { ws } = await connectAndOpen({
+      onCommand: async (command) => {
+        if (command.requestId === "a") throw hostile;
+        return { requestId: command.requestId, ok: true };
+      },
+    });
+    ws.deliver({ requestId: "a", cmd: "state" });
+    await socket.__commandQueue();
+    expect(socket.state().status).toBe("online");
+
+    // And the connection still serves the next command.
+    ws.deliver({ requestId: "b", cmd: "state" });
+    await socket.__commandQueue();
+    expect(ws.frames().map((f) => f.requestId)).toContain("b");
+  });
+
+  // @edge — a rejection with no requestId must NOT be answered with an
+  // undefined one. The server keys its pending table on requestId, and
+  // `pending.get(undefined)` is a miss that drops the frame silently — so a
+  // reply built from a frame that carried no id is noise on the wire at best.
+  it("does not send a reply for a rejected frame that carried no requestId", async () => {
+    const { ws } = await connectAndOpen({
+      onCommand: async () => {
+        throw new Error("broke");
+      },
+    });
+    ws.deliver({ cmd: "state" });
+    await socket.__commandQueue();
+    expect(ws.frames()).toHaveLength(0);
+    expect(socket.state().status).toBe("online");
   });
 
   // @edge — THE CLOSE-BETWEEN-SEND-AND-REPLY CASE. A browser WebSocket does not
