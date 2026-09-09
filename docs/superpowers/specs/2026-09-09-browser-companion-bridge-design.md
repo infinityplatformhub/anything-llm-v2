@@ -87,9 +87,34 @@ extension → server:
 | `page_switch` | สลับแท็บตาม URL substring |
 | `page_navigate` | เปิด URL |
 | `page_close` | ปิดแท็บ |
+| `page_fetch` | ยิง GET จากในบริบทแท็บที่ login อยู่ ส่ง body กลับ |
 
 agent ไม่เห็นพิกเซล — เห็น `[id]` ที่ `page_state` ส่งมา นี่เป็นเหตุผลที่ `page_state` ต้องถูกเรียกก่อน
 `page_click` เสมอ (state เก่า = กดผิดปุ่ม)
+
+### ทำไมต้องมี `page_fetch`
+
+แอปที่วาดด้วย canvas อ่านจาก DOM ไม่ได้ — **Google Sheets เป็นตัวอย่างที่ชัดที่สุด**: ตารางทั้งผืนวาดบน
+canvas ไม่ใช่ DOM element `page_read` จะได้แค่ toolbar กับชื่อชีต ตัวเลขในเซลล์ไม่มีใน DOM เลย
+
+ทางที่ใช้ได้คือยิง export endpoint จากในแท็บที่ผู้ใช้ login อยู่:
+
+```
+https://docs.google.com/spreadsheets/d/<id>/export?format=csv&gid=<gid>
+```
+
+cookie ของผู้ใช้ผ่าน permission ให้เอง — ได้ CSV ทั้งชีต แม่นกว่าอ่านจอ และครอบชีต private ที่
+`web-scraping` เดิมทำไม่ได้ (ไม่มี cookie ก็เจอหน้า login)
+
+กลุ่มอื่นที่ `page_fetch` แก้ด้วย: API ภายในหลัง login · endpoint export ของ SaaS · JSON API ที่ต้องมี session
+
+**ข้อจำกัดที่มาพร้อมกัน:** ยิงในบริบทของแท็บนั้น จึงต้อง **same-origin กับแท็บที่เปิดอยู่** — ยิง Sheets
+จากแท็บ LinkedIn ไม่ได้ agent ต้อง `page_navigate` ไปโดเมนนั้นก่อน และโดเมนนั้นต้องอยู่ใน allowlist
+เหมือนทุก tool
+
+**เหตุผลที่ต้องผ่าน allowlist ด่านเดียวกัน ไม่มีข้อยกเว้น:** `page_fetch` เป็น tool ที่ดึงข้อมูลออกได้เยอะที่สุด
+ในชุดนี้ — GET เดียวได้ทั้งสเปรดชีต ถ้าหลุด allowlist ไปได้ = อ่านทุกอย่างที่ session ผู้ใช้เข้าถึงได้
+จำกัดเป็น GET เท่านั้น ไม่รับ POST/PUT/DELETE เพราะการ *เขียน* ต้องมาจาก `page_click` ที่คนเห็นว่าเกิดอะไรขึ้น
 
 ## ความปลอดภัย — ไม่ใช่ optional
 
@@ -128,18 +153,19 @@ security review (Opus)** ไม่ใช่แค่ final review
 | 1 | WS route + socket registry + auth | `server/endpoints/browserExtension.js` | — |
 | 2 | wire protocol + requestId correlation (ทั้งสองฝั่ง) | server + extension bg | 1 |
 | 3 | extension: `debugger` permission + attach/detach + allowlist gate | `browser-extension/` manifest + bg | — |
-| 4 | extension: CDP input (click/type/key/scroll) + human delay | `browser-extension/` bg | 3 |
+| 4 | extension: CDP input (click/type/key/scroll) + `page_fetch` (GET only) + human delay | `browser-extension/` bg | 3 |
 | 5 | extension: `page_state` element map + `[id]` | `browser-extension/` bg | 3 |
 | 6 | extension popup UI 4 แท็บ (ตาม mockup) + kill switch + audit log | `browser-extension/src/` | 3 |
-| 7 | agent plugin 10 tool | `server/utils/agents/aibitat/plugins/browser-companion.js` | 1, 2 |
+| 7 | agent plugin 11 tool | `server/utils/agents/aibitat/plugins/browser-companion.js` | 1, 2 |
 | 8 | keepalive + reconnect (MV3 service worker) | `browser-extension/` bg | 1, 3 |
 
 ## หลักฐานที่จะพิสูจน์ว่างานเสร็จ
 
-evidence contract: unit test ของ allowlist gate + wire protocol correlation ต้องเขียว
+evidence contract: unit test ของ allowlist gate + wire protocol correlation + `page_fetch` ปฏิเสธ
+method ที่ไม่ใช่ GET ต้องเขียว
 เพราะ contract ที่ต้อง attach Chrome จริงไม่สามารถรันใน gate อัตโนมัติได้ (ต้องมีคน login อยู่)
 
 E2E headed (`gate-e2e`) ครอบ popup UI — allowlist toggle, kill switch, pause/resume, `@edge` = โดเมนไม่อยู่ใน
-allowlist ต้องถูก deny
+allowlist ต้องถูก deny (ครอบ `page_fetch` ด้วย ไม่ใช่แค่ `page_click`)
 
 **การพิสูจน์ว่า antibot ไม่จับ ต้องมีคนดูจริง** — ไม่ใช่สิ่งที่ gate ตรวจได้ ต้องสาธิตให้ผู้ใช้เห็นก่อนปิด issue
