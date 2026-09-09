@@ -15,6 +15,9 @@ globalThis.chrome = {
 };
 
 const pageState = await import("../src/background/pageState.js");
+// Imported here rather than inside the describe below: a `describe` callback is
+// not async, so a top-level-await import inside one is a syntax error.
+const { handle } = await import("../src/background/dispatch.js");
 
 // WHAT IS DOUBLED: only `chrome.debugger.sendCommand`, which returns whatever
 // `evaluateResult` holds — so these tests exercise the REAL map bookkeeping
@@ -117,6 +120,50 @@ describe("the element map", () => {
     evaluateResult = undefined;
     await expect(pageState.capture(1)).resolves.toBeUndefined();
     await expect(pageState.lookup(1, 1)).resolves.toBeNull();
+  });
+});
+
+// HIGH 2 from review, at the level that matters: the REAL cdp.js and
+// pageState.js wired into the REAL handle, against a chrome.debugger that
+// resolves the failure shapes instead of rejecting. Before the fix this
+// reported ok:true with data:null for state/read/fetch and a fabricated
+// {scrolled:"down"} for scroll — the agent is told the command succeeded when
+// nothing happened.
+describe("a broken debugger must not produce a fabricated success", () => {
+  const realDeps = (over = {}) => ({
+    loadAllowlist: async () => ["www.linkedin.com"],
+    record: async () => {},
+    agentTabUrl: async () => "https://www.linkedin.com/feed/",
+    ensureAgentTab: async () => 391,
+    listAgentTabs: async () => [],
+    switchToTab: async () => {},
+    closeTab: async () => {},
+    // cdp and pageState deliberately NOT injected: the real modules are used,
+    // so the failure has to travel the real path to reach the reply.
+    lookup: async () => ({ x: 10, y: 20 }),
+    ...over,
+  });
+
+  it.each([
+    ["resolves undefined", async () => undefined],
+    [
+      "resolves a CDP error envelope",
+      async () => ({ error: { code: -32000, message: "Target closed." } }),
+    ],
+  ])("reports ok:false for every page command when sendCommand %s", async (_l, impl) => {
+    globalThis.chrome.debugger.sendCommand = impl;
+    for (const frame of [
+      { cmd: "state" },
+      { cmd: "read" },
+      { cmd: "scroll", direction: "down" },
+      { cmd: "key", key: "Enter" },
+      { cmd: "click", id: 1 },
+      { cmd: "fetch", url: "https://www.linkedin.com/api/x" },
+    ]) {
+      const out = await handle({ requestId: `r_${frame.cmd}`, ...frame }, realDeps());
+      expect([frame.cmd, out.ok]).toEqual([frame.cmd, false]);
+      expect(out.error).toMatch(/CDP /);
+    }
   });
 });
 

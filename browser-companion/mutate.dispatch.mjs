@@ -13,11 +13,22 @@
  *   2. A run with no parseable summary is an ERROR, never a pass or a kill. A
  *      mutation that crashes the module must not read as "no test noticed".
  *
- * SCOPE, stated because it is a deliberate narrowing: this runs only this
- * task's three test files. The full suite was red in this working tree from
- * another agent's in-progress edits to auditLog.js — with those included every
- * mutation would report KILLED and the run would prove nothing, which is the
- * exact failure mode the negative control exists to catch.
+ * SCOPE: the whole extension suite. It ran only this task's three files while
+ * the tree was transiently red from another agent's in-flight edits; that is
+ * fixed, and running everything is what makes the KILLED-AT-LOAD baseline
+ * meaningful.
+ *
+ * Three instrument bugs have been found in mutation harnesses on this branch,
+ * all guarded against here:
+ *   1. jest writes its summary to STDERR — execFileSync drops it on exit 0 and
+ *      reports every real survivor as an error. Hence spawnSync, both streams.
+ *   2. A mutation that makes a suite fail to IMPORT yields `N passed, N total`
+ *      with no failure count, because those tests never ran. Read naively that
+ *      scores the loudest possible kill as a survivor. Hence baselineTotal.
+ *   3. A textual change that is semantically inert (a duplicate object key,
+ *      where the later one wins) reports as a survivor while testing nothing.
+ *      No automation catches that; it is why each survivor below is argued
+ *      individually rather than counted.
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -26,11 +37,11 @@ const DI = "src/background/dispatch.js";
 const CD = "src/background/cdp.js";
 const PS = "src/background/pageState.js";
 const FILES = [DI, CD, PS];
-const TESTS = [
-  "__tests__/dispatch.test.js",
-  "__tests__/cdp.test.js",
-  "__tests__/pageState.test.js",
-];
+// The WHOLE suite, not just this task's three files. Two reasons: the other
+// modules' tests are green again (the earlier narrowing was for a tree that was
+// transiently red from another agent's in-flight edits), and the
+// KILLED-AT-LOAD baseline is only meaningful against a stable total.
+const TESTS = [];
 
 const originals = new Map(FILES.map((f) => [f, readFileSync(f, "utf8")]));
 const restore = () => {
@@ -64,7 +75,37 @@ function runSuite() {
   if (!summary) return { failed: NaN, passed: NaN, raw: output };
   const failed = Number(summary[1].match(/(\d+) failed/)?.[1] ?? 0);
   const passed = Number(summary[1].match(/(\d+) passed/)?.[1] ?? 0);
-  return { failed, passed };
+  const total = Number(summary[1].match(/(\d+) total/)?.[1] ?? 0);
+  return { failed, passed, total };
+}
+
+// The baseline this harness measures against, captured from the pristine tree
+// before any mutation runs.
+//
+// WHY A COUNT AND NOT JUST `failed > 0` — the review's instrument lesson, and
+// the sixth harness bug on this branch. A mutation that makes a suite fail to
+// IMPORT produces `Tests: N passed, N total` with NO failure count, because the
+// tests in that file never ran at all. Read naively that is a clean pass, so a
+// module-load throw — the LOUDEST possible kill — scores as "survived", which
+// is precisely backwards. Comparing the total against the baseline catches it:
+// any shortfall means a suite did not run.
+//
+// A suite that does not run is not a suite that passed.
+let baselineTotal = 0;
+
+// Captured FIRST, from the pristine tree. Doubles as an up-front negative
+// control: if the unmutated suite is not green, every verdict below is
+// meaningless and there is no point running them.
+{
+  const pristine = runSuite();
+  if (pristine.failed !== 0 || !pristine.total) {
+    console.error(
+      `*** HARNESS INVALID: the unmutated suite is not green (${pristine.failed} failed, ${pristine.total} total). Fix that before reading any mutation verdict.`
+    );
+    process.exit(1);
+  }
+  baselineTotal = pristine.total;
+  console.log(`baseline: ${baselineTotal} tests passing\n`);
 }
 
 const results = [];
@@ -79,12 +120,17 @@ function mutate(axis, label, file, from, to) {
   if (mutated === source) throw new Error(`mutation "${label}" is a no-op`);
   writeFileSync(file, mutated);
 
-  const { failed, passed, raw } = runSuite();
+  const { failed, passed, total, raw } = runSuite();
   restore();
 
   let verdict;
   if (Number.isNaN(failed)) verdict = `ERROR (no summary)\n${raw?.slice(-500)}`;
   else if (failed > 0) verdict = `KILLED by ${failed}`;
+  // A shortfall against the baseline means a suite never ran — a module-load
+  // throw. That is a kill, and reporting it as a survivor would invert the
+  // loudest signal this harness can receive. See `baselineTotal`.
+  else if (baselineTotal && total < baselineTotal)
+    verdict = `KILLED-AT-LOAD (${baselineTotal - total} tests never ran)`;
   else verdict = "*** SURVIVOR ***";
   results.push({ axis, label, verdict, failed, passed });
   console.log(`${verdict.padEnd(18)} [${axis}] ${label}`);
@@ -102,14 +148,17 @@ mutate("gate-path", "gate checks only the last url", DI,
   "for (const url of urls) {", "for (const url of urls.slice(-1)) {");
 mutate("gate-path", "empty resolver result passes vacuously", DI,
   "if (!Array.isArray(urls) || urls.length === 0) {", "if (false) {");
-// DECLARED EQUIVALENT (survives, and should). Every resolver in GATE_RESOLVERS
-// returns an array today, so dropping the Array.isArray half changes nothing
-// observable — the guard is defensive, for a resolver that does not exist yet.
-// A test asserts the resolvers' return contract instead ("has every resolver
-// return an array of urls"), which is the reachable half of the same property.
-// Kept as a mutation so the day a resolver returns something else, this line
-// starts being load-bearing and someone sees it named here.
-mutate("gate-path", "non-array resolver result is no longer rejected [EQUIVALENT]", DI,
+// SURVIVES, BUT NOT EQUIVALENT — my earlier "[EQUIVALENT]" label here was
+// wrong and the review rejected it, correctly. The guard is LOAD-BEARING:
+// delete it and a length-bearing non-array that yields nothing when iterated
+// ({length: 1}, a Set, "") passes the length check, iterates zero times, and so
+// reaches ensureAgentTab / attach / click with NO isAllowed call at all. That
+// is a full bypass.
+//
+// It survives only because no current resolver can produce such a shape, which
+// is a fact about today's resolvers rather than about this line. Kept, labelled
+// honestly, and covered from the reachable side by the resolver-contract test.
+mutate("gate-path", "non-array resolver result is no longer rejected [SURVIVES: unreachable today, NOT equivalent]", DI,
   "if (!Array.isArray(urls) || urls.length === 0) {", "if (urls.length === 0) {");
 mutate("gate-path", "tab resolved and attached BEFORE the gate", DI,
   "    const tabId = await d.ensureAgentTab();\n    if (spec.attach) await d.cdp.attach(tabId);",
@@ -119,13 +168,19 @@ mutate("gate-path", "unknown command falls through to a real handler", DI,
   "  const spec = COMMANDS[cmd] ?? COMMANDS.state;");
 mutate("gate-path", "prototype property accepted as a command", DI,
   "Object.prototype.hasOwnProperty.call(COMMANDS, cmd)", "COMMANDS[cmd] !== undefined");
-// DECLARED EQUIVALENT (survives, and should). Every command in the real table
-// IS gated, so removing the check that proves it changes nothing while the
-// table is correct — the assertion exists for the table that does not exist
-// yet. Its value is that it fires at LOAD for a future ungated command, which
-// "an ungated command is added to the table" above does exercise: that mutation
-// adds one and is KILLED. Both halves of the guarantee are therefore covered,
-// by two mutations rather than one.
+// DECLARED EQUIVALENT (survives, and should) — the claim the review ACCEPTED.
+// Every command in the real table IS gated, so removing the check that proves
+// it changes nothing while the table is correct. Its value is firing at LOAD
+// for a future ungated command, which "an ungated command is added to the
+// table" above does exercise: that mutation adds one and is KILLED at load. The
+// dangerous PAIR — assertion gone AND an ungated command — therefore fails
+// closed.
+//
+// Caveat the review recorded, correcting my report's wording: "deleting the
+// call leaves no command table at all" holds for only 1 of 3 plausible
+// deletions. This very mutation, `const COMMANDS = COMMAND_TABLE;`, is silent
+// and the full suite still passes. The guarantee rests on the PAIR being
+// killed, not on every single-line deletion being loud.
 mutate("gate-path", "table assertion bypassed at load [EQUIVALENT]", DI,
   "const COMMANDS = assertCommandTable(COMMAND_TABLE);",
   "const COMMANDS = COMMAND_TABLE;");
@@ -225,20 +280,66 @@ mutate("bound", "a browser error is echoed unbounded", DI,
   "    const detail = echo(error?.message ?? error);",
   "    const detail = String(error?.message ?? error);");
 
+// --- axis: the page_switch enumeration oracle (review HIGH 1) ---------------
+mutate("oracle", "the allowlist denial quotes the matched tab's url again", DI,
+  "        error:\n          spec.opaqueDenial ??\n          `denied: ${echo(url)} is not in the allowlist",
+  "        error:\n          `denied: ${echo(url)} is not in the allowlist");
+mutate("oracle", "the no-match denial becomes distinguishable", DI,
+  "        error:\n          spec.opaqueDenial ??\n          `denied: there is no page for",
+  "        error:\n          `denied: there is no page for");
+mutate("oracle", "page_switch stops declaring an opaque denial", DI,
+  '    opaqueDenial:\n      "denied: no tab you may act on matched that text. page_tabs lists the tabs available to you.",',
+  "");
+// NOTE: an earlier version of this mutation only SHORTENED the constant, which
+// leaks nothing — it survived while testing nothing, the same inert-textual-
+// change trap as the duplicate `gate` key. It now makes the denial actually
+// carry the matched url, which is the property under test.
+mutate("oracle", "the opaque denial leaks the url in its text", DI,
+  "        error:\n          spec.opaqueDenial ??\n          `denied: ${echo(url)} is not in the allowlist",
+  "        error:\n          (spec.opaqueDenial ? `${spec.opaqueDenial} (${echo(url)})` : null) ??\n          `denied: ${echo(url)} is not in the allowlist");
+mutate("oracle", "the denied switch is no longer recorded with its real url", DI,
+  "        url: typeof url === \"string\" ? echo(url) : null,",
+  "        url: null,");
+
+// --- axis: fabricated CDP success (review HIGH 2) ---------------------------
+mutate("fabricated", "a resolved undefined is accepted as success", CD,
+  "  if (result === undefined || result === null) {", "  if (false) {");
+mutate("fabricated", "only undefined is caught, not null", CD,
+  "  if (result === undefined || result === null) {", "  if (result === undefined) {");
+mutate("fabricated", "a CDP error envelope is accepted as success", CD,
+  "  if (result.error) {", "  if (false) {");
+mutate("fabricated", "the guard moves to evaluate, missing the input commands", CD,
+  "async function send(tabId, method, params = {}) {\n  const result = await chrome.debugger.sendCommand({ tabId }, method, params);",
+  "async function send(tabId, method, params = {}) {\n  if (method.startsWith(\"Input.\")) return await chrome.debugger.sendCommand({ tabId }, method, params);\n  const result = await chrome.debugger.sendCommand({ tabId }, method, params);");
+
+// --- axis: a failed audit write kills the socket (review HIGH 3) ------------
+mutate("audit-reject", "safeRecord rethrows, breaking the never-rejects contract", DI,
+  "  } catch (error) {\n    console.warn(\n      `browser-companion: the audit log write",
+  "  } catch (error) {\n    if (error) throw error;\n    console.warn(\n      `browser-companion: the audit log write");
+mutate("audit-reject", "a failed write is swallowed with no warning at all", DI,
+  "    console.warn(\n      `browser-companion: the audit log write for \"${entry?.cmd}\" failed",
+  "    void console.warn;\n    const _unused = (\n      `browser-companion: the audit log write for \"${entry?.cmd}\" failed");
+mutate("audit-reject", "a failed write turns a completed action into a failure", DI,
+  "    return reply(requestId, {\n      ok: true,\n      data,\n      ...(recorded ? {} : { warning: UNRECORDED_NOTICE.trim() }),\n    });",
+  "    if (!recorded) return reply(requestId, { ok: false, error: \"audit write failed\" });\n    return reply(requestId, { ok: true, data });");
+mutate("audit-reject", "the success reply drops the unrecorded warning", DI,
+  "      ...(recorded ? {} : { warning: UNRECORDED_NOTICE.trim() }),", "");
+
 // --- axis: audit recording --------------------------------------------------
 mutate("audit", "a denial is not recorded", DI,
-  "      if (isAllowed(url, allowlist)) continue;\n      await d.record({",
+  "      if (isAllowed(url, allowlist)) continue;\n      await safeRecord(d, {",
   "      if (isAllowed(url, allowlist)) continue;\n      await Promise.resolve({");
 mutate("audit", "a success is not recorded", DI,
-  'await d.record({ cmd, url: urls[0], outcome: "ok", detail });', "void 0;");
+  "    const recorded = await safeRecord(d, {\n      cmd,\n      url: urls[0],",
+  "    const recorded = true || await safeRecord(d, {\n      cmd,\n      url: urls[0],");
 mutate("audit", "an error is not recorded", DI,
-  'await d.record({ cmd: echo(cmd), url: null, outcome: "error", detail });',
+  'await safeRecord(d, { cmd: echo(cmd), url: null, outcome: "error", detail });',
   "void 0;");
 mutate("audit", "a denial is recorded as ok", DI,
   'outcome: "denied",\n        detail: `not in allowlist',
   'outcome: "ok",\n        detail: `not in allowlist');
 mutate("audit", "an unknown command is not recorded", DI,
-  "    // compromised or mismatched server looks like from here.\n    await d.record({",
+  "    // compromised or mismatched server looks like from here.\n    await safeRecord(d, {",
   "    // compromised or mismatched server looks like from here.\n    await Promise.resolve({");
 
 // --- axis: element map / staleness -----------------------------------------

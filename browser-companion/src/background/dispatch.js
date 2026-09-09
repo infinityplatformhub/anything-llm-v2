@@ -148,9 +148,18 @@ const GATE_RESOLVERS = Object.freeze({
    * the tab that gets switched to is the tab that was gated.
    *
    * A substring matching nothing yields no url, which `handle` treats as a
-   * denial. That is deliberately the same outcome as matching a forbidden tab:
-   * telling the two apart would make this an oracle for whether the user has a
-   * tab open on some domain, answerable without any domain being allowed.
+   * denial. Matching a FORBIDDEN tab must produce a denial the caller cannot
+   * tell apart from that one — otherwise page_switch is the enumeration oracle
+   * `page_tabs` filtering exists to close, and a worse one: the ordinary
+   * denial message quotes the offending url, so probing substrings recovers
+   * the full url (path and query included) of every tab the user has open,
+   * plus which guesses hit. The single character "a" was enough.
+   *
+   * An earlier version of this comment asserted the two cases already were the
+   * same outcome. They were not — the shared denial path below quoted the url.
+   * The indistinguishability is now enforced by `opaqueDenial` on the command
+   * spec, and by a test comparing the two error STRINGS rather than just their
+   * `ok` flags, which is what let the gap hide.
    */
   async matchedTab({ command, deps }) {
     const needle = requireString(command.url, "url");
@@ -189,6 +198,16 @@ const GATE_KINDS = Object.freeze(Object.keys(GATE_RESOLVERS));
  *                    map. Applied by `handle`, because "remember to invalidate"
  *                    is exactly the kind of step a new case forgets, and the
  *                    cost of forgetting is a click on the wrong element.
+ *   opaqueDenial   — the command's gate subject is discovered by SEARCHING the
+ *                    user's tabs, so a denial must not say what was found. When
+ *                    set, every gate refusal for this command returns this one
+ *                    string and nothing derived from the url, making "matched a
+ *                    forbidden tab" and "matched nothing" indistinguishable.
+ *                    The real url still goes to the audit log, which is local
+ *                    and is the user's own record. A property of the command
+ *                    rather than a branch in the denial path, so a future
+ *                    search-shaped command declares it instead of rediscovering
+ *                    the oracle.
  *   run            — the action, reached only after the gate has passed.
  */
 const COMMAND_TABLE = Object.freeze({
@@ -323,6 +342,10 @@ const COMMAND_TABLE = Object.freeze({
 
   switch: {
     gate: "matchedTab",
+    // The subject is found by searching the user's open tabs, so a denial must
+    // reveal nothing about what the search found. See `matchedTab`.
+    opaqueDenial:
+      "denied: no tab you may act on matched that text. page_tabs lists the tabs available to you.",
     attach: false,
     invalidatesMap: true,
     async run({ target, deps }) {
@@ -406,6 +429,51 @@ function reply(requestId, patch) {
 }
 
 /**
+ * Write one audit entry without letting a failed write escape.
+ *
+ * `handle`'s contract is that it NEVER rejects, because it runs inside the
+ * socket's message handler where a throw takes the connection down for every
+ * command in flight. `auditLog.record` rejects on a storage failure (a full
+ * store — which `auditLog.js` documents as an expected hostile-server outcome,
+ * not a theoretical one), and every `record` call here is either outside the
+ * try or inside the catch. So an unwrapped call breaks the contract on all four
+ * paths, and the worst shape is a click that already happened: the action is
+ * done, the write failed, and the rejection kills the socket.
+ *
+ * Still awaited, not fire-and-forget: the entry must be durable before the
+ * agent is told the command succeeded, or a failure the agent papers over
+ * leaves no trace in the log the user reads.
+ *
+ * The failure is NOT swallowed silently — that would be the "blinded audit log"
+ * this module cares about. Task 6 keeps a sticky `getWriteFailure()` flag for
+ * the popup to surface, `console.warn` puts it in the service worker log, and
+ * the caller learns of it through the returned boolean so the agent's reply can
+ * say so too.
+ *
+ * @returns {Promise<boolean>} true when the entry was written
+ */
+async function safeRecord(d, entry) {
+  try {
+    await d.record(entry);
+    return true;
+  } catch (error) {
+    console.warn(
+      `browser-companion: the audit log write for "${entry?.cmd}" failed, so this command is NOT in the log. The extension popup reports the failure. Reason: ${String(
+        error?.message ?? error
+      )}`
+    );
+    return false;
+  }
+}
+
+// Appended to a successful reply whose audit entry could not be written. The
+// agent reads its replies, so "this happened but is unrecorded" has to be
+// something it can say back to the user — a bare success would be a quieter
+// lie than the one HIGH 2 fixed.
+const UNRECORDED_NOTICE =
+  " (warning: this action could not be written to the extension's audit log, which may be full — tell the user, and check the extension popup.)";
+
+/**
  * Fill in the real implementations for anything the caller did not inject.
  *
  * Deliberately does NOT default the tab accessors (`agentTabUrl`,
@@ -454,7 +522,7 @@ export async function handle(command, deps) {
     // "toString" would otherwise find a function on Object.prototype and be
     // treated as a command. Recorded, because a run of unknown verbs is what a
     // compromised or mismatched server looks like from here.
-    await d.record({
+    await safeRecord(d, {
       // Bounded: `cmd` is server-controlled and is recorded on this path
       // BEFORE any check has passed, so an unbounded one is a way to write
       // arbitrarily large entries into the audit log without being allowlisted
@@ -489,8 +557,21 @@ export async function handle(command, deps) {
     });
 
     // An empty list is a denial, never a vacuous pass. See the header, point 4.
+    //
+    // BOTH HALVES ARE LOAD-BEARING. The `Array.isArray` half is not a stylistic
+    // guard on the `length` check: remove it and any length-bearing non-array
+    // that yields nothing when iterated — `{length: 1}`, a Set, a bare string
+    // of length 0 — passes straight through the `for…of` below WITHOUT A SINGLE
+    // isAllowed CALL, and reaches ensureAgentTab, attach and click. That is a
+    // full bypass, not a degraded message.
+    //
+    // A mutation deleting it survives the suite today, because no resolver can
+    // currently produce such a shape — the survival is a fact about the current
+    // resolvers, NOT about this line being redundant. An earlier version of this
+    // comment called the guard defensive, which is the reading that gets a guard
+    // deleted; a resolver-contract test covers the reachable half.
     if (!Array.isArray(urls) || urls.length === 0) {
-      await d.record({
+      await safeRecord(d, {
         cmd,
         url: null,
         outcome: "denied",
@@ -498,13 +579,15 @@ export async function handle(command, deps) {
       });
       return reply(requestId, {
         ok: false,
-        error: `denied: there is no page for "${cmd}" to act on. The agent's tab may be closed, or no open tab matched.`,
+        error:
+          spec.opaqueDenial ??
+          `denied: there is no page for "${cmd}" to act on. The agent's tab may be closed, or no open tab matched.`,
       });
     }
 
     for (const url of urls) {
       if (isAllowed(url, allowlist)) continue;
-      await d.record({
+      await safeRecord(d, {
         cmd,
         // Recorded as given but bounded, and null for a non-string: the audit
         // log is where the user finds out what a misbehaving server tried, so
@@ -516,12 +599,19 @@ export async function handle(command, deps) {
       });
       return reply(requestId, {
         ok: false,
-        error: `denied: ${echo(url)} is not in the allowlist the user set in the extension. Ask the user to add the domain there if this page should be reachable.`,
+        // The audit record above keeps the real url; the REPLY does not, for a
+        // command whose subject was discovered by searching the user's tabs.
+        // Byte-identical to the no-match denial by construction — both read
+        // `spec.opaqueDenial` — rather than by two strings someone keeps in
+        // step by hand.
+        error:
+          spec.opaqueDenial ??
+          `denied: ${echo(url)} is not in the allowlist the user set in the extension. Ask the user to add the domain there if this page should be reachable.`,
       });
     }
 
     if (spec.sameOrigin && !isSameOrigin(command.url, await currentUrl())) {
-      await d.record({
+      await safeRecord(d, {
         cmd,
         url: typeof command.url === "string" ? echo(command.url) : null,
         outcome: "denied",
@@ -552,8 +642,21 @@ export async function handle(command, deps) {
     // next click lands on whatever slid into those coordinates.
     if (spec.invalidatesMap) d.pageState.invalidate(tabId);
 
-    await d.record({ cmd, url: urls[0], outcome: "ok", detail });
-    return reply(requestId, { ok: true, data });
+    // The action has already happened by this point, so a failed audit write
+    // must not turn it into a failure the agent might retry — a retried click
+    // is a second click. It stays a success, carrying a notice the agent can
+    // pass to the user, rather than a silent one.
+    const recorded = await safeRecord(d, {
+      cmd,
+      url: urls[0],
+      outcome: "ok",
+      detail,
+    });
+    return reply(requestId, {
+      ok: true,
+      data,
+      ...(recorded ? {} : { warning: UNRECORDED_NOTICE.trim() }),
+    });
   } catch (error) {
     // Bounded like every other echoed value: an error message can carry
     // page-derived or server-derived text (a CDP failure quotes the url, a
@@ -562,7 +665,7 @@ export async function handle(command, deps) {
     const detail = echo(error?.message ?? error);
     // Recorded before the reply, so a failure the agent papers over is still in
     // the log the user reads.
-    await d.record({ cmd: echo(cmd), url: null, outcome: "error", detail });
+    await safeRecord(d, { cmd: echo(cmd), url: null, outcome: "error", detail });
     return reply(requestId, { ok: false, error: detail });
   }
 }

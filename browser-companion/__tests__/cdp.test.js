@@ -130,6 +130,68 @@ describe("attach bookkeeping", () => {
   });
 });
 
+// HIGH 2 from review. `chrome.debugger.sendCommand` does not reject for every
+// failure: on a detached target or a tab that closed mid-command it RESOLVES
+// `undefined` (reason in chrome.runtime.lastError) or a CDP error envelope
+// `{error: {code, message}}`. Both flowed through `result?.result?.value` as
+// undefined and were reported to the agent as ok:true — state/read/fetch
+// returning data:null, and scroll/key FABRICATING `{scrolled: "down"}` from the
+// request rather than any response. An agent told a click succeeded when
+// nothing happened will act on that.
+//
+// These run the real cdp.js against the two shapes. The dispatch-level
+// consequence is covered in dispatch.test.js.
+describe("CDP failures that resolve instead of throwing", () => {
+  it.each([
+    ["undefined (detached target / closed tab)", undefined],
+    ["null", null],
+  ])("throws when sendCommand resolves %s", async (_label, value) => {
+    sendImpl = async () => value;
+    await expect(cdp.evaluate(7, "1")).rejects.toThrow(/CDP Runtime.evaluate failed/);
+  });
+
+  it("throws when sendCommand resolves a CDP error envelope", async () => {
+    sendImpl = async () => ({ error: { code: -32000, message: "Target closed." } });
+    await expect(cdp.evaluate(7, "1")).rejects.toThrow(/Target closed\./);
+    await expect(cdp.evaluate(7, "1")).rejects.toThrow(/-32000/);
+  });
+
+  // The input commands never call `evaluate`, which is why this guard lives in
+  // `send`. Before the fix these resolved and their callers fabricated success.
+  it.each([
+    ["click", (t) => cdp.click(t, 1, 2)],
+    ["type", (t) => cdp.type(t, "a")],
+    ["key", (t) => cdp.key(t, "Enter")],
+    ["scroll", (t) => cdp.scroll(t, "down")],
+  ])("makes %s fail loudly rather than silently succeed", async (_l, call) => {
+    sendImpl = async () => undefined;
+    await expect(call(7)).rejects.toThrow(/CDP Input\./);
+  });
+
+  it("surfaces chrome.runtime.lastError when there is one", async () => {
+    globalThis.chrome.runtime = {
+      lastError: { message: "Debugger is not attached to the tab with id: 7." },
+    };
+    try {
+      sendImpl = async () => undefined;
+      await expect(cdp.evaluate(7, "1")).rejects.toThrow(/not attached/);
+    } finally {
+      delete globalThis.chrome.runtime;
+    }
+  });
+
+  it("still returns a well-formed result untouched", async () => {
+    // The guard must not turn a legitimate falsy VALUE into a failure: the
+    // check is on the CDP envelope, not on the value inside it.
+    sendImpl = async () => ({ result: { value: false } });
+    await expect(cdp.evaluate(7, "1")).resolves.toBe(false);
+    sendImpl = async () => ({ result: { value: 0 } });
+    await expect(cdp.evaluate(7, "1")).resolves.toBe(0);
+    sendImpl = async () => ({ result: { value: null } });
+    await expect(cdp.evaluate(7, "1")).resolves.toBeNull();
+  });
+});
+
 describe("evaluate", () => {
   // @edge — CDP reports a page-side throw as a RESULT, not a rejection. A
   // caller that only try/catches sees `undefined` and reports success.

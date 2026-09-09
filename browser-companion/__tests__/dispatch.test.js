@@ -500,7 +500,9 @@ describe("per-command gate subjects", () => {
       d
     );
     expect(out.ok).toBe(false);
-    expect(out.error).toMatch(/no page/i);
+    // page_switch's denial is deliberately opaque (see the oracle tests): it
+    // must not distinguish "matched nothing" from "matched a forbidden tab".
+    expect(out.error).toMatch(/no tab you may act on matched/i);
     expect(d.switchToTab).not.toHaveBeenCalled();
   });
 
@@ -630,6 +632,143 @@ describe("per-command gate subjects", () => {
     expect(out.ok).toBe(false);
     expect(out.error).toMatch(/allowlist/i);
     expect(d.cdp.click).not.toHaveBeenCalled();
+  });
+
+  // @edge — HIGH 1 from review. page_switch was the enumeration oracle that
+  // page_tabs filtering exists to close: the denial for a matched-but-forbidden
+  // tab quoted that tab's FULL url, so probing substrings recovered every open
+  // tab's url plus which guesses hit. The single character "a" was enough.
+  //
+  // Asserted on the error STRINGS being EQUAL, not on `ok === false` — the
+  // latter passed throughout the period the oracle was open, which is exactly
+  // why it hid.
+  it("gives a byte-identical denial whether a forbidden tab matched or nothing did", async () => {
+    const tabs = [
+      { id: 391, url: "https://www.linkedin.com/feed/", title: "Feed" },
+      { id: 392, url: "https://mail.google.com/mail/u/0/#inbox", title: "M" },
+      { id: 393, url: "https://chase.example/accounts/9021/statements", title: "B" },
+    ];
+    const d = deps({ listAgentTabs: async () => tabs });
+
+    const matchedForbidden = await handle(
+      { requestId: "r_o1", cmd: "switch", url: "mail.google" },
+      d
+    );
+    const matchedNothing = await handle(
+      { requestId: "r_o2", cmd: "switch", url: "no-such-tab-anywhere" },
+      d
+    );
+    const singleChar = await handle(
+      { requestId: "r_o3", cmd: "switch", url: "a" },
+      d
+    );
+
+    expect(matchedForbidden.ok).toBe(false);
+    expect(matchedNothing.ok).toBe(false);
+    expect(singleChar.ok).toBe(false);
+    // The oracle is closed exactly when these are indistinguishable.
+    expect(matchedForbidden.error).toBe(matchedNothing.error);
+    expect(singleChar.error).toBe(matchedNothing.error);
+  });
+
+  it("leaks no url, host, path or title through a page_switch denial", async () => {
+    const d = deps({
+      listAgentTabs: async () => [
+        { id: 392, url: "https://chase.example/accounts/9021/statements", title: "Bank" },
+        { id: 393, url: "https://internal.acme.test/hr/salaries", title: "HR" },
+      ],
+    });
+    for (const needle of ["chase", "acme", "hr", "9021", "a", "."]) {
+      const out = await handle(
+        { requestId: `r_leak_${needle}`, cmd: "switch", url: needle },
+        d
+      );
+      expect(out.ok).toBe(false);
+      expect(out.error).not.toMatch(
+        /chase|acme|salaries|statements|9021|Bank|HR|https/i
+      );
+    }
+  });
+
+  it("declares an opaqueDenial that is a constant, carrying no url material", () => {
+    // The behavioural tests above compare the two denials to each other, so
+    // they stay green if BOTH leak the same url — a mutation building the
+    // opaque string from the matched url survived them. This pins the declared
+    // string itself: a constant, with no template interpolation.
+    for (const [cmd, spec] of Object.entries(COMMANDS)) {
+      if (spec.opaqueDenial === undefined) continue;
+      expect([cmd, typeof spec.opaqueDenial]).toEqual([cmd, "string"]);
+      expect([cmd, /\$\{|https?:|\/\//.test(spec.opaqueDenial)]).toEqual([
+        cmd,
+        false,
+      ]);
+    }
+  });
+
+  it("gives the same opaque denial regardless of what the tabs actually are", async () => {
+    // The strongest form: two completely different tab sets, same needle, and
+    // the reply must be identical. A denial derived from the matched url — even
+    // one that merely echoed a host — differs here.
+    const needle = "a";
+    const first = await handle(
+      { requestId: "r_o5", cmd: "switch", url: needle },
+      deps({
+        listAgentTabs: async () => [
+          { id: 1, url: "https://chase.example/accounts/9021", title: "B" },
+        ],
+      })
+    );
+    const second = await handle(
+      { requestId: "r_o6", cmd: "switch", url: needle },
+      deps({
+        listAgentTabs: async () => [
+          { id: 2, url: "https://internal.acme.test/hr/salaries", title: "H" },
+        ],
+      })
+    );
+    const third = await handle(
+      { requestId: "r_o7", cmd: "switch", url: needle },
+      deps({ listAgentTabs: async () => [] })
+    );
+    expect(first.error).toBe(second.error);
+    expect(second.error).toBe(third.error);
+  });
+
+  it("records a no-match switch as 'no page', not as an allowlist refusal", async () => {
+    // The REPLY for these two cases is deliberately identical (the oracle fix),
+    // which means the audit log is now the only place the distinction survives
+    // — and the user needs it: "nothing matched your text" and "the tab you
+    // matched is not allowed" call for different actions. A resolver returning
+    // `[undefined]` instead of `[]` would deny with the same opaque reply and
+    // be invisible without this.
+    const d = deps({ listAgentTabs: async () => [] });
+    await handle({ requestId: "r_o8", cmd: "switch", url: "nothing" }, d);
+    expect(d.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cmd: "switch",
+        outcome: "denied",
+        detail: "no page to act on",
+      })
+    );
+  });
+
+  it("still records the real url of a denied switch in the LOCAL audit log", async () => {
+    // The oracle fix withholds the url from the REPLY, which crosses the
+    // network. The audit log is the user's own record on their own machine and
+    // must keep it, or the denial becomes unauditable.
+    const d = deps({
+      listAgentTabs: async () => [
+        { id: 392, url: "https://mail.google.com/mail/u/0/#inbox", title: "M" },
+      ],
+    });
+    await handle({ requestId: "r_o4", cmd: "switch", url: "mail.google" }, d);
+    expect(d.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cmd: "switch",
+        outcome: "denied",
+        url: "https://mail.google.com/mail/u/0/#inbox",
+      })
+    );
   });
 
   // @edge — page_tabs must not become a way to enumerate the user's browsing
@@ -836,6 +975,73 @@ describe("failures from the browser", () => {
     const out = await handle({ requestId: "r_e4", cmd: "state" }, d);
     expect(out.ok).toBe(false);
     expect(d.cdp.attach).not.toHaveBeenCalled();
+  });
+});
+
+// HIGH 3 from review. `handle`'s contract is that it NEVER rejects, because it
+// runs inside the socket's message handler where a throw takes the connection
+// down for every command in flight. `auditLog.record` rejects on a full store —
+// which auditLog.js documents as an expected hostile-server outcome — and every
+// record call was unwrapped, so all four paths rejected. The worst shape was a
+// click that had already happened: action done, write failed, socket dead.
+describe("a failed audit write must not take down the socket", () => {
+  const quotaError = () => {
+    throw new Error("QUOTA_BYTES quota exceeded");
+  };
+
+  it.each([
+    ["success", { cmd: "click", id: 12 }, {}],
+    ["denial", { cmd: "click", id: 12 }, { loadAllowlist: async () => [] }],
+    ["unknown command", { cmd: "no_such_verb" }, {}],
+    [
+      "error",
+      { cmd: "state" },
+      {
+        ensureAgentTab: async () => {
+          throw new Error("No such tab.");
+        },
+      },
+    ],
+  ])("resolves rather than rejecting on the %s path", async (_l, frame, over) => {
+    const d = deps({ record: j.fn(quotaError), ...over });
+    // `.resolves` is the assertion: a rejection here is the bug.
+    const out = await expect(
+      handle({ requestId: "r_q", ...frame }, d)
+    ).resolves.toBeDefined();
+    expect(out).toBeUndefined(); // expect(...).resolves returns undefined
+  });
+
+  it("still reports the click as done, with a warning, when the log write fails", async () => {
+    // The action already happened, so this must NOT become a failure the agent
+    // might retry — a retried click is a second click. It stays ok:true and
+    // carries a notice the agent can pass on.
+    const d = deps({ record: j.fn(quotaError) });
+    const out = await handle({ requestId: "r_q2", cmd: "click", id: 12 }, d);
+    expect(out.ok).toBe(true);
+    expect(d.cdp.click).toHaveBeenCalled();
+    expect(out.warning).toMatch(/audit log/i);
+  });
+
+  it("does not silently swallow the audit failure", async () => {
+    // A blinded audit log is the thing this module most cares about, so the
+    // failure reaches the service worker log even when the reply is a success.
+    const warn = j.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const d = deps({ record: j.fn(quotaError) });
+      await handle({ requestId: "r_q3", cmd: "click", id: 12 }, d);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/audit log write .* failed/i)
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does not warn on a successful command whose log write succeeded", async () => {
+    const d = deps();
+    const out = await handle({ requestId: "r_q4", cmd: "click", id: 12 }, d);
+    expect(out.ok).toBe(true);
+    expect(out.warning).toBeUndefined();
   });
 });
 

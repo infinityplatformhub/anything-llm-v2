@@ -78,13 +78,65 @@ function sleep(ms) {
 }
 
 /**
+ * Send one CDP command, converting every "failed but did not throw" shape into
+ * a throw.
+ *
+ * THIS IS THE FABRICATED-SUCCESS GUARD, and it sits here rather than in
+ * `evaluate` because the shapes below reach the input commands too — `scroll`
+ * and `key` never call `evaluate`, and a review found them reporting
+ * `{scrolled: "down"}` for a scroll that never happened. That reply is built
+ * from the REQUEST, not from any CDP response, so without this guard nothing
+ * downstream can tell the difference.
+ *
+ * `chrome.debugger.sendCommand` does not reject for every failure. On a
+ * detached target or a tab that closed mid-command it can RESOLVE:
+ *   - `undefined`, with the real reason left in `chrome.runtime.lastError`; or
+ *   - a CDP error envelope `{error: {code, message}}`, which is a resolved
+ *     value, not an exception.
+ * Both then flow through `result?.result?.value` as `undefined` and are
+ * reported to the agent as `ok: true`. An agent told a click succeeded when
+ * nothing happened will act on that, which is worse than any error message.
+ *
+ * A resolved `undefined` is treated as a failure for every method. That is a
+ * deliberate trade with one cost, named because it is not free: a CDP method
+ * whose success genuinely carries no result would now throw. None of the
+ * methods this module sends is such a method — `Input.*` and `Runtime.evaluate`
+ * all resolve an object — so the trade buys a real guard for no present loss.
+ * Adding a void-returning method here means revisiting this line, not deleting
+ * it.
+ *
  * @param {number} tabId
  * @param {string} method a CDP method name
  * @param {object} params
- * @returns {Promise<any>} the CDP result object
+ * @returns {Promise<object>} the CDP result object; never undefined
+ * @throws {Error} when the command failed without rejecting
  */
-function send(tabId, method, params = {}) {
-  return chrome.debugger.sendCommand({ tabId }, method, params);
+async function send(tabId, method, params = {}) {
+  const result = await chrome.debugger.sendCommand({ tabId }, method, params);
+
+  // Read before anything else can overwrite it. `lastError` is only valid
+  // synchronously after the callback, and optional-chained because it does not
+  // exist outside a real extension.
+  const lastError = globalThis.chrome?.runtime?.lastError?.message;
+
+  if (result === undefined || result === null) {
+    throw new Error(
+      `CDP ${method} failed: ${
+        lastError ?? "the debugger returned no result (the tab may have closed or detached)."
+      }`
+    );
+  }
+  if (result.error) {
+    // A CDP error envelope. `code` is a number like -32000 and `message` the
+    // reason ("Target closed."); both are worth keeping — the agent reads this.
+    const { code, message } = result.error;
+    throw new Error(
+      `CDP ${method} failed: ${message ?? "unknown error"}${
+        code === undefined ? "" : ` (code ${code})`
+      }`
+    );
+  }
+  return result;
 }
 
 /**
