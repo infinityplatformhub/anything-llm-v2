@@ -87,12 +87,60 @@ describe("manifest permissions match what the design needs", () => {
     expect(manifest.host_permissions).toContain("<all_urls>");
   });
 
-  it("hardcodes no AnythingLLM server, since the user supplies that at runtime", () => {
-    // A baked-in host would be wrong for every self-hosted install, and would
-    // also widen the extension's reach beyond what the user consented to.
-    expect(JSON.stringify(manifest)).not.toMatch(
-      /https?:\/\/(?!\*)[a-z0-9.-]+|localhost|\b\d{1,3}(\.\d{1,3}){3}\b/i
+  // A baked-in host would be wrong for every self-hosted install, and would also
+  // widen the extension's reach beyond what the user consented to.
+  //
+  // The scheme axis matters more than the host axis here: task 8's socket client
+  // connects over ws:// / wss://, so a hardcoded websocket URL is the exact
+  // mistake this guard exists to catch. An http-only pattern would wave it
+  // through. Bare `host:port` and bare dotted hostnames are covered too, since a
+  // default server can be written with no scheme at all.
+  //
+  // A bare dotted name is the one ambiguous case: `llm.acme.co` is a host but
+  // `background.js` is a filename, and the manifest legitimately contains the
+  // latter. They are told apart by the final label — a web asset extension is
+  // not a TLD. The negative control below is what keeps this honest.
+  const ASSET_EXTENSION =
+    "js|mjs|cjs|jsx|ts|tsx|html|htm|json|css|map|png|jpg|jpeg|gif|svg|ico|woff|woff2|txt|md";
+  const HARDCODED_SERVER = new RegExp(
+    [
+      // any scheme's authority, incl. ws:// and wss://, and `//host`; `[::1]` too
+      String.raw`(?:[a-z][a-z0-9+.-]*:)?//(?!\*)\[?[a-z0-9:._-]+\]?`,
+      String.raw`\blocalhost\b`,
+      String.raw`\b\d{1,3}(?:\.\d{1,3}){3}\b`, // IPv4
+      String.raw`\b[a-z0-9-]+(?:\.[a-z0-9-]+)*:\d{2,5}\b`, // host:port, no scheme
+      // bare dotted hostname whose last label is a TLD rather than a file type
+      String.raw`\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?!(?:${ASSET_EXTENSION})\b)[a-z]{2,24}\b`,
+    ].join("|"),
+    "i"
+  );
+
+  // The guard must reject; these prove it is not vacuous, i.e. that it really
+  // does fire on the shapes a wrongly-configured manifest would carry.
+  it.each([
+    ["ws with port", "ws://myhost:3001"],
+    ["wss with hostname", "wss://llm.acme.co"],
+    ["ws with IPv6 literal", "ws://[::1]:3001"],
+    ["bare hostname, no scheme", "llm.acme.co"],
+    ["bare host:port, no scheme", "myhost:3001"],
+    ["http with port", "http://localhost:3001"],
+    ["https with hostname", "https://dev2.example.com"],
+    ["bare IPv4", "10.0.0.5"],
+  ])("would catch a server address written as %s", (_label, value) => {
+    expect(JSON.stringify({ ...manifest, default_server: value })).toMatch(
+      HARDCODED_SERVER
     );
+  });
+
+  it("does not fire on the manifest's own legitimate contents", () => {
+    // Negative control. If this fails the guard is over-broad and its passes
+    // above would be worthless, since a pattern matching everything "catches"
+    // everything. `<all_urls>` and `background.js` must not read as a server.
+    expect(HARDCODED_SERVER.test(JSON.stringify(manifest))).toBe(false);
+  });
+
+  it("hardcodes no AnythingLLM server, since the user supplies that at runtime", () => {
+    expect(JSON.stringify(manifest)).not.toMatch(HARDCODED_SERVER);
   });
 });
 
