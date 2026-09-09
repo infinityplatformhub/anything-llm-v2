@@ -1566,6 +1566,39 @@ git commit -m "feat(browser-companion): CDP trusted input, page_state map, same-
 
 ---
 
+### The handshake contract task 8 must implement
+
+เขียนไว้ที่นี่เพราะโค้ดฝั่ง server รู้ค่าเหล่านี้อยู่แล้ว แต่คนเขียน client ไม่มีที่ให้อ่าน —
+ถ้าไม่มีหัวข้อนี้ task 8 ต้องไปเดาจาก `server/endpoints/browserExtension.js` (จาก review ของ task 3)
+
+**ส่ง key ทาง subprotocol — marker ก่อน key หลัง:**
+
+```javascript
+new WebSocket(url, ["anythingllm-browser-companion", apiKey])
+```
+
+**ลำดับนี้บังคับ ไม่ใช่สไตล์:** `ws` เลือก subprotocol ตัวแรกที่เสนอมา แล้ว **echo กลับใน
+response header** ถ้าเอา key ไว้ตัวแรก key จะโผล่ใน response header ของ handshake — ย้ายที่รั่ว
+ไม่ใช่ปิด (พิสูจน์กับ ws จริงใน task 3)
+
+`?key=` ยังใช้ได้เป็น fallback แต่ server จะ log เตือนหนึ่งครั้งต่อ connection — query string
+โดน log โดย proxy/ingress/CDN ที่เราไม่ได้คุม
+
+**close code ที่ server ส่งมา — extension ต้องแยกให้ออก เพราะแต่ละอันบอกผู้ใช้ต่างกัน:**
+
+| code | ความหมาย | popup ควรบอกว่า |
+|---|---|---|
+| `4401` | key ใช้ไม่ได้ / ไม่ได้ส่ง key มา | ต่อใหม่ด้วย key ที่ถูก |
+| `4403` | key ใช้ไม่ได้ในโหมดนี้ (key เก่าที่ไม่ผูก user ตอนเปิด multi-user) หรือผู้ใช้ถูกระงับ | สร้าง key ใหม่ในแอป |
+| `4409` | เครื่องอื่นต่อเข้ามาด้วยบัญชีเดียวกัน — เครื่องนี้ถูกเตะ | บอกว่าโดนเตะ ไม่ใช่เงียบไป |
+| `1011` | server error | ลองใหม่ |
+
+`4409` มาพร้อม frame `{"event":"evicted","reason":"..."}` **ก่อน** ปิด — อ่าน frame นั้นก่อนจัดการ
+close event (ordering นี้พิสูจน์กับ ws จริงแล้วว่า send-then-close ส่งถึง แต่ close-then-send ไม่ถึง
+และเงียบ) และเมื่อได้ `4409` **ห้าม reconnect** — จะกลายเป็นสองเครื่องเตะกันไปมา
+
+---
+
 ### Task 8: socket client + keepalive + agent tab
 
 **Files:**
