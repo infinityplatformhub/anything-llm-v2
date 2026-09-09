@@ -14,6 +14,11 @@ if (!buffer.SlowBuffer) buffer.SlowBuffer = buffer.Buffer;
 
 const { describe, it, expect, beforeEach } = require("@jest/globals");
 
+// Used to read the extension's own source for the one string this suite must
+// not copy — see "a success whose audit write failed" below.
+const fs = require("fs");
+const path = require("path");
+
 // The real collaborators, deliberately. registry.resolve is the whole security
 // story of this plugin and protocol.send is its only exit; doubling either one
 // would leave the assertions here agreeing with a fiction.
@@ -423,6 +428,178 @@ describe("browser-companion plugin", () => {
     await expect(
       runCommand({ cmd: "read", payload: {}, userId: 7, multiUserMode: undefined })
     ).rejects.toThrow(TypeError);
+  });
+
+  // F2: an action that succeeded but whose audit entry could not be written.
+  //
+  // This is a SEAM test on purpose. The defect it pins existed while both sides
+  // were green: the extension's dispatch test asserts the warning is EMITTED,
+  // and protocol's tests asserted a `{ok, data, error}` shape that had no room
+  // for it, so the field was dropped in between and neither suite could see it.
+  // Anything doubled here would recreate exactly that blindness, so nothing is:
+  // the notice text is read out of the extension's own source rather than
+  // retyped, and it travels through the real protocol.handleMessage, the real
+  // protocol.send promise and the real runCommand to the string a tool handler
+  // returns — which index.js puts in the `content` of the function-role message
+  // the model reads (verified at server/utils/agents/aibitat/index.js:1255,1287).
+  describe("a success whose audit write failed", () => {
+    const DISPATCH_SRC = path.join(
+      __dirname,
+      "../../../../../browser-companion/src/background/dispatch.js"
+    );
+
+    /**
+     * The real UNRECORDED_NOTICE, read from the extension source.
+     *
+     * Not a copy: a copy is what let this defect through. If the extension
+     * renames or rewords the notice, this test reads the new text; if it stops
+     * sending one, the extraction throws and the test fails loudly rather than
+     * passing against a string nothing sends any more.
+     */
+    function unrecordedNoticeFromExtensionSource() {
+      const src = fs.readFileSync(DISPATCH_SRC, "utf8");
+      const match = src.match(
+        /const UNRECORDED_NOTICE\s*=\s*\n?\s*"((?:[^"\\]|\\.)*)"/
+      );
+      if (!match)
+        throw new Error(
+          `Could not find UNRECORDED_NOTICE in ${DISPATCH_SRC}. If the extension renamed it, update this test — do not inline the string.`
+        );
+      // dispatch.js sends `UNRECORDED_NOTICE.trim()`.
+      return match[1].trim();
+    }
+
+    it("reads the notice from the extension source rather than a copy", () => {
+      const notice = unrecordedNoticeFromExtensionSource();
+      expect(notice).toMatch(/audit log/i);
+      expect(notice.length).toBeGreaterThan(20);
+    });
+
+    it("carries the warning through to what the model is told", async () => {
+      const notice = unrecordedNoticeFromExtensionSource();
+      const socket = fakeSocket();
+      registry.register({ userId: 7, socket });
+
+      const pending = runCommand({
+        cmd: "click",
+        payload: { id: 12 },
+        userId: 7,
+        multiUserMode: true,
+      });
+      // Byte-for-byte the frame dispatch.js builds on that path:
+      // reply(requestId, {ok: true, data, warning: UNRECORDED_NOTICE.trim()}).
+      reply(socket, { ok: true, data: { clicked: 12 }, warning: notice });
+
+      const out = await pending;
+      expect(out).toContain(notice);
+      // The result the agent needs to carry on must survive too: a warning that
+      // replaced the data would trade one silent failure for another.
+      expect(out).toContain(JSON.stringify({ clicked: 12 }));
+    });
+
+    it("reaches the model through the registered tool handler, not just runCommand", async () => {
+      const notice = unrecordedNoticeFromExtensionSource();
+      const socket = fakeSocket();
+      registry.register({ userId: 7, socket });
+
+      const aibitat = aibitatWith({ user_id: 7 });
+      const pending = aibitat.functions.get("page_click").handler({ id: 12 });
+      await drainMacrotasks();
+      reply(socket, { ok: true, data: { clicked: 12 }, warning: notice });
+
+      // This string is what index.js assigns to `content` on the function-role
+      // message — i.e. literally what the model reads.
+      expect(await pending).toContain(notice);
+    });
+
+    it("does not invent a warning when the extension sent none", async () => {
+      const socket = fakeSocket();
+      registry.register({ userId: 7, socket });
+      const pending = runCommand({
+        cmd: "click",
+        payload: { id: 12 },
+        userId: 7,
+        multiUserMode: true,
+      });
+      reply(socket, { ok: true, data: "clicked" });
+      expect(await pending).toBe("clicked");
+    });
+
+    // A warning is not a failure: the action happened, so the agent must not be
+    // told to retry. A retried click is a second click.
+    it("still reports success, so the agent has no reason to retry", async () => {
+      const notice = unrecordedNoticeFromExtensionSource();
+      const socket = fakeSocket();
+      registry.register({ userId: 7, socket });
+      const pending = runCommand({
+        cmd: "click",
+        payload: { id: 12 },
+        userId: 7,
+        multiUserMode: true,
+      });
+      reply(socket, { ok: true, data: "clicked", warning: notice });
+      expect(await pending).not.toMatch(/^Browser command failed/);
+    });
+
+    // A failure reply may also carry a warning; it must not be lost either.
+    it("carries a warning that arrives alongside an error", async () => {
+      const socket = fakeSocket();
+      registry.register({ userId: 7, socket });
+      const pending = protocol.send({ socket, cmd: "click", payload: {} });
+      reply(socket, { ok: false, error: "denied", warning: "log write failed" });
+      const result = await pending;
+      expect(result.ok).toBe(false);
+      expect(result.error).toBe("denied");
+      expect(result.warning).toBe("log write failed");
+    });
+
+    // The projection is a whitelist because it is the boundary between
+    // untrusted extension output and what reaches the model. `warning` joins it
+    // under the same rules as `error`: stringified, and unable to forge or
+    // override any other field.
+    it("does not let a warning forge or override ok, data or error", async () => {
+      const socket = fakeSocket();
+      registry.register({ userId: 7, socket });
+      const pending = protocol.send({ socket, cmd: "click", payload: {} });
+      reply(socket, {
+        ok: true,
+        data: "real",
+        warning: { ok: false, data: "forged", error: "forged" },
+      });
+      const result = await pending;
+      expect(result.ok).toBe(true);
+      expect(result.data).toBe("real");
+      expect(result.error).toBeNull();
+      // Stringified like `error`, so it cannot reach the model as
+      // "[object Object]" and cannot smuggle a nested field into the result.
+      expect(typeof result.warning).toBe("string");
+      expect(Object.keys(result).sort()).toEqual([
+        "data",
+        "error",
+        "ok",
+        "warning",
+      ]);
+    });
+
+    // Every locally-produced result carries warning: null, so a caller can read
+    // the field without first checking whether the reply came off the wire.
+    it("sets warning to null on results this server produced itself", async () => {
+      const socket = fakeSocket();
+      const timedOut = await protocol.send({
+        socket,
+        cmd: "click",
+        payload: {},
+        timeoutMs: 15,
+      });
+      expect(timedOut.warning).toBeNull();
+
+      const dead = await protocol.send({
+        socket: { readyState: 3, send() {} },
+        cmd: "click",
+        payload: {},
+      });
+      expect(dead.warning).toBeNull();
+    });
   });
 
   describe("tool registration on a real AIbitat", () => {

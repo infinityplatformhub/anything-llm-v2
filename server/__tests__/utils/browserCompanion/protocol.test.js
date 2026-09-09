@@ -33,6 +33,10 @@ describe("browserCompanion protocol", () => {
       ok: true,
       data: { url: "https://x.test/" },
       error: null,
+      // Always present, null when the extension sent none — see the `warning`
+      // cases below. Asserted with toEqual rather than objectContaining so an
+      // extra field appearing in the projection reddens here.
+      warning: null,
     });
   });
 
@@ -73,6 +77,7 @@ describe("browserCompanion protocol", () => {
       ok: false,
       data: null,
       error: "denied: domain not in allowlist",
+      warning: null,
     });
   });
 
@@ -391,11 +396,20 @@ describe("browserCompanion protocol", () => {
     });
     const result = await pending;
     expect(result.data).toBeNull();
-    expect(Object.keys(result).sort()).toEqual(["data", "error", "ok"]);
+    // The exact key set, not a subset: this is the projection that decides what
+    // untrusted extension output reaches the model, so a field appearing in it
+    // must be a deliberate decision that reddens this line first.
+    expect(Object.keys(result).sort()).toEqual([
+      "data",
+      "error",
+      "ok",
+      "warning",
+    ]);
     expect(JSON.parse(JSON.stringify(result))).toEqual({
       ok: true,
       data: null,
       error: null,
+      warning: null,
     });
   });
 

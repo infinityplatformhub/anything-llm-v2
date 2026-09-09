@@ -306,6 +306,7 @@ describe("browser-companion agent socket", () => {
       ok: true,
       data: { title: "x" },
       error: null,
+      warning: null,
     });
   });
 
@@ -1043,6 +1044,7 @@ describe("browser-companion agent socket (real ws + express-ws)", () => {
       ok: true,
       data: { title: "hello" },
       error: null,
+      warning: null,
     });
     client.close();
   });

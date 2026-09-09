@@ -73,10 +73,19 @@ const attached = new WeakSet();
  *
  * Never rejects and never throws: a browser failure is data an agent reads and
  * reasons about, not an exception that aborts its turn. Every path resolves
- * `{ok, data, error}`, with `error` always either null or a string.
+ * `{ok, data, error, warning}`; `error` and `warning` are each either null or a
+ * string.
+ *
+ * `warning` carries "this happened, but something about recording it failed" —
+ * the extension sends it with `ok: true` when an action succeeded and its audit
+ * entry could not be written. It is a separate field from `error` because the
+ * command did NOT fail: folding it into `error` would invite a retry, and a
+ * retried click is a second click. Locally-produced results (timeout, dead
+ * socket, send failure) carry `warning: null` — the field is always present, so
+ * a caller may read it without checking whether the reply came from the wire.
  *
  * @param {{socket: object, cmd: string, payload?: object, timeoutMs?: number}} args
- * @returns {Promise<{ok: boolean, data: any, error: string|null}>}
+ * @returns {Promise<{ok: boolean, data: any, error: string|null, warning: string|null}>}
  */
 function send({ socket, cmd, payload = {}, timeoutMs } = {}) {
   const delay = resolveTimeoutMs(timeoutMs ?? DEFAULT_TIMEOUT_MS);
@@ -85,11 +94,9 @@ function send({ socket, cmd, payload = {}, timeoutMs } = {}) {
   return new Promise((resolveOuter) => {
     const timer = setTimeout(() => {
       pending.delete(requestId);
-      resolveOuter({
-        ok: false,
-        data: null,
-        error: `Browser command "${cmd}" timed out after ${delay}ms.`,
-      });
+      resolveOuter(
+        localFailure(`Browser command "${cmd}" timed out after ${delay}ms.`)
+      );
     }, delay);
 
     // One in-flight command must not hold the event loop open for up to
@@ -119,11 +126,11 @@ function send({ socket, cmd, payload = {}, timeoutMs } = {}) {
     // Guarded on `!== undefined` so a socket without the property (a test double,
     // a non-ws transport) is still written to rather than rejected outright.
     if (socket?.readyState !== undefined && socket.readyState !== WS_OPEN) {
-      return settle({
-        ok: false,
-        data: null,
-        error: `Browser command "${cmd}" could not be sent: ${DISCONNECTED_ERROR}`,
-      });
+      return settle(
+        localFailure(
+          `Browser command "${cmd}" could not be sent: ${DISCONNECTED_ERROR}`
+        )
+      );
     }
 
     try {
@@ -138,15 +145,59 @@ function send({ socket, cmd, payload = {}, timeoutMs } = {}) {
       // with no usable send throws. String(error) rather than error.message,
       // because a non-Error throw has no .message and would render the contract's
       // `string` as "could not be sent: undefined".
-      settle({
-        ok: false,
-        data: null,
-        error: `Browser command "${cmd}" could not be sent: ${String(
-          error?.message ?? error
-        )}`,
-      });
+      settle(
+        localFailure(
+          `Browser command "${cmd}" could not be sent: ${String(
+            error?.message ?? error
+          )}`
+        )
+      );
     }
   });
+}
+
+/**
+ * Render one untrusted string field of a reply, or null when it is absent.
+ *
+ * `error` and `warning` are the two fields whose content is written by the
+ * extension and read by a human or a model, so they get identical treatment —
+ * one function rather than two conventions. A non-string is stringified rather
+ * than dropped: an object reaching the agent would render as "[object Object]"
+ * the first time it is interpolated, which is worse than JSON.
+ *
+ * NOT length-capped here, deliberately, and this is the part worth knowing: the
+ * cap lives at the producer, in the extension's `echo()` (MAX_ECHOED_CHARS,
+ * 2048), which every field it echoes passes through. Adding a second, different
+ * cap on this side would make the effective limit whichever module a reader did
+ * not look at. The reason the server can rely on that is NOT trust in the
+ * extension — a hostile one can send any length — it is that an oversized frame
+ * costs one agent turn's context and nothing durable: nothing here is persisted,
+ * indexed, or used to size an allocation. If that ever stops being true (an
+ * audit table, a log sink), the cap belongs at the socket's `maxPayload`, where
+ * it bounds the whole frame rather than one field at a time.
+ *
+ * @param {unknown} value the raw field off the wire
+ * @returns {string|null} null only when the field was absent or null
+ */
+function asReplyString(value) {
+  if (value === undefined || value === null) return null;
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+/**
+ * A failure this module produced itself — a timeout, a dead socket, a failed
+ * write, a drain, a reset — as opposed to one the extension reported.
+ *
+ * One function rather than five object literals so the result shape cannot
+ * drift between exit paths. `warning: null` is what makes the field safe to read
+ * unconditionally: a caller that had to check `"warning" in result` would get it
+ * wrong on exactly the paths nobody tests.
+ *
+ * @param {string} error
+ * @returns {{ok: false, data: null, error: string, warning: null}}
+ */
+function localFailure(error) {
+  return { ok: false, data: null, error, warning: null };
 }
 
 /**
@@ -197,16 +248,21 @@ function handleMessage({ socket, raw }) {
   // carrying extension-supplied data. That is the silent-wrong-answer class this
   // module exists to prevent, arriving from untrusted network input.
   if (parsed.ok === true)
-    return entry.resolve({ ok: true, data: parsed.data ?? null, error: null });
+    return entry.resolve({
+      ok: true,
+      data: parsed.data ?? null,
+      error: null,
+      warning: asReplyString(parsed.warning),
+    });
 
   // Coerced to a string so the documented `error: string|null` holds against
   // untrusted input: an object here would reach task 3/4 code as
   // "[object Object]" the first time it is interpolated or `.match`ed.
-  const error = parsed.error ?? "Browser command failed.";
   entry.resolve({
     ok: false,
     data: null,
-    error: typeof error === "string" ? error : JSON.stringify(error),
+    error: asReplyString(parsed.error) ?? "Browser command failed.",
+    warning: asReplyString(parsed.warning),
   });
 }
 
@@ -256,17 +312,17 @@ function drainSocket(socket) {
   for (const entry of [...pending.values()]) {
     if (entry.socket !== socket) continue;
     drained += 1;
-    entry.resolve({
-      ok: false,
-      data: null,
-      // Distinct from BOTH other failure strings, deliberately. The timeout text
-      // ("timed out after 20000ms") reads as a slow page and was half the reason
-      // for adding this function; the send-guard text ("could not be sent")
-      // describes a command that never went out. This one went out and was in
-      // flight when the browser vanished, so it says exactly that — the agent
-      // reads these strings and reasons about them.
-      error: `Browser command "${entry.cmd}" was interrupted: the browser disconnected before it answered.`,
-    });
+    // Distinct from BOTH other failure strings, deliberately. The timeout text
+    // ("timed out after 20000ms") reads as a slow page and was half the reason
+    // for adding this function; the send-guard text ("could not be sent")
+    // describes a command that never went out. This one went out and was in
+    // flight when the browser vanished, so it says exactly that — the agent
+    // reads these strings and reasons about them.
+    entry.resolve(
+      localFailure(
+        `Browser command "${entry.cmd}" was interrupted: the browser disconnected before it answered.`
+      )
+    );
   }
   return drained;
 }
@@ -285,11 +341,7 @@ function __reset() {
   // deletes the map entry — so this loop only has to hand each caller an answer.
   // Snapshotted first because settle mutates the map as it goes.
   for (const entry of [...pending.values()])
-    entry.resolve({
-      ok: false,
-      data: null,
-      error: "Browser companion protocol state was reset.",
-    });
+    entry.resolve(localFailure("Browser companion protocol state was reset."));
 }
 
 /**

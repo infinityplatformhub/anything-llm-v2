@@ -57,7 +57,21 @@ async function runCommand({ cmd, payload = {}, userId, multiUserMode }) {
   // deployment concern already expressed in that env var.
   const result = await protocol.send({ socket, cmd, payload });
   if (!result.ok) return `Browser command failed: ${result.error}`;
-  return typeof result.data === "string" ? result.data : JSON.stringify(result.data);
+
+  const body =
+    typeof result.data === "string" ? result.data : JSON.stringify(result.data);
+
+  // The command succeeded but something about RECORDING it did not — today, the
+  // extension's audit write. Appended to the returned string rather than
+  // returned as a field, because this string is the whole of what the model
+  // sees: aibitat hands the tool's return value back as the tool result, so a
+  // structured field would be dropped one layer further out and the warning
+  // would be just as lost as it was before it crossed protocol.js.
+  //
+  // Appended, never substituted: the agent still needs `data` to carry on, and
+  // the warning is something it should tell the user, not a reason to retry. A
+  // retried click is a second click.
+  return result.warning ? `${body}\n\n${result.warning}` : body;
 }
 
 // The eleven tools the model sees. `cmd` is the wire verb the extension
@@ -150,7 +164,10 @@ const TOOLS = [
     description:
       "Switch the agent to one of its own open tabs by URL substring. The new tab has its own elements, so call page_state after switching.",
     properties: {
-      url: { type: "string", description: "Substring of the target tab's URL." },
+      url: {
+        type: "string",
+        description: "Substring of the target tab's URL.",
+      },
     },
     required: ["url"],
   },
