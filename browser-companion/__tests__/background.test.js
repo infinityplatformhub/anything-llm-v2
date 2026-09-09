@@ -21,7 +21,13 @@ import path from "node:path";
  * asserted; what Chrome does with them is not.
  * ======================================================================== */
 
-const listeners = { startup: [], installed: [], storage: [], alarm: [] };
+const listeners = {
+  startup: [],
+  installed: [],
+  storage: [],
+  alarm: [],
+  message: [],
+};
 // Seeded here rather than reassigned lower down: the module's top-level
 // `startCompanion()` reads this during its own import, so anything written
 // after that import is too late for it. See the L2 case.
@@ -56,6 +62,7 @@ globalThis.chrome = {
   runtime: {
     onStartup: { addListener: (fn) => listeners.startup.push(fn) },
     onInstalled: { addListener: (fn) => listeners.installed.push(fn) },
+    onMessage: { addListener: (fn) => listeners.message.push(fn) },
   },
   alarms: {
     create: () => {},
@@ -95,6 +102,7 @@ const {
   startCompanion,
   onStorageChanged,
   onAlarm,
+  onRuntimeMessage,
 } = await import("../src/background/index.js");
 
 /**
@@ -113,11 +121,22 @@ for (let i = 0; i < 20 && sockets.length === 0; i += 1)
   await new Promise((resolve) => setImmediate(resolve));
 const socketsAtLoad = [...sockets];
 const socket = await import("../src/background/socket.js");
+const control = await import("../src/background/control.js");
 
-/** Let a real async chain (crypto.subtle, storage) settle. */
+/**
+ * Let a real async chain (crypto.subtle, storage) settle.
+ *
+ * `setTimeout`, not `setImmediate`, and more turns than seem necessary.
+ * `connect` awaits `crypto.subtle.digest` on its cold path, and that resolves
+ * off the microtask queue entirely — spinning `setImmediate` cannot drain it.
+ * Three turns was enough when this file ran alone and NOT enough once the full
+ * suite ran in parallel: "reconnects when only the server address changes"
+ * failed with `sockets` still empty, which reads as a broken listener when the
+ * truth is that the assertion ran too early.
+ */
 const settle = async () => {
-  for (let i = 0; i < 3; i += 1)
-    await new Promise((resolve) => setImmediate(resolve));
+  for (let i = 0; i < 12; i += 1)
+    await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
 /**
@@ -282,11 +301,40 @@ describe("the service worker's listeners", () => {
   // Registration is not behaviour. The listener REGISTERED is the exported
   // body, so the cases below invoke that same function with the arguments
   // Chrome passes.
+  it("answers the popup's messages", () => {
+    expect(listeners.message).toHaveLength(1);
+  });
+
   it("registers the exported bodies, not anonymous copies", () => {
     expect(listeners.startup[0]).toBe(startCompanion);
     expect(listeners.installed[0]).toBe(startCompanion);
     expect(listeners.storage[0]).toBe(onStorageChanged);
     expect(listeners.alarm[0]).toBe(onAlarm);
+    expect(listeners.message[0]).toBe(onRuntimeMessage);
+  });
+
+  // @edge — THE RETURN VALUE, which is the whole message channel.
+  //
+  // `control.onMessage` answers `true` so Chrome holds the port open for its
+  // async reply. index.js's wrapper must PASS THAT BACK: a wrapper written as a
+  // statement rather than a return answers `undefined`, Chrome closes the
+  // channel at once, and every popup request resolves `undefined` — a popup
+  // stuck on its loading state with no error anywhere and nothing in any log.
+  // Asserted through the REGISTERED listener, because that is the function
+  // Chrome actually calls.
+  it("keeps the message channel open for the popup's async reply", () => {
+    expect(
+      listeners.message[0]({ type: "companion:getStatus" }, {}, () => {})
+    ).toBe(true);
+  });
+
+  // The other half: a message that is not ours must be declined, so a second
+  // listener added later can answer it. A handler claiming every message would
+  // make that one silently unreachable.
+  it("declines a message belonging to some other listener", () => {
+    expect(listeners.message[0]({ type: "somethingElse" }, {}, () => {})).toBe(
+      false
+    );
   });
 
   // @edge — L2. A wake RE-RUNS this module, and by then onStartup/onInstalled
@@ -324,6 +372,11 @@ describe("the listener bodies actually do their job", () => {
     sockets = [];
     syncStore = {};
     socket.__reset();
+    // The pause is module state in the worker, so a case that leaves it set
+    // would silently pause every case after it — and the "lets a command
+    // through" negative control would then be asserting against a paused
+    // browser and pass for the wrong reason.
+    control.__reset();
   });
 
   it("reads the storage keys the popup actually writes", async () => {
@@ -425,6 +478,75 @@ describe("the listener bodies actually do their job", () => {
     onAlarm({});
     await settle();
     expect(sockets).toHaveLength(0);
+  });
+
+  // @edge — THE PAUSE MUST BE ON THE SOCKET'S OWN COMMAND PATH.
+  //
+  // Found by a mutation, not by reading: replacing
+  // `control.guardCommands((command) => handle(command, deps))` with a bare
+  // `(command) => handle(command, deps)` SURVIVED a green suite. That single
+  // edit makes the popup's stop button decorative — it still flips the
+  // worker's flag, the popup still renders "paused", and the agent keeps
+  // clicking, because nothing on the command path reads the flag any more.
+  // Nothing in control.test.js can catch it: `guardCommands` is correct there
+  // in isolation. Only this file sees the wiring.
+  //
+  // Driven through the REAL socket path — a frame delivered to `ws.onmessage`,
+  // exactly as the server would — rather than by inspecting what `connect` was
+  // handed, so the assertion is about what a command actually does.
+  it("routes the socket's commands through the pause", async () => {
+    syncStore.apiBase = "https://x.test/api";
+    syncStore.apiKey = "brx-abc";
+    await startCompanion();
+    await settle();
+    expect(sockets).toHaveLength(1);
+    const ws = sockets[0];
+    ws.readyState = 1; // OPEN, so a reply is actually written.
+
+    await control.setPaused(true);
+    ws.onmessage({
+      data: JSON.stringify({ requestId: "r_paused", cmd: "page_click" }),
+    });
+    await socket.__commandQueue();
+    await settle();
+
+    const replies = ws.sent.map((raw) => JSON.parse(raw));
+    expect(replies).toHaveLength(1);
+    expect(replies[0].requestId).toBe("r_paused");
+    expect(replies[0].ok).toBe(false);
+    expect(replies[0].error).toMatch(/paused/i);
+
+    await control.setPaused(false);
+  });
+
+  // NEGATIVE CONTROL for the case above. Without it, a `guardCommands` that
+  // refused unconditionally — or any wiring that broke the command path
+  // outright — would satisfy the paused assertion while the browser did
+  // nothing at all. An unpaused command must reach dispatch and be answered on
+  // its own terms.
+  it("lets a command through when nothing is paused", async () => {
+    syncStore.apiBase = "https://x.test/api";
+    syncStore.apiKey = "brx-abc";
+    await startCompanion();
+    await settle();
+    const ws = sockets[0];
+    ws.readyState = 1;
+
+    ws.onmessage({
+      data: JSON.stringify({ requestId: "r_live", cmd: "page_click" }),
+    });
+    await socket.__commandQueue();
+    await settle();
+
+    const replies = ws.sent.map((raw) => JSON.parse(raw));
+    expect(replies).toHaveLength(1);
+    expect(replies[0].requestId).toBe("r_live");
+    // It is DENIED — the allowlist is empty in this double, which is the
+    // correct default-deny — but denied by the GATE, not by the pause. The two
+    // are told apart by the message, which is the only thing distinguishing
+    // "the user stopped me" from "that domain is not allowed".
+    expect(replies[0].ok).toBe(false);
+    expect(replies[0].error).not.toMatch(/paused/i);
   });
 
   // @edge — a warm worker must be PINGED, not reconnected: rebuilding a live

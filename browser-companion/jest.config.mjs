@@ -8,4 +8,9 @@ export default {
   rootDir: ".",
   testEnvironment: "node",
   transform: {},
+  // `e2e/` is Playwright's, and Playwright refuses to run inside jest — it
+  // throws "needs to be invoked via 'npx playwright test'" and the whole suite
+  // fails to run. Two directories, two runners, stated here so `yarn test`
+  // stays the extension's unit suite.
+  testPathIgnorePatterns: ["/node_modules/", "<rootDir>/e2e/", "<rootDir>/dist/"],
 };

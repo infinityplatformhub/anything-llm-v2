@@ -1,0 +1,355 @@
+/*
+ * The popup's styling, following the approved mockup
+ * (docs/superpowers/mockups/browser-companion-bridge.html at f73f0cc7).
+ *
+ * The mockup is a throwaway artefact, so its TOKENS are reproduced and its
+ * markup is not: the colours, the 376px width, the tab strip and the switch are
+ * what a person approved, and copying the mockup's inline handlers and
+ * innerHTML would import a prototype's shortcuts into shipping code.
+ *
+ * A stylesheet rather than inline `style` objects because the mockup's states
+ * are pseudo-class and attribute driven (`:focus-visible`, `[aria-checked]`),
+ * and none of those can be expressed inline — dropping them would silently cost
+ * the keyboard affordances the mockup drew.
+ */
+
+.companion {
+  --ink: #14161c;
+  --ink-2: #4a5160;
+  --ink-3: #7b8494;
+  --bg: #f6f7fa;
+  --surface: #ffffff;
+  --sunk: #eff1f5;
+  --line: #e0e4ea;
+  --line-hard: #c8cfd9;
+  --accent: #1a5fb4;
+  --accent-soft: #e7f0fb;
+  --ok: #12734a;
+  --warn: #8a5a00;
+  --crit: #a8271c;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  width: 376px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * The popup renders inside whatever theme Chrome is in. Defined as a media
+ * query over the token block only, so every colour still has a definition in
+ * the light block above and nothing depends on the dark branch existing.
+ */
+@media (prefers-color-scheme: dark) {
+  .companion {
+    --ink: #e7eaf0;
+    --ink-2: #a3acbb;
+    --ink-3: #78818f;
+    --bg: #101217;
+    --surface: #181b22;
+    --sunk: #1f232b;
+    --line: #2a2f39;
+    --line-hard: #3a4150;
+    --accent: #74a9ef;
+    --accent-soft: #1b2635;
+    --ok: #4cc38a;
+    --warn: #dda94a;
+    --crit: #f57268;
+  }
+}
+
+.companion *,
+.companion *::before,
+.companion *::after {
+  box-sizing: border-box;
+}
+
+.companion-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.companion-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 99px;
+  background: var(--ink-3);
+  flex: none;
+}
+.companion-dot.live {
+  background: var(--ok);
+}
+.companion-dot.hold {
+  background: var(--warn);
+}
+.companion-dot.stop {
+  background: var(--crit);
+}
+.companion-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.companion-state {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.companion-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+  background: var(--sunk);
+}
+.companion-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  padding: 9px 4px;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-2);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.companion-tab[aria-selected="true"] {
+  color: var(--ink);
+  background: var(--surface);
+  border-bottom-color: var(--accent);
+}
+.companion-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.companion-pane {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 296px;
+}
+
+.companion-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.companion-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.companion-input {
+  border: 1px solid var(--line-hard);
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  width: 100%;
+}
+
+.companion-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+.companion-row:last-child {
+  border-bottom: none;
+}
+.companion-row-t {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  word-break: break-all;
+}
+.companion-row-s {
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.companion-switch {
+  width: 38px;
+  height: 22px;
+  border-radius: 99px;
+  border: 1px solid var(--line-hard);
+  background: var(--sunk);
+  position: relative;
+  cursor: pointer;
+  flex: none;
+  transition: background 0.13s;
+}
+.companion-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 99px;
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.13s;
+}
+.companion-switch[aria-checked="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.companion-switch[aria-checked="true"]::after {
+  transform: translateX(16px);
+}
+.companion-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.companion-btn {
+  border: 1px solid var(--line-hard);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 6px;
+  padding: 8px 13px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.companion-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.companion-btn.solid {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.companion-btn.danger {
+  color: var(--crit);
+  border-color: var(--crit);
+}
+.companion-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.companion-btn[disabled] {
+  opacity: 0.55;
+  cursor: default;
+}
+.companion-btns {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+
+.companion-step {
+  background: var(--sunk);
+  border-radius: 7px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.companion-step-h {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.companion-note {
+  font-size: 12px;
+  color: var(--ink-2);
+  background: var(--accent-soft);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+/*
+ * The failure banner. Deliberately louder than `.companion-note`: every message
+ * that lands here is one where the user believes something happened that did
+ * not — a revoked domain that is still live, or an audit log that has stopped
+ * recording.
+ */
+.companion-alert {
+  font-size: 12px;
+  border-radius: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--crit);
+  color: var(--crit);
+  background: color-mix(in srgb, var(--crit) 8%, transparent);
+}
+
+.companion-log {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.85;
+  color: var(--ink-2);
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.companion-log b {
+  color: var(--ink);
+  font-weight: 500;
+}
+.companion-log .denied {
+  color: var(--crit);
+}
+
+.companion-empty {
+  color: var(--ink-3);
+  font-size: 13px;
+  text-align: center;
+  padding: 32px 12px;
+}
+.companion-empty strong {
+  color: var(--ink);
+  display: block;
+  font-size: 14px;
+  margin-bottom: 6px;
+}
+
+.companion-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: var(--mono);
+  padding: 3px 9px;
+  border-radius: 99px;
+  align-self: flex-start;
+}
+.companion-flag.ok {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  color: var(--ok);
+}
+.companion-flag.warn {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+.companion-flag.crit {
+  background: color-mix(in srgb, var(--crit) 14%, transparent);
+  color: var(--crit);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .companion * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

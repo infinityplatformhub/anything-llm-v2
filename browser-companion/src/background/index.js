@@ -20,6 +20,7 @@ import { record } from "./auditLog.js";
 import { cdp } from "./cdp.js";
 import * as pageState from "./pageState.js";
 import * as socket from "./socket.js";
+import * as control from "./control.js";
 
 /**
  * The `chrome.storage.sync` keys the popup writes the server address and key
@@ -75,7 +76,13 @@ export async function startCompanion() {
     await socket.connect({
       apiBase,
       apiKey,
-      onCommand: (command) => handle(command, deps),
+      // WRAPPED, not called directly. `control.guardCommands` is what makes the
+      // popup's pause real: a paused browser refuses here, BEFORE a tab is
+      // resolved, the allowlist is consulted or a debugger is attached. Wiring
+      // `handle` in bare would leave the pause button changing a flag nothing
+      // reads — the popup would say "paused" and the agent would carry on
+      // clicking, which is the single worst failure this control can have.
+      onCommand: control.guardCommands((command) => handle(command, deps)),
     });
   } catch (error) {
     // A rejected `storage.sync.get` (offline profile, quota, a disabled sync
@@ -116,8 +123,28 @@ export function onAlarm(alarm) {
   if (!socket.keepalive()) startCompanion();
 }
 
+/**
+ * The popup's messages, answered by control.js.
+ *
+ * `startCompanion` is injected rather than imported over there: index.js
+ * imports control.js, so an import back would be a cycle whose binding is still
+ * uninitialised when control.js's top level runs.
+ *
+ * The `return` is load-bearing. `control.onMessage` answers `true` to hold the
+ * message channel open for its async reply; dropping that return value makes
+ * the listener answer `undefined`, Chrome closes the channel immediately, and
+ * every popup request resolves `undefined` — a popup stuck on its loading state
+ * with no error anywhere.
+ */
+export function onRuntimeMessage(message, sender, sendResponse) {
+  return control.onMessage(message, sender, sendResponse, {
+    restart: startCompanion,
+  });
+}
+
 chrome.runtime.onStartup.addListener(startCompanion);
 chrome.runtime.onInstalled.addListener(startCompanion);
+chrome.runtime.onMessage.addListener(onRuntimeMessage);
 chrome.storage.onChanged.addListener(onStorageChanged);
 chrome.alarms.onAlarm.addListener(onAlarm);
 

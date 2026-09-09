@@ -60,3 +60,30 @@ second copy of jest installed here, matching what `server/` does. The tests are
 ESM, which jest reads only under `--experimental-vm-modules`; the `test` script
 sets that flag, so run the suite through the script rather than calling jest
 directly.
+
+## Popup E2E
+
+    yarn test:e2e
+
+Builds the real extension, loads it unpacked into a real browser and drives the
+popup. Two things about it are not optional and are easy to get wrong:
+
+**It must run headed.** `--headed` is passed on the command line rather than set
+in `playwright.config.js`, because Playwright does not serialise the `use` block
+into its JSON report — a `headless: false` in the config leaves no trace, so a
+headless run cannot be told from a headed one afterwards.
+
+**It runs on Chrome for Testing, not on branded Chrome.** Chrome 137+ ships a
+kill switch for `--load-extension`, and on Chrome 152 the flag is accepted and
+then silently ignored: `chrome://version` shows it on the command line,
+`chrome://extensions` lists nothing, and no service worker is ever registered.
+`--disable-features=DisableLoadExtensionCommandLineSwitch` does not bring it
+back. The failure mode is the dangerous one — the browser launches, the tests
+run, and every assertion fails for a reason that looks like a bug in the popup.
+Chrome for Testing is the build without that policy and is what
+`npx playwright install chromium` downloads.
+
+Set `COMPANION_CHROME` to override the browser binary, and `COMPANION_TOOLCHAIN`
+to point at a checkout whose `node_modules` has vite, `@vitejs/plugin-react`,
+react and react-dom (needed only when this package's own `node_modules` is not
+installed, e.g. in a shared-install git worktree).

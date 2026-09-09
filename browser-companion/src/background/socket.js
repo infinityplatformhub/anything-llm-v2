@@ -375,6 +375,49 @@ export async function ensureAgentTab() {
 }
 
 /**
+ * Whether this worker believes the agent currently holds a tab.
+ *
+ * Deliberately does NOT create one. The popup calls this to decide whether to
+ * offer "go to the agent's tab", and a resolver that created a tab would mean
+ * merely OPENING the popup spawns a blank tab in the user's browser — an action
+ * with a visible side effect, taken by a read.
+ *
+ * It reports this module's belief, not Chrome's truth: the tab may have been
+ * closed since. `focusAgentTab` is where that is found out, because finding out
+ * requires an async call the popup's render cannot make.
+ *
+ * @returns {boolean}
+ */
+export function hasAgentTab() {
+  return agentTabId !== null;
+}
+
+/**
+ * Focus the agent's tab, for the popup's "go to the agent's tab" button.
+ *
+ * Does not create a tab either, and answers `false` rather than throwing when
+ * there is none — "the agent is not working in a tab right now" is an ordinary
+ * state of this browser, not an error, and the popup says so in words.
+ *
+ * A tab id this module holds may name a tab the user has since closed, so the
+ * update failing is expected rather than exceptional; it is answered as `false`
+ * and the stale id is dropped, so the popup stops offering a button that goes
+ * nowhere.
+ *
+ * @returns {Promise<boolean>} whether a tab was actually focused
+ */
+export async function focusAgentTab() {
+  if (agentTabId === null) return false;
+  try {
+    await chrome.tabs.update(agentTabId, { active: true });
+    return true;
+  } catch {
+    agentTabId = null;
+    return false;
+  }
+}
+
+/**
  * Every tab in the browser, for `page_tabs` and `page_switch`.
  *
  * Unfiltered ON PURPOSE: `dispatch` filters the result against the allowlist
