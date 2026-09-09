@@ -188,18 +188,353 @@ describe("browserCompanion protocol", () => {
     expect((await pending).data).toBe("mine");
   });
 
-  // A socket that closed between the registry handing it over and the write must
-  // come back as an error now, not as a full-length timeout the agent waits out.
+  // A socket that throws on send — ws does this for CONNECTING(0), and any
+  // non-ws transport may — must come back as an error rather than rejecting.
+  // NOTE: this is deliberately no longer the closed-socket case. Real ws does
+  // NOT throw on a closed socket (see the readyState tests below); an earlier
+  // version of this suite tested only a throwing fake and therefore asserted
+  // nothing about the disconnect path that actually occurs in production.
   it("resolves as an error when the socket throws on send", async () => {
     const socket = {
       send() {
-        throw new Error("WebSocket is not open");
+        throw new Error("WebSocket is not open: readyState 0 (CONNECTING)");
       },
     };
     const result = await protocol.send({ socket, cmd: "click", payload: {} });
     expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/WebSocket is not open/);
+    expect(result.error).toMatch(/readyState 0 \(CONNECTING\)/);
     expect(protocol.__pendingCount()).toBe(0);
+  });
+
+  // A non-Error throw has no `.message`. Without coercion the documented
+  // `error: string|null` renders as "could not be sent: undefined".
+  it("keeps error a string when the socket throws a non-Error", async () => {
+    const socket = {
+      send() {
+        throw "socket exploded"; // eslint-disable-line no-throw-literal
+      },
+    };
+    const result = await protocol.send({ socket, cmd: "click", payload: {} });
+    expect(typeof result.error).toBe("string");
+    expect(result.error).toMatch(/socket exploded/);
+  });
+
+  // Q-1: the disconnect path that actually happens. ws throws only for
+  // CONNECTING; for CLOSING(2)/CLOSED(3) send() calls sendAfterClose() and
+  // returns silently, so a try/catch never fires and the command would wait out
+  // the full timeout for an answer that can never arrive.
+  describe("a socket that is not OPEN", () => {
+    it.each([
+      ["CLOSED", 3],
+      ["CLOSING", 2],
+      ["CONNECTING", 0],
+    ])("answers immediately when readyState is %s", async (_name, state) => {
+      let wrote = false;
+      const socket = {
+        readyState: state,
+        send() {
+          wrote = true;
+        },
+      };
+
+      const started = Date.now();
+      const result = await protocol.send({
+        socket,
+        cmd: "read",
+        payload: {},
+        // Long enough that a timeout-based settle is unmistakable.
+        timeoutMs: 30_000,
+      });
+
+      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/not connected/i);
+      expect(result.error).not.toMatch(/timed out/i);
+      expect(wrote).toBe(false);
+      expect(protocol.__pendingCount()).toBe(0);
+    });
+
+    it("still writes to a socket with no readyState at all", async () => {
+      // A test double or a non-ws transport must not be refused.
+      const socket = fakeSocket();
+      const pending = protocol.send({ socket, cmd: "read", payload: {} });
+      expect(socket.sent).toHaveLength(1);
+      protocol.handleMessage({
+        socket,
+        raw: JSON.stringify({
+          requestId: socket.lastRequestId(),
+          ok: true,
+          data: "ok",
+        }),
+      });
+      expect((await pending).data).toBe("ok");
+    });
+
+    // The premise behind the readyState guard, asserted against the real
+    // library rather than a fake: if ws ever starts throwing on a closed
+    // socket, this test says so instead of the guard quietly becoming dead code.
+    it("does not throw on a real terminated ws socket (the reason the guard exists)", async () => {
+      const WebSocket = require("ws");
+      const wss = new WebSocket.Server({ port: 0 });
+      try {
+        const serverSocket = await new Promise((resolve, reject) => {
+          wss.on("connection", resolve);
+          wss.on("error", reject);
+          wss.on("listening", () => {
+            const client = new WebSocket(`ws://127.0.0.1:${wss.address().port}`);
+            client.on("error", reject);
+          });
+        });
+
+        await new Promise((resolve) => {
+          serverSocket.on("close", resolve);
+          serverSocket.terminate();
+        });
+        expect(serverSocket.readyState).toBe(3);
+        expect(() => serverSocket.send("x")).not.toThrow();
+
+        const started = Date.now();
+        const result = await protocol.send({
+          socket: serverSocket,
+          cmd: "read",
+          payload: {},
+          timeoutMs: 30_000,
+        });
+        expect(Date.now() - started).toBeLessThan(1_000);
+        expect(result.error).toMatch(/not connected/i);
+      } finally {
+        await new Promise((resolve) => wss.close(resolve));
+      }
+    });
+  });
+
+  // Q-3: a reply must resolve a command only on the socket it was written to.
+  // Without this, an extension echoing another connection's requestId resolves
+  // that caller with its own data — no error, no log, silently wrong.
+  it("ignores a reply echoed on a different socket", async () => {
+    const alice = fakeSocket();
+    const mallory = fakeSocket();
+
+    const pending = protocol.send({ socket: alice, cmd: "read", payload: {} });
+    const requestId = alice.lastRequestId();
+    expect(mallory.sent).toHaveLength(0);
+
+    protocol.handleMessage({
+      socket: mallory,
+      raw: JSON.stringify({ requestId, ok: true, data: "hijacked" }),
+    });
+    expect(protocol.__pendingCount()).toBe(1);
+
+    protocol.handleMessage({
+      socket: alice,
+      raw: JSON.stringify({ requestId, ok: true, data: "mine" }),
+    });
+    expect((await pending).data).toBe("mine");
+  });
+
+  // The non-adversarial variant: the same user's extension reconnects (the
+  // registry evicts and replaces the socket) with a command still in flight.
+  // The reply would come from a different browser session at a different page.
+  it("ignores a reply from a replacement socket for the same user", async () => {
+    const oldSocket = fakeSocket();
+    const pending = protocol.send({ socket: oldSocket, cmd: "read", payload: {} });
+    const requestId = oldSocket.lastRequestId();
+
+    const reconnected = fakeSocket();
+    protocol.handleMessage({
+      socket: reconnected,
+      raw: JSON.stringify({ requestId, ok: true, data: "other tab" }),
+    });
+    expect(protocol.__pendingCount()).toBe(1);
+
+    protocol.handleMessage({
+      socket: oldSocket,
+      raw: JSON.stringify({ requestId, ok: true, data: "same tab" }),
+    });
+    expect((await pending).data).toBe("same tab");
+  });
+
+  // Q-2: `ok` must be compared strictly. "false" is a truthy string, so an
+  // extension doing `ok: String(success)` would turn a denied command into a
+  // confident success carrying extension-supplied data.
+  it.each([
+    ["the string 'false'", "false"],
+    ["the number 1", 1],
+    ["the string 'true'", "true"],
+    ["an object", {}],
+  ])("does not treat %s as a successful reply", async (_name, okValue) => {
+    const socket = fakeSocket();
+    const pending = protocol.send({ socket, cmd: "read", payload: {} });
+    protocol.handleMessage({
+      socket,
+      raw: JSON.stringify({
+        requestId: socket.lastRequestId(),
+        ok: okValue,
+        data: "TREATED AS SUCCESS",
+      }),
+    });
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    expect(result.data).toBeNull();
+  });
+
+  // The result shape is a contract tasks 3 and 4 destructure. A success reply
+  // that omits `data` must still yield `data: null` — `undefined` would make
+  // JSON.stringify drop the key entirely, so the field vanishes rather than
+  // reading as empty.
+  it("returns null data for a successful reply that carries none", async () => {
+    const socket = fakeSocket();
+    const pending = protocol.send({ socket, cmd: "read", payload: {} });
+    protocol.handleMessage({
+      socket,
+      raw: JSON.stringify({ requestId: socket.lastRequestId(), ok: true }),
+    });
+    const result = await pending;
+    expect(result.data).toBeNull();
+    expect(Object.keys(result).sort()).toEqual(["data", "error", "ok"]);
+    expect(JSON.parse(JSON.stringify(result))).toEqual({
+      ok: true,
+      data: null,
+      error: null,
+    });
+  });
+
+  // Q-5: `error` must stay a string, or task 3/4 code interpolating it gets
+  // "[object Object]".
+  it("coerces a non-string error from the extension to a string", async () => {
+    const socket = fakeSocket();
+    const pending = protocol.send({ socket, cmd: "read", payload: {} });
+    protocol.handleMessage({
+      socket,
+      raw: JSON.stringify({
+        requestId: socket.lastRequestId(),
+        ok: false,
+        error: { nested: "obj" },
+      }),
+    });
+    const result = await pending;
+    expect(typeof result.error).toBe("string");
+    expect(result.error).toMatch(/nested/);
+  });
+
+  // Q-4: the caller's timeoutMs gets the same validation as the env var. Tasks
+  // 3 and 4 are the callers; every value here otherwise fires on the next tick
+  // and produces an error reading "timed out after nullms".
+  describe("caller-supplied timeoutMs", () => {
+    it.each([
+      ["null", null],
+      ["NaN", NaN],
+      ["zero", 0],
+      ["negative", -1],
+      ["a non-numeric string", "fast"],
+      ["an object", {}],
+      ["past the 32-bit setTimeout ceiling", 2 ** 31],
+    ])("does not time out on the next tick for %s", async (_name, timeoutMs) => {
+      const socket = fakeSocket();
+      const pending = protocol.send({
+        socket,
+        cmd: "read",
+        payload: {},
+        timeoutMs,
+      });
+
+      // A next-tick timeout settles well inside this window; a clamped one does
+      // not settle at all, leaving the command available to its real reply.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(protocol.__pendingCount()).toBe(1);
+
+      protocol.handleMessage({
+        socket,
+        raw: JSON.stringify({
+          requestId: socket.lastRequestId(),
+          ok: true,
+          data: "answered",
+        }),
+      });
+      const result = await pending;
+      expect(result.ok).toBe(true);
+      expect(result.data).toBe("answered");
+    });
+
+    it("honours a valid caller timeout over the module default", async () => {
+      const socket = fakeSocket();
+      const result = await protocol.send({
+        socket,
+        cmd: "read",
+        payload: {},
+        timeoutMs: 15,
+      });
+      expect(result.error).toMatch(/timed out after 15ms/);
+    });
+  });
+
+  // Q-8: the contract says send never throws. Called with nothing, it did.
+  it("resolves rather than throwing when called with no arguments", async () => {
+    let thrown = null;
+    let result = null;
+    try {
+      result = await protocol.send();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeNull();
+    expect(result.ok).toBe(false);
+    expect(typeof result.error).toBe("string");
+  });
+
+  // Q-6: __reset is the isolation seam every test in this file depends on, and
+  // nothing verified it. A reset that clears the timer and drops the map entry
+  // without resolving leaves the caller hung forever — to the Jest timeout,
+  // rather than a useful failure.
+  describe("__reset", () => {
+    it("settles in-flight callers instead of abandoning them", async () => {
+      const socket = fakeSocket();
+      const pending = protocol.send({ socket, cmd: "read", payload: {} });
+      expect(protocol.__pendingCount()).toBe(1);
+
+      protocol.__reset();
+
+      const settled = await Promise.race([
+        pending,
+        new Promise((resolve) => setTimeout(() => resolve("HUNG"), 100)),
+      ]);
+      expect(settled).not.toBe("HUNG");
+      expect(settled.ok).toBe(false);
+      expect(typeof settled.error).toBe("string");
+    });
+
+    it("empties the correlation table", async () => {
+      const socket = fakeSocket();
+      const pending = protocol.send({ socket, cmd: "read", payload: {} });
+      protocol.__reset();
+      expect(protocol.__pendingCount()).toBe(0);
+      await pending;
+    });
+
+    // A leaked timer cannot be observed through the promise: the caller is
+    // already settled, so the stray fire is a silent no-op. Fake timers make the
+    // leak itself visible — without this, dropping the clearTimeout from __reset
+    // is indistinguishable from keeping it.
+    it("clears the timer rather than leaking it", async () => {
+      jest.useFakeTimers();
+      try {
+        const socket = fakeSocket();
+        const pending = protocol.send({
+          socket,
+          cmd: "read",
+          payload: {},
+          timeoutMs: 20,
+        });
+        expect(jest.getTimerCount()).toBe(1);
+
+        protocol.__reset();
+        expect(jest.getTimerCount()).toBe(0);
+
+        await pending; // already settled by __reset; must not hang
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   // attach() is the only production path into handleMessage; the other tests all
@@ -225,6 +560,23 @@ describe("browserCompanion protocol", () => {
       )
     );
     expect((await pending).data).toBe("via attach");
+  });
+
+  // A reconnect path that calls attach twice would deliver every frame twice.
+  // The duplicate finds the entry already settled and deleted, so it is dropped
+  // silently — the bug leaves no trace, which is why it needs a test.
+  it("attach is idempotent per socket", () => {
+    let binds = 0;
+    const socket = { send() {}, on: () => binds++ };
+
+    protocol.attach(socket);
+    protocol.attach(socket);
+    protocol.attach(socket);
+    expect(binds).toBe(1);
+
+    // A different socket still gets its own handler.
+    protocol.attach({ send() {}, on: () => binds++ });
+    expect(binds).toBe(2);
   });
 
   describe("DEFAULT_TIMEOUT_MS", () => {
