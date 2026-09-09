@@ -26,9 +26,24 @@ const LEGACY_KEY_ERROR =
 /** @type {Map<string, object>} one socket per user — see plan Global Constraints */
 const sockets = new Map();
 
-/** Namespaced so no userId of any type can collide with SINGLE_USER_KEY. */
+/**
+ * Namespaced so no userId of any type can collide with SINGLE_USER_KEY.
+ *
+ * The integer guard lives here, not in the callers, because namespacing
+ * stringifies the key: `u:${"7"}` and `u:${7}` are the same string, as are
+ * `u:${new Number(7)}`, `u:${[7]}` and `u:${7n}`. A raw Map kept those apart by
+ * key identity; a string key does not. So a cross-type id at WRITE time takes
+ * over or evicts a legitimate integer-id user, and no check on the read side
+ * can see it — the value `resolve` receives (`7`) is genuinely valid, and the
+ * corruption happened one function away under a different value. Key derivation
+ * is the one choke point all three entry points share.
+ * @throws {TypeError} when userId is neither an integer nor null.
+ */
 function keyFor(userId) {
-  return userId === null ? SINGLE_USER_KEY : `u:${userId}`;
+  if (userId === null) return SINGLE_USER_KEY;
+  if (!Number.isInteger(userId))
+    throw new TypeError("registry keys must be an integer userId or null.");
+  return `u:${userId}`;
 }
 
 /**
@@ -36,7 +51,9 @@ function keyFor(userId) {
  * @param {{userId: number|null, socket: object}} args
  * @returns {{evicted: object|null}} the socket displaced by this one, if any
  * @throws {TypeError} when `socket` is missing — storing a blank entry would
- *   occupy the key and muddle the `evicted` result of the next register.
+ *   occupy the key and muddle the `evicted` result of the next register — or
+ *   when `userId` is neither an integer nor null (see keyFor). A throw, not a
+ *   silent refusal: the caller must not be left believing a socket is bound.
  */
 function register({ userId, socket }) {
   if (!socket) throw new TypeError("register() requires a socket.");
@@ -52,6 +69,11 @@ function register({ userId, socket }) {
  * @returns {void}
  */
 function unregister({ userId, socket }) {
+  // Asymmetric with register on purpose: a close handler must never be crashed
+  // by a bad id, and there is nothing to drop anyway. register throws instead,
+  // because a register that silently does nothing leaves the caller believing a
+  // socket is bound when it is not.
+  if (userId !== null && !Number.isInteger(userId)) return;
   const key = keyFor(userId);
   // Only drop the entry when it is still this socket. A socket that closes late
   // must not evict the replacement that already took its place.

@@ -94,10 +94,12 @@ describe("browserCompanion registry", () => {
 
   // @edge — ทิศกลับ: ลงทะเบียนด้วย sentinel string ต้องไม่ตกถึง single-user run
   it("never hands a socket registered under the sentinel string to a null-user run", () => {
-    registry.register({
-      userId: registry.SINGLE_USER_KEY,
-      socket: fakeSocket("attacker"),
-    });
+    expect(() =>
+      registry.register({
+        userId: registry.SINGLE_USER_KEY,
+        socket: fakeSocket("attacker"),
+      })
+    ).toThrow(TypeError);
     const { socket, error } = registry.resolve({ userId: null, multiUserMode: false });
     expect(socket).toBeNull();
     expect(error).toMatch(/not connected/i);
@@ -121,5 +123,32 @@ describe("browserCompanion registry", () => {
     expect(() => registry.resolve({ userId: null, multiUserMode: 0 })).toThrow(
       /explicit boolean multiUserMode/i
     );
+  });
+
+  // @edge — key เป็น string แล้ว "7" กับ 7 จึงชนกัน ต้องกันตั้งแต่ตอนเขียน
+  it("register refuses a string userId that would share a key with an integer one", () => {
+    registry.register({ userId: 7, socket: fakeSocket("real") });
+    expect(() => registry.register({ userId: "7", socket: fakeSocket("attacker") })).toThrow(
+      TypeError
+    );
+  });
+
+  it("leaves the real user's socket in place after a cross-type register is refused", () => {
+    const real = fakeSocket("real");
+    registry.register({ userId: 7, socket: real });
+    expect(() => registry.register({ userId: "7", socket: fakeSocket("attacker") })).toThrow();
+    expect(registry.resolve({ userId: 7, multiUserMode: true }).socket).toBe(real);
+  });
+
+  it("register refuses an object userId that would alias with any other object", () => {
+    expect(() => registry.register({ userId: {}, socket: fakeSocket("a") })).toThrow(TypeError);
+  });
+
+  // @edge — unregister ต้องไม่ throw ใน close handler แต่ก็ต้องไม่ลบของจริง
+  it("unregister ignores a cross-type userId without dropping the real entry", () => {
+    const real = fakeSocket("real");
+    registry.register({ userId: 7, socket: real });
+    expect(() => registry.unregister({ userId: "7", socket: real })).not.toThrow();
+    expect(registry.resolve({ userId: 7, multiUserMode: true }).socket).toBe(real);
   });
 });
