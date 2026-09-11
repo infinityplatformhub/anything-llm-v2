@@ -80,7 +80,7 @@ export default function ConnectionTab({ status, onError, onRefresh }) {
             className="companion-input"
             type="url"
             value={config.apiBase}
-            placeholder="https://anythingllm.example.com/api"
+            placeholder="https://example.com/api"
             onChange={(event) => {
               setConfig((current) => ({
                 ...current,

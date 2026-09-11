@@ -474,7 +474,7 @@ globalThis.chrome?.tabs?.onRemoved?.addListener?.(handleTabRemoved);
 /**
  * The socket URL, with NO credential in it.
  *
- * @param {unknown} apiBase e.g. `https://anythingllm.example.com/api`
+ * @param {unknown} apiBase e.g. `https://example.com/api`
  * @returns {string}
  * @throws {TypeError} when apiBase is not a URL, rather than building a broken one
  */

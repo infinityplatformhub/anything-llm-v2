@@ -103,13 +103,13 @@ export async function saveServerConfig({ apiBase, apiKey }) {
   } catch {
     return {
       ok: false,
-      error: "Server URL is invalid. Enter a complete http:// or https:// URL.",
+      error: "Server URL is invalid. Enter a complete URL including the http or https scheme.",
     };
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     return {
       ok: false,
-      error: "Server URL must start with http:// or https://.",
+      error: "Server URL must use the http or https scheme.",
     };
   }
 

@@ -43,7 +43,7 @@ test.describe("the popup a user actually sees", () => {
     await ready(popup);
     await popup
       .getByRole("textbox", { name: /server/i })
-      .fill("https://anythingllm.example.com/api");
+      .fill("https://example.com/api");
     await popup.getByLabel(/api key/i).fill("brx-popup-config-test-secret");
     await popup.getByRole("button", { name: /บันทึกการเชื่อมต่อ/ }).click();
 
@@ -51,7 +51,7 @@ test.describe("the popup a user actually sees", () => {
       chrome.storage.sync.get(["apiBase", "apiKey"])
     );
     expect(stored).toEqual({
-      apiBase: "https://anythingllm.example.com/api",
+      apiBase: "https://example.com/api",
       apiKey: "brx-popup-config-test-secret",
     });
 
