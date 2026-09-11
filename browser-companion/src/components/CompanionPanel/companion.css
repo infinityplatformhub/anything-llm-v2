@@ -137,6 +137,12 @@
   min-height: 296px;
 }
 
+.companion-config {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 .companion-field {
   display: flex;
   flex-direction: column;

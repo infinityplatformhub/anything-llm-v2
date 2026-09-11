@@ -11,8 +11,9 @@ companion, which is a git submodule of Mintplex's repo). Both can be installed.
 1. `yarn install && yarn build`
 2. Open `chrome://extensions`, enable Developer mode
 3. Load unpacked, select this folder's `dist/`
-4. Click the extension, enter your AnythingLLM server URL and paste your
-   browser-extension API key. The server URL is yours to supply — this extension
+4. Click the extension, enter your AnythingLLM server URL, paste your
+   browser-extension API key, then click **บันทึกการเชื่อมต่อ**. The server URL
+   is yours to supply — this extension
    ships no default host, because AnythingLLM runs wherever you put it.
 5. Add the domains you want the agent to touch. The allowlist starts empty, so
    no site is reachable until you add it.

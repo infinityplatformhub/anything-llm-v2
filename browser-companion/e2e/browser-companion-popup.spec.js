@@ -37,6 +37,48 @@ async function ready(popup) {
 }
 
 test.describe("the popup a user actually sees", () => {
+  test("saving connection settings writes the config the worker reads", async ({
+    popup,
+  }) => {
+    await ready(popup);
+    await popup
+      .getByRole("textbox", { name: /server/i })
+      .fill("https://anythingllm.example.com/api");
+    await popup.getByLabel(/api key/i).fill("brx-popup-config-test-secret");
+    await popup.getByRole("button", { name: /บันทึกการเชื่อมต่อ/ }).click();
+
+    const stored = await popup.evaluate(async () =>
+      chrome.storage.sync.get(["apiBase", "apiKey"])
+    );
+    expect(stored).toEqual({
+      apiBase: "https://anythingllm.example.com/api",
+      apiKey: "brx-popup-config-test-secret",
+    });
+
+    // Saving must not leave the credential readable in a popup opened during
+    // a screen share. The helper's fixed mask plus tail identifies the key.
+    await expect(popup.getByLabel(/api key/i)).toHaveValue("");
+    await expect(popup.getByText("••••••••cret")).toBeVisible();
+    await expect(popup.getByText("brx-popup-config-test-secret")).toHaveCount(
+      0
+    );
+  });
+
+  test("an invalid server URL is rejected without writing either setting @edge", async ({
+    popup,
+  }) => {
+    await ready(popup);
+    await popup.getByRole("textbox", { name: /server/i }).fill("not a URL");
+    await popup.getByLabel(/api key/i).fill("brx-must-not-be-saved");
+    await popup.getByRole("button", { name: /บันทึกการเชื่อมต่อ/ }).click();
+
+    await expect(popup.getByRole("alert")).toContainText(/URL/);
+    const stored = await popup.evaluate(async () =>
+      chrome.storage.sync.get(["apiBase", "apiKey"])
+    );
+    expect(stored).toEqual({});
+  });
+
   test("kill switch is reachable from every tab", async ({ popup }) => {
     await ready(popup);
     // The whole point of the control: when you want to stop, you must not have
@@ -72,7 +114,9 @@ test.describe("the popup a user actually sees", () => {
     await ready(popup);
     await popup.getByRole("tab", { name: "โดเมน" }).click();
     await popup.getByRole("button", { name: /เพิ่มโดเมน/ }).click();
-    await popup.getByRole("textbox", { name: /โดเมน/ }).fill("www.linkedin.com");
+    await popup
+      .getByRole("textbox", { name: /โดเมน/ })
+      .fill("www.linkedin.com");
     await popup.getByRole("button", { name: /^บันทึก$/ }).click();
 
     // Adding a domain and granting access to it are two decisions. The second
@@ -88,7 +132,9 @@ test.describe("the popup a user actually sees", () => {
     // off really removes it and closing the popup loses the row. A review
     // found this stated only in a source comment, which is nowhere a user
     // looks. Asserted here so the sentence cannot quietly go missing again.
-    await expect(popup.getByText(/หายไปจากรายการเมื่อปิดหน้าต่างนี้/)).toBeVisible();
+    await expect(
+      popup.getByText(/หายไปจากรายการเมื่อปิดหน้าต่างนี้/)
+    ).toBeVisible();
   });
 
   test("switching a domain on writes it to the allowlist the gate reads", async ({
@@ -97,7 +143,9 @@ test.describe("the popup a user actually sees", () => {
     await ready(popup);
     await popup.getByRole("tab", { name: "โดเมน" }).click();
     await popup.getByRole("button", { name: /เพิ่มโดเมน/ }).click();
-    await popup.getByRole("textbox", { name: /โดเมน/ }).fill("www.linkedin.com");
+    await popup
+      .getByRole("textbox", { name: /โดเมน/ })
+      .fill("www.linkedin.com");
     await popup.getByRole("button", { name: /^บันทึก$/ }).click();
 
     const toggle = popup.getByRole("switch", { name: "www.linkedin.com" });
@@ -109,8 +157,9 @@ test.describe("the popup a user actually sees", () => {
     // while writing nowhere, or writing under a different key, would pass an
     // attribute-only check and leave the gate enforcing an empty list.
     const stored = await popup.evaluate(
-      async () => (await chrome.storage.local.get(["companionAllowlist"]))
-        .companionAllowlist
+      async () =>
+        (await chrome.storage.local.get(["companionAllowlist"]))
+          .companionAllowlist
     );
     expect(stored).toEqual(["www.linkedin.com"]);
   });
@@ -121,7 +170,9 @@ test.describe("the popup a user actually sees", () => {
     await ready(popup);
     await popup.getByRole("tab", { name: "โดเมน" }).click();
     await popup.getByRole("button", { name: /เพิ่มโดเมน/ }).click();
-    await popup.getByRole("textbox", { name: /โดเมน/ }).fill("www.linkedin.com");
+    await popup
+      .getByRole("textbox", { name: /โดเมน/ })
+      .fill("www.linkedin.com");
     await popup.getByRole("button", { name: /^บันทึก$/ }).click();
 
     // THE FAILURE THAT MATTERS MOST IN THIS UI. `saveAllowlist` throws on a
@@ -170,7 +221,9 @@ test.describe("the popup a user actually sees", () => {
     await ready(popup);
     await popup.getByRole("tab", { name: "โดเมน" }).click();
     await popup.getByRole("button", { name: /เพิ่มโดเมน/ }).click();
-    await popup.getByRole("textbox", { name: /โดเมน/ }).fill("www.linkedin.com");
+    await popup
+      .getByRole("textbox", { name: /โดเมน/ })
+      .fill("www.linkedin.com");
     await popup.getByRole("button", { name: /^บันทึก$/ }).click();
 
     const toggle = popup.getByRole("switch", { name: "www.linkedin.com" });
@@ -189,7 +242,9 @@ test.describe("the popup a user actually sees", () => {
 
     // The user asks to turn it ON. The write fails.
     await toggle.click();
-    await expect(popup.getByRole("alert")).toContainText(/did not take effect/i);
+    await expect(popup.getByRole("alert")).toContainText(
+      /did not take effect/i
+    );
 
     // WITHOUT the re-read the switch stays on the popup's stale `false`. With
     // it, the switch reports what the gate is really enforcing: true.

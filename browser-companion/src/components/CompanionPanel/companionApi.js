@@ -85,6 +85,48 @@ export async function loadServerConfig() {
 }
 
 /**
+ * Validate and save the connection settings the worker reads.
+ *
+ * `http:` remains valid for a local AnythingLLM server; everything else is
+ * rejected here because the socket constructor only supports ws/wss after the
+ * worker converts the scheme. The storage change event wakes the worker and
+ * reconnects it, so this path does not send a second restart message.
+ *
+ * @param {{apiBase: string, apiKey: string}} config
+ * @returns {Promise<{ok: true} | {ok: false, error: string}>}
+ */
+export async function saveServerConfig({ apiBase, apiKey }) {
+  const server = String(apiBase ?? "").trim();
+  let url;
+  try {
+    url = new URL(server);
+  } catch {
+    return {
+      ok: false,
+      error: "Server URL is invalid. Enter a complete http:// or https:// URL.",
+    };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return {
+      ok: false,
+      error: "Server URL must start with http:// or https://.",
+    };
+  }
+
+  try {
+    await chrome.storage.sync.set({ apiBase: server, apiKey });
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Could not save connection settings: ${String(
+        error?.message ?? error
+      )}`,
+    };
+  }
+}
+
+/**
  * Show a key without showing the key.
  *
  * The popup is opened in front of other people, and a screen-share of a live
