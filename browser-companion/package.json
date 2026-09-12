@@ -1,0 +1,21 @@
+{
+  "name": "anythingllm-browser-companion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build",
+    "test": "NODE_OPTIONS=--experimental-vm-modules node ../node_modules/jest/bin/jest.js",
+    "test:e2e": "playwright test --headed --config playwright.config.js",
+    "lint": "prettier --ignore-path ../.prettierignore --write ./src"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.3.4"
+  }
+}

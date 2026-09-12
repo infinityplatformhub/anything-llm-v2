@@ -1,0 +1,5 @@
+node_modules
+dist
+# Playwright's own output from the popup E2E.
+test-results
+playwright-report
