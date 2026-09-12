@@ -223,60 +223,83 @@ const TOOLS = [
   },
 ];
 
+/**
+ * One sub-plugin per tool.
+ *
+ * Not a stylistic choice: `defaults.js` puts a skill's `name` into the agent's
+ * function list when `plugin` is a function, and `${skill}#${sub.name}` for each
+ * entry when it is an ARRAY. `aibitat/index.js` then resolves those names
+ * against its registry and silently DROPS every miss. A single-function skill
+ * gets away with the flat shape only because its skill name happens to equal
+ * its one function name (see lark-cli); an eleven-tool skill registered under
+ * eleven other names resolves to nothing at all, which is exactly how this
+ * shipped with the model holding zero browser tools.
+ *
+ * The array shape is the one the loader was built for — `#attachPluginByName`
+ * splits on `#` and looks the child up in this array — so it is also what
+ * `resolveAgentSkill` (mid-session toggles) and `scheduledJob`'s sub-skill list
+ * already know how to enumerate. Building it from TOOLS rather than by hand
+ * means a twelfth tool is wired by appending to TOOLS and nothing else.
+ */
+const SUB_PLUGINS = TOOLS.map((tool) => ({
+  name: tool.name,
+  description: tool.description,
+  startupConfig: { params: {} },
+  plugin: function () {
+    return {
+      name: tool.name,
+      setup(aibitat) {
+        aibitat.function({
+          super: aibitat,
+          name: tool.name,
+          description: tool.description,
+          parameters: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: tool.properties,
+            ...(tool.required ? { required: tool.required } : {}),
+            additionalProperties: false,
+          },
+          handler: async function (args = {}) {
+            try {
+              // Read per call, not once at setup: multi-user mode can be
+              // switched on while a session is alive, and a value captured at
+              // setup would keep resolving the legacy null key afterwards.
+              const multiUserMode = await SystemSettings.isMultiUserMode();
+              return await runCommand({
+                cmd: tool.cmd,
+                payload: args,
+                // `undefined` when the run has no user (a scheduled job).
+                // registry.resolve refuses that outright rather than falling
+                // back to whoever happens to be connected.
+                userId: aibitat?.handlerProps?.invocation?.user_id,
+                multiUserMode,
+              });
+            } catch (error) {
+              // The agent boundary: a throw here would abort the turn. This
+              // is where the registry's TypeError stops — reported as the
+              // error it is, never as "the browser is not connected".
+              const message = error?.message ?? JSON.stringify(error);
+              this.super.handlerProps.log(`${tool.name} error: ${message}`);
+              this.super.introspect(
+                `${this.caller}: ${tool.name} error: ${message}`
+              );
+              return `The browser command could not run. Tell the user this error: ${message}`;
+            }
+          },
+        });
+      },
+    };
+  },
+}));
+
 const browserCompanion = {
   name: "browser-companion",
   // Exposed so the skill list and tests can enumerate the tools without
   // constructing an AIbitat.
   toolNames: TOOLS.map((tool) => tool.name),
   startupConfig: { params: {} },
-  plugin: function () {
-    return {
-      name: this.name,
-      setup(aibitat) {
-        for (const tool of TOOLS) {
-          aibitat.function({
-            super: aibitat,
-            name: tool.name,
-            description: tool.description,
-            parameters: {
-              $schema: "http://json-schema.org/draft-07/schema#",
-              type: "object",
-              properties: tool.properties,
-              ...(tool.required ? { required: tool.required } : {}),
-              additionalProperties: false,
-            },
-            handler: async function (args = {}) {
-              try {
-                // Read per call, not once at setup: multi-user mode can be
-                // switched on while a session is alive, and a value captured at
-                // setup would keep resolving the legacy null key afterwards.
-                const multiUserMode = await SystemSettings.isMultiUserMode();
-                return await runCommand({
-                  cmd: tool.cmd,
-                  payload: args,
-                  // `undefined` when the run has no user (a scheduled job).
-                  // registry.resolve refuses that outright rather than falling
-                  // back to whoever happens to be connected.
-                  userId: aibitat?.handlerProps?.invocation?.user_id,
-                  multiUserMode,
-                });
-              } catch (error) {
-                // The agent boundary: a throw here would abort the turn. This
-                // is where the registry's TypeError stops — reported as the
-                // error it is, never as "the browser is not connected".
-                const message = error?.message ?? JSON.stringify(error);
-                this.super.handlerProps.log(`${tool.name} error: ${message}`);
-                this.super.introspect(
-                  `${this.caller}: ${tool.name} error: ${message}`
-                );
-                return `The browser command could not run. Tell the user this error: ${message}`;
-              }
-            },
-          });
-        }
-      },
-    };
-  },
+  plugin: SUB_PLUGINS,
 };
 
 module.exports = { browserCompanion, runCommand };

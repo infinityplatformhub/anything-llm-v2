@@ -109,13 +109,23 @@ const TOOL_CALLS = [
   { name: "page_fetch", cmd: "fetch", args: { url: "https://x.test/a" } },
 ];
 
-/** A real AIbitat with the plugin installed — no doubles on the registration path. */
+/**
+ * A real AIbitat with the plugin installed — no doubles on the registration path.
+ *
+ * `browserCompanion.plugin` is an ARRAY of sub-plugins, one per tool, which is
+ * the shape `defaults.js` expands into `browser-companion#<tool>` names and the
+ * shape `#attachPluginByName` loads. Attaching every entry here mirrors that
+ * loop rather than reimplementing it: a sub-plugin added to the array without
+ * being reachable through the real loader would still show up in the wiring
+ * test (browserCompanionWiring.test.js), which is the one that starts upstream.
+ */
 function aibitatWith(invocation) {
   const aibitat = new AIbitat({
     handlerProps: { invocation, log: () => {} },
   });
   aibitat.introspect = () => {};
-  aibitat.use(browserCompanion.plugin());
+  for (const subPlugin of browserCompanion.plugin)
+    aibitat.use(subPlugin.plugin());
   return aibitat;
 }
 
@@ -781,6 +791,56 @@ describe("browser-companion plugin", () => {
       expect(socket.sent).toHaveLength(11);
     });
 
+    // SEAM: the verbs this server SENDS vs the verbs the extension can RECEIVE.
+    //
+    // Two lists that have only ever agreed by hand. A verb renamed on one side
+    // is not a crash — `dispatch.handle` answers an unknown cmd with a refusal
+    // string, so the tool "works" and merely never does anything, which is the
+    // failure mode that already shipped once here.
+    //
+    // Derived from one side, compared to the other, and nothing retyped: the
+    // sent verbs are OBSERVED coming out of the real handlers (reused from the
+    // test above, which is the only hand-written name->verb map and stays the
+    // only one), and the accepted verbs are PARSED out of the extension's own
+    // COMMAND_TABLE. Rename a key in dispatch.js and this reads the new name.
+    it("sends only verbs the extension's command table accepts", async () => {
+      const socket = fakeSocket();
+      registry.register({ userId: 7, socket });
+      const aibitat = aibitatWith({ user_id: 7 });
+      for (const name of browserCompanion.toolNames) {
+        aibitat.functions
+          .get(name)
+          .handler.call({ super: aibitat, caller: "agent" }, {});
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      const sentVerbs = socket.sent.map((frame) => frame.cmd).sort();
+
+      const dispatchSrc = fs.readFileSync(
+        path.join(
+          __dirname,
+          "../../../../../browser-companion/src/background/dispatch.js"
+        ),
+        "utf8"
+      );
+      const tableStart = dispatchSrc.indexOf(
+        "const COMMAND_TABLE = Object.freeze({"
+      );
+      if (tableStart < 0)
+        throw new Error(
+          "Could not find COMMAND_TABLE in dispatch.js. If the extension renamed it, update this parse — do not inline the verb list."
+        );
+      const acceptedVerbs = [
+        ...dispatchSrc
+          .slice(tableStart)
+          .matchAll(/^ {2}([a-z][a-zA-Z0-9_]*):\s*\{$/gm),
+      ]
+        .map((m) => m[1])
+        .sort();
+
+      expect(acceptedVerbs).toHaveLength(11);
+      expect(sentVerbs).toEqual(acceptedVerbs);
+    });
+
     // The GET guard keys off the wire verb, so it only protects page_fetch
     // while page_fetch is still wired to "fetch". Asserted through the real
     // handler rather than through runCommand, which is handed the verb directly.
@@ -812,6 +872,45 @@ describe("browser-companion plugin", () => {
 
       expect(out).toMatch(/not connected/i);
       expect(socket.sent).toHaveLength(0);
+    });
+
+    // SEAM: the TYPE of the user id, not just its value.
+    //
+    // The plugin reads `aibitat.handlerProps.invocation.user_id` and hands it
+    // straight to `registry.resolve`, which fails CLOSED on anything that is
+    // not an integer or null — so a string id (a re-parsed JSON field, an id
+    // threaded through a query param) does not throw and does not warn: the
+    // socket is registered under `u:7` and looked up under `u:"7"`, the two
+    // never meet, and the user is told the browser is not connected while it
+    // is sitting right there connected.
+    //
+    // The test above pins the VALUE contract (id 9 must not reach id 7's
+    // socket). This pins the TYPE contract at the same boundary, which no
+    // assertion on either side of it can see.
+    it("does not resolve a connected socket for a string user id", async () => {
+      const socket = fakeSocket();
+      registry.register({ userId: 7, socket });
+      const aibitat = aibitatWith({ user_id: "7" });
+
+      const out = await aibitat.functions
+        .get("page_read")
+        .handler.call({ super: aibitat, caller: "agent" }, {});
+
+      expect(out).toMatch(/not connected/i);
+      expect(socket.sent).toHaveLength(0);
+
+      // And the integer form of the same id does reach it — so the assertion
+      // above is about the type, not about the registration having failed.
+      const ok = aibitatWith({ user_id: 7 })
+        .functions.get("page_read")
+        .handler.call(
+          { super: aibitatWith({ user_id: 7 }), caller: "agent" },
+          {}
+        );
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(socket.sent).toHaveLength(1);
+      reply(socket, { ok: true, data: "read" });
+      await expect(ok).resolves.toBe("read");
     });
 
     it("sends the tool arguments as the command payload", async () => {

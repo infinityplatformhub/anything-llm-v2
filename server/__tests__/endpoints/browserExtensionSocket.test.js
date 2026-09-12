@@ -75,6 +75,49 @@ async function connect(key) {
   return socket;
 }
 
+// SEAM: the path the EXTENSION dials vs the path the SERVER serves.
+//
+// Three files have to agree and nothing compares them: the extension builds its
+// URL from SOCKET_PATH (browser-companion/src/background/socket.js), the server
+// declares the route with app.ws(...) (endpoints/browserExtension.js), and that
+// router is mounted under "/api" (server/index.js). Get any one wrong and the
+// extension simply never connects — no error on the server, which never sees
+// the request, and a reconnect loop in a background page nobody is watching.
+//
+// All three sides are READ from their own source. The literal below is this
+// test's only hand-written copy and it is the assertion's subject, not a fourth
+// unchecked duplicate: if it and the three sources ever disagree, this fails.
+describe("the socket path the extension dials", () => {
+  const nodePath = require("path");
+  const nodeFs = require("fs");
+  const repoRoot = nodePath.join(__dirname, "../../..");
+  const read = (rel) => nodeFs.readFileSync(nodePath.join(repoRoot, rel), "utf8");
+
+  it("is the same path the server route serves, under the same /api mount", () => {
+    const FULL_PATH = "/api/browser-companion/agent-socket";
+
+    const extensionPath = read("browser-companion/src/background/socket.js").match(
+      /const SOCKET_PATH = "([^"]+)"/
+    )?.[1];
+    expect(extensionPath).toBeTruthy();
+
+    const serverRoute = read("server/endpoints/browserExtension.js").match(
+      /app\.ws\(\s*"([^"]+)"/
+    )?.[1];
+    expect(serverRoute).toBeTruthy();
+
+    // The extension resolves SOCKET_PATH against the configured apiBase, which
+    // already ends in the mount; the server route is relative to apiRouter.
+    const mount = read("server/index.js").match(
+      /app\.use\(\s*"(\/api)"\s*,\s*apiRouter\s*\)/
+    )?.[1];
+    expect(mount).toBe("/api");
+
+    expect(`${mount}/${extensionPath.replace(/^\//, "")}`).toBe(FULL_PATH);
+    expect(`${mount}${serverRoute}`).toBe(FULL_PATH);
+  });
+});
+
 describe("browser-companion agent socket", () => {
   beforeEach(() => {
     registry.__reset();
