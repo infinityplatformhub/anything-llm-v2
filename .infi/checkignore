@@ -44,3 +44,29 @@ e2e/scripts/mcp-ui.cjs
 e2e/scripts/run-mcp-ui.sh
 e2e/ui/workspace-mcp-connectors.spec.ts
 e2e/mcp-ui.playwright.config.ts
+# Extension test suite (#60). Same exemption server/__tests__/* already has, for the
+# same reason — the two halves of one test surface should not be judged differently.
+# Two gates misread these files rather than finding a defect in them:
+#  - commented-out code: the `//` in an https:// URL is read as a comment opener, so
+#    `await cdp.fetchInPage(7, "https://x.test/a", {` is cut to `x.test/a", {` and
+#    trips the "ends in {" rule. The script already documents this trap for shell
+#    files and skips `//` there; JS files still hit it.
+#  - URL in code: allowlist.test.js asserts the domain filter against real hostnames
+#    (linkedin.com, flowaccount.com). Those URLs ARE the subject under test —
+#    removing them would delete the test, not fix a hardcoded value.
+browser-companion/__tests__/*
+# Mutation harness (#60). Not shipped: build.entries.js lists only index.html and
+# src/background/index.js, and nothing under src/ imports it — verified. Its
+# linkedin.com URLs are test fixtures whose host is chosen by the allowlist tests'
+# semantics, not by any deployment.
+browser-companion/mutate.*.mjs
+# The JSON Schema draft-07 IDENTIFIER on line 242 — the same literal 70 other files in
+# this repo already carry, including generate-image.js, memory.js and rechart.js.
+# Nothing fetches it: dereferenceSchema.js resolves only local #/... refs and the
+# provider consumers discard $schema, so moving it to config would make the schema
+# wrong rather than configurable. It is the one case task.sh's own is_xml_markup_url
+# comment describes — a constant from a file format's spec masquerading as a URL —
+# but that helper only recognises it inside XML markup, not in a JS object literal.
+# Exempting this file costs nothing on the secrets gate: it holds no credential, and
+# its one Authorization mention is a doc comment about a field the code REFUSES.
+server/utils/agents/aibitat/plugins/browser-companion.js
