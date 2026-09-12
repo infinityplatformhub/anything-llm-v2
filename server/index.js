@@ -24,6 +24,7 @@ const { utilEndpoints } = require("./endpoints/utils");
 const { developerEndpoints } = require("./endpoints/api");
 const { extensionEndpoints } = require("./endpoints/extensions");
 const { bootHTTP, bootSSL } = require("./utils/boot");
+const { bootWebSockets } = require("./utils/boot/bootWebSockets");
 const { workspaceThreadEndpoints } = require("./endpoints/workspaceThreads");
 const { documentEndpoints } = require("./endpoints/document");
 const { agentWebsocket } = require("./endpoints/agentWebsocket");
@@ -37,6 +38,9 @@ const { communityHubEndpoints } = require("./endpoints/communityHub");
 const { agentFlowEndpoints } = require("./endpoints/agentFlows");
 const { mcpServersEndpoints } = require("./endpoints/mcpServers");
 const { mcpOAuthEndpoints } = require("./endpoints/mcpOAuth");
+const {
+  workspaceMcpServersEndpoints,
+} = require("./endpoints/workspaceMcpServers");
 const { mobileEndpoints } = require("./endpoints/mobile");
 const { webPushEndpoints } = require("./endpoints/webPush");
 const { telegramEndpoints } = require("./endpoints/telegram");
@@ -77,7 +81,7 @@ app.use(
 if (!!process.env.ENABLE_HTTPS) {
   bootSSL(app, process.env.SERVER_PORT || 3001);
 } else {
-  require("@mintplex-labs/express-ws").default(app); // load WebSockets in non-SSL mode.
+  bootWebSockets(app); // load WebSockets in non-SSL mode.
 }
 
 app.use("/api", apiRouter);
@@ -102,6 +106,7 @@ communityHubEndpoints(apiRouter);
 agentFlowEndpoints(apiRouter);
 mcpServersEndpoints(apiRouter);
 mcpOAuthEndpoints(apiRouter);
+workspaceMcpServersEndpoints(apiRouter);
 mobileEndpoints(apiRouter);
 webPushEndpoints(apiRouter);
 telegramEndpoints(apiRouter);
