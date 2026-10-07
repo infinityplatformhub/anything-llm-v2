@@ -238,7 +238,10 @@ class AnthropicLLM {
       const completionTokens = result.output.usage.output_tokens;
 
       return {
-        textResponse: result.output.content[0].text,
+        textResponse: result.output.content
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .join(""),
         metrics: {
           prompt_tokens: promptTokens,
           completion_tokens: completionTokens,

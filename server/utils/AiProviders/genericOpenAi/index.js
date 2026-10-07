@@ -13,6 +13,9 @@ const { v4: uuidv4 } = require("uuid");
 const { toValidNumber } = require("../../http");
 const { getAnythingLLMUserAgent } = require("../../../endpoints/utils");
 const { attachmentToContentBlock } = require("../../helpers/attachments");
+const {
+  maxTokensParam,
+} = require("../../agents/aibitat/providers/helpers/tooled.js");
 
 class GenericOpenAiLLM {
   constructor(embedder = null, modelPreference = null) {
@@ -52,6 +55,11 @@ class GenericOpenAiLLM {
 
   log(text, ...args) {
     console.log(`\x1b[36m[${this.className}]\x1b[0m ${text}`, ...args);
+  }
+
+  /** @returns {string} Request field for the output token budget. */
+  static maxTokensKey() {
+    return process.env.GENERIC_OPEN_AI_MODEL_MAX_TOKEN_KEY || "max_tokens";
   }
 
   /**
@@ -228,7 +236,7 @@ class GenericOpenAiLLM {
           model: this.model,
           messages,
           temperature,
-          max_tokens: this.maxTokens,
+          ...maxTokensParam(this.maxTokens, GenericOpenAiLLM.maxTokensKey()),
         })
         .catch((e) => {
           throw new Error(e.message);
@@ -268,7 +276,7 @@ class GenericOpenAiLLM {
         stream: true,
         messages,
         temperature,
-        max_tokens: this.maxTokens,
+        ...maxTokensParam(this.maxTokens, GenericOpenAiLLM.maxTokensKey()),
         ...this.#includeStreamOptionsUsage(),
       }),
       messages,
