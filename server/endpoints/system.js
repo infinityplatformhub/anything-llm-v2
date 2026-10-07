@@ -336,7 +336,7 @@ function systemEndpoints(app) {
             user: User.filterFields(existingUser),
             token: sessionToken,
             message: null,
-            recoveryCodes: plainTextCodes,
+            ...(plainTextCodes.length && { recoveryCodes: plainTextCodes }),
           });
           return;
         }

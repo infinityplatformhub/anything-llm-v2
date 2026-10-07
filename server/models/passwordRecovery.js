@@ -5,6 +5,48 @@ const bcrypt = require("bcryptjs");
 const RecoveryCode = {
   tablename: "recovery_codes",
   writable: [],
+  issueForUser: async function (userId, codes) {
+    const unseen = {
+      id: userId,
+      OR: [{ seen_recovery_codes: false }, { seen_recovery_codes: null }],
+    };
+    // SQLite serializes writers. Keep the condition inside every write and use
+    // a batch transaction: an interactive callback can wait behind a second
+    // writer while holding the first writer's lock.
+    const issue = () =>
+      prisma.$transaction([
+        prisma.recovery_codes.deleteMany({
+          where: { user_id: userId, user: unseen },
+        }),
+        ...codes.map(
+          (code) => prisma.$executeRaw`
+        INSERT INTO recovery_codes (user_id, code_hash, createdAt)
+        SELECT id, ${code.code_hash}, CURRENT_TIMESTAMP FROM users
+        WHERE id = ${userId}
+          AND (seen_recovery_codes = false OR seen_recovery_codes IS NULL)
+      `
+        ),
+        prisma.users.updateMany({
+          where: unseen,
+          data: { seen_recovery_codes: true },
+        }),
+      ]);
+    let results;
+    try {
+      results = await issue();
+    } catch (error) {
+      // A concurrent SQLite writer may fail the deferred transaction's lock
+      // upgrade immediately. Retry once only after that transaction rolled back.
+      if (error.code !== "P2010" || String(error.meta?.code) !== "5")
+        throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      results = await issue();
+    }
+    if (results[results.length - 1].count) return true;
+    const user = await prisma.users.findUnique({ where: { id: userId } });
+    if (!user) throw new Error("Failed to generate user recovery codes!");
+    return false;
+  },
   create: async function (userId, code) {
     try {
       const codeHash = await bcrypt.hash(code, 10);

@@ -19,15 +19,8 @@ async function generateRecoveryCodes(userId) {
     plainTextCodes.push(code);
   }
 
-  const { error } = await RecoveryCode.createMany(newRecoveryCodes);
-  if (!!error) throw new Error(error);
-
-  const { user: success } = await User._update(userId, {
-    seen_recovery_codes: true,
-  });
-  if (!success) throw new Error("Failed to generate user recovery codes!");
-
-  return plainTextCodes;
+  const issued = await RecoveryCode.issueForUser(userId, newRecoveryCodes);
+  return issued ? plainTextCodes : [];
 }
 
 async function recoverAccount(username = "", recoveryCodes = []) {

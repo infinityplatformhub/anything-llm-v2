@@ -1,12 +1,13 @@
 import { Plus } from "@phosphor-icons/react";
 import { Tooltip } from "react-tooltip";
 import { useTranslation } from "react-i18next";
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useContext } from "react";
 import { useParams } from "react-router-dom";
 import Workspace from "@/models/workspace";
 import {
   ATTACHMENTS_PROCESSED_EVENT,
   REMOVE_ATTACHMENT_EVENT,
+  DndUploaderContext,
 } from "../../DnDWrapper";
 import { useTheme } from "@/hooks/useTheme";
 import ParsedFilesMenu from "./ParsedFilesMenu";
@@ -20,6 +21,7 @@ export default function AttachItem({
   workspaceThreadSlug = null,
 }) {
   const { t } = useTranslation();
+  const { ready } = useContext(DndUploaderContext);
   const { theme } = useTheme();
   const params = useParams();
   const slug = workspaceSlug || params.slug;
@@ -96,9 +98,10 @@ export default function AttachItem({
         }
         aria-label={t("chat_window.attach_file")}
         type="button"
+        disabled={!ready}
         onClick={handleClick}
         onPointerEnter={fetchFiles}
-        className="group border-none relative flex justify-center items-center cursor-pointer w-6 h-6 rounded-full hover:bg-zinc-700 light:hover:bg-slate-200"
+        className="group border-none relative flex justify-center items-center cursor-pointer w-6 h-6 rounded-full hover:bg-zinc-700 light:hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <div className="relative">
           <Plus

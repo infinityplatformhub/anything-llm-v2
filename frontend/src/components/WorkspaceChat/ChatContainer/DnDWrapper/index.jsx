@@ -482,7 +482,11 @@ export default function DnDFileUploaderWrapper({ children }) {
           </div>
         </div>
       </div>
-      <input id="dnd-chat-file-uploader" {...getInputProps()} />
+      <input
+        id="dnd-chat-file-uploader"
+        {...getInputProps()}
+        disabled={!ready}
+      />
       {children}
     </div>
   );

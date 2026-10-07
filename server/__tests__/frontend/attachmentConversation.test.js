@@ -8,7 +8,7 @@ const frontendRequire = require("module").createRequire(
 );
 const React = frontendRequire("react");
 const { createRoot } = frontendRequire("react-dom/client");
-const { act } = frontendRequire("react-dom/test-utils");
+const { act } = React;
 const { JSDOM } = require("../../node_modules/jsdom");
 const { transformSync } = frontendRequire("esbuild");
 
@@ -26,6 +26,7 @@ const workspaceApi = {
   embedParsedFile: jest.fn(),
 };
 const toast = jest.fn();
+const processorOnline = jest.fn();
 const source = fs.readFileSync(
   `${frontend}/src/components/WorkspaceChat/ChatContainer/DnDWrapper/index.jsx`,
   "utf8"
@@ -39,7 +40,7 @@ const moduleOutput = { exports: {} };
 new Function("require", "module", "exports", code)(
   (specifier) => {
     if (specifier === "@/models/system")
-      return { checkDocumentProcessorOnline: async () => true };
+      return { checkDocumentProcessorOnline: processorOnline };
     if (specifier === "@/models/workspace") return workspaceApi;
     if (specifier === "@/utils/toast") return toast;
     if (specifier === "./FileUploadWarningModal")
@@ -58,6 +59,30 @@ const {
   DndUploaderContext,
   ATTACHMENTS_PROCESSED_EVENT,
 } = moduleOutput.exports;
+const DnDWrapper = moduleOutput.exports.default;
+const attachOutput = { exports: {} };
+const attachCode = transformSync(
+  fs.readFileSync(
+    `${frontend}/src/components/WorkspaceChat/ChatContainer/PromptInput/AttachItem/index.jsx`,
+    "utf8"
+  ),
+  { loader: "jsx", jsx: "automatic", format: "cjs" }
+).code;
+new Function("require", "module", "exports", attachCode)(
+  (specifier) => {
+    if (specifier === "../../DnDWrapper") return moduleOutput.exports;
+    if (specifier === "@/models/workspace") return workspaceApi;
+    if (specifier === "@/hooks/useTheme")
+      return { useTheme: () => ({ theme: "dark" }) };
+    if (specifier === "react-router-dom") return { useParams: () => ({}) };
+    if (specifier === "react-i18next")
+      return { useTranslation: () => ({ t: (key) => key }) };
+    if (specifier === "./ParsedFilesMenu") return () => null;
+    return frontendRequire(specifier);
+  },
+  attachOutput,
+  attachOutput.exports
+);
 function Probe() {
   context = React.useContext(DndUploaderContext);
   return null;
@@ -86,6 +111,7 @@ const parsed = {
 };
 beforeEach(() => {
   jest.clearAllMocks();
+  processorOnline.mockResolvedValue(true);
   dom = new JSDOM("<div id='root'></div>");
   originals = {};
   for (const name of [
@@ -107,6 +133,7 @@ beforeEach(() => {
   }
   root = createRoot(document.getElementById("root"));
   workspaceApi.getParsedFiles.mockResolvedValue({
+    files: [],
     currentContextTokenCount: 0,
     contextWindow: 100,
   });
@@ -116,6 +143,84 @@ beforeEach(() => {
     response: { ok: true },
     data: {},
   });
+});
+
+it("disables attachment selection until the document processor is ready", async () => {
+  const health = deferred();
+  processorOnline.mockReturnValue(health.promise);
+  await act(async () =>
+    root.render(
+      React.createElement(
+        DnDFileUploaderProvider,
+        { workspace: { slug: "one" } },
+        React.createElement(
+          DnDWrapper,
+          null,
+          React.createElement(attachOutput.exports.default, {
+            workspaceSlug: "one",
+          })
+        )
+      )
+    )
+  );
+  expect(document.getElementById("attach-item-btn").disabled).toBe(true);
+  expect(document.getElementById("dnd-chat-file-uploader").disabled).toBe(true);
+  await act(async () => health.resolve(true));
+  expect(document.getElementById("attach-item-btn").disabled).toBe(false);
+  expect(document.getElementById("dnd-chat-file-uploader").disabled).toBe(
+    false
+  );
+});
+
+it("keeps attachment selection disabled when the processor is offline", async () => {
+  processorOnline.mockResolvedValue(false);
+  await act(async () =>
+    root.render(
+      React.createElement(
+        DnDFileUploaderProvider,
+        { workspace: { slug: "one" } },
+        React.createElement(
+          DnDWrapper,
+          null,
+          React.createElement(attachOutput.exports.default, {
+            workspaceSlug: "one",
+          })
+        )
+      )
+    )
+  );
+  expect(document.getElementById("attach-item-btn").disabled).toBe(true);
+  expect(document.getElementById("dnd-chat-file-uploader").disabled).toBe(true);
+});
+
+it("waits for the new conversation's health check instead of an old completion", async () => {
+  const oldHealth = deferred();
+  const newHealth = deferred();
+  processorOnline
+    .mockReturnValueOnce(oldHealth.promise)
+    .mockReturnValueOnce(newHealth.promise);
+  const renderPicker = (slug) =>
+    act(async () =>
+      root.render(
+        React.createElement(
+          DnDFileUploaderProvider,
+          { workspace: { slug } },
+          React.createElement(
+            DnDWrapper,
+            null,
+            React.createElement(attachOutput.exports.default, {
+              workspaceSlug: slug,
+            })
+          )
+        )
+      )
+    );
+  await renderPicker("one");
+  await renderPicker("two");
+  await act(async () => oldHealth.resolve(true));
+  expect(document.getElementById("attach-item-btn").disabled).toBe(true);
+  await act(async () => newHealth.resolve(true));
+  expect(document.getElementById("attach-item-btn").disabled).toBe(false);
 });
 afterEach(async () => {
   await act(async () => root.unmount());

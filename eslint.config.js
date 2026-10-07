@@ -2,9 +2,9 @@ import globals from "./server/node_modules/globals/index.js"
 import eslintRecommended from "./server/node_modules/@eslint/js/src/index.js"
 import eslintConfigPrettier from "./server/node_modules/eslint-config-prettier/index.js"
 import prettier from "./server/node_modules/eslint-plugin-prettier/eslint-plugin-prettier.js"
-import react from "./server/node_modules/eslint-plugin-react/index.js"
+import react from "./frontend/node_modules/eslint-plugin-react/index.js"
 import reactRefresh from "./server/node_modules/eslint-plugin-react-refresh/index.js"
-import reactHooks from "./server/node_modules/eslint-plugin-react-hooks/index.js"
+import reactHooks from "./frontend/node_modules/eslint-plugin-react-hooks/index.js"
 import ftFlow from "./server/node_modules/eslint-plugin-ft-flow/dist/index.js"
 import hermesParser from "./server/node_modules/hermes-eslint/dist/index.js"
 
@@ -42,8 +42,6 @@ export default [
       prettier
     },
     rules: {
-      ...reactRecommended.rules,
-      ...reactHooks.configs.recommended.rules,
       ...ftFlow.recommended,
       "no-unused-vars": "warn",
       "no-undef": "warn",
@@ -54,12 +52,16 @@ export default [
     }
   },
   {
-    files: ["frontend/src/**/*.js"],
+    files: ["frontend/src/**/*.{js,jsx}"],
     plugins: {
       ftFlow,
       prettier
     },
     rules: {
+      ...reactRecommended.rules,
+      // Preserve the original hooks checks without enabling new compiler rules.
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "warn",
       "prettier/prettier": "warn"
     }
   },
