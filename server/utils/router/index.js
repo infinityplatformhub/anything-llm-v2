@@ -313,6 +313,7 @@ class ModelRouterService {
    * @param {{role:string,content:string}[]} [opts.chatHistoryOverride.chatHistory] - Prompt-formatted history
    * @param {number|null} [opts.messageCountOverride] - If provided, use this as the true message count instead of querying WorkspaceChats
    * @param {string|null} [opts.apiSessionId] - If provided, scope chat history and count to this API session
+   * @param {boolean} [opts.skipMemories] - Exclude stored memories for anonymous embeds
    * @returns {Promise<{
    *   rawHistory: Object[],
    *   chatHistory: {role:string,content:string}[],
@@ -332,6 +333,7 @@ class ModelRouterService {
     chatHistoryOverride = null,
     messageCountOverride = null,
     apiSessionId = null,
+    skipMemories = false,
   }) {
     const { chatPrompt, recentChatHistory } = require("../chats");
     const { DocumentManager } = require("../DocumentManager");
@@ -355,6 +357,7 @@ class ModelRouterService {
     const systemPrompt = await chatPrompt(workspace, user, {
       prompt: message,
       rawHistory,
+      skipMemories,
     });
 
     const pinnedDocs = await new DocumentManager({ workspace }).pinnedDocs();

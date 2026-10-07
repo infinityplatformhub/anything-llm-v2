@@ -666,6 +666,7 @@ function humanFileSize(bytes, si = false, dp = 1) {
  * @param {Object|null} [opts.chatHistoryOverride] - Pre-fetched chat history
  * @param {number|null} [opts.messageCountOverride] - Override for message count
  * @param {string|null} [opts.apiSessionId] - API session scope
+ * @param {boolean} [opts.skipMemories] - Exclude stored memories from anonymous routing context
  * @returns {Promise<{connector: BaseLLMProvider, routingMetadata: Object|null, prefetchedContext: Object|null}>}
  */
 async function resolveProviderConnector({
@@ -677,6 +678,7 @@ async function resolveProviderConnector({
   chatHistoryOverride = null,
   messageCountOverride = null,
   apiSessionId = null,
+  skipMemories = false,
 }) {
   const effectiveProvider = workspace?.chatProvider || process.env.LLM_PROVIDER;
 
@@ -707,6 +709,7 @@ async function resolveProviderConnector({
   const ctx = await ModelRouterService.gatherRoutingContext({
     workspace,
     user,
+    skipMemories,
     thread,
     message: prompt,
     chatHistoryOverride,

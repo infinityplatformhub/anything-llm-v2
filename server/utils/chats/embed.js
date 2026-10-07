@@ -179,7 +179,10 @@ async function streamChatWithForEmbed(
   // and build system messages based on inputs and history.
   const messages = await LLMConnector.compressMessages(
     {
-      systemPrompt: await chatPrompt(embed.workspace, username),
+      // Embed visitors have no authenticated memory identity.
+      systemPrompt: await chatPrompt(embed.workspace, null, {
+        skipMemories: true,
+      }),
       userPrompt: message,
       contextTexts,
       chatHistory,
@@ -289,6 +292,7 @@ async function resolveLLMConnectorForEmbed({
         workspace,
         prompt: message,
         chatHistoryOverride: embedHistory,
+        skipMemories: true,
         // +1 to include the current in-flight message to ensure routing rules are evaluated against the real total.
         messageCountOverride: embedMessageCount + 1,
       });

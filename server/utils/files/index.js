@@ -29,6 +29,9 @@ const generatedImagesPath =
 // eg: youtube-subject/video-123.json
 async function fileData(filePath = null) {
   if (!filePath) throw new Error("No docPath provided in request");
+  // The original path is persisted and later resolved by background jobs.
+  if (!isWithin(documentsPath, path.resolve(documentsPath, filePath)))
+    return null;
   const fullFilePath = path.resolve(documentsPath, normalizePath(filePath));
   if (!fs.existsSync(fullFilePath) || !isWithin(documentsPath, fullFilePath))
     return null;

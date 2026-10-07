@@ -3,10 +3,47 @@ const {
   grepCommand,
   grepAllSlashCommands,
   isReservedCommand,
+  chatPrompt,
 } = require("../../../utils/chats");
 const { SlashCommandPresets } = require("../../../models/slashCommandsPresets");
 
 jest.mock("../../../models/slashCommandsPresets");
+jest.mock("../../../utils/memories", () => ({
+  promptWithMemories: jest.fn(async ({ systemPrompt }) => systemPrompt),
+}));
+jest.mock("../../../models/systemPromptVariables", () => ({
+  SystemPromptVariables: {
+    expandSystemPromptVariables: jest.fn(async (prompt) => prompt),
+  },
+}));
+const { promptWithMemories } = require("../../../utils/memories");
+
+describe("chatPrompt memory isolation", () => {
+  const workspace = { id: 7, openAiPrompt: "Workspace prompt." };
+  beforeEach(() => jest.clearAllMocks());
+
+  it("preserves authenticated memory scope and reranking inputs", async () => {
+    const rawHistory = [{ prompt: "previous question" }];
+    await chatPrompt(workspace, { id: 3 }, { prompt: "hello", rawHistory });
+    expect(promptWithMemories).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 3, workspaceId: 7, prompt: "hello", rawHistory })
+    );
+  });
+
+  it("preserves single-user memory lookup unless explicitly skipped", async () => {
+    await chatPrompt(workspace);
+    expect(promptWithMemories).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: null, workspaceId: 7 })
+    );
+  });
+
+  it("returns the expanded prompt without looking up anonymous memories", async () => {
+    const { SystemPromptVariables } = require("../../../models/systemPromptVariables");
+    SystemPromptVariables.expandSystemPromptVariables.mockResolvedValueOnce("Expanded prompt.");
+    expect(await chatPrompt(workspace, null, { skipMemories: true })).toBe("Expanded prompt.");
+    expect(promptWithMemories).not.toHaveBeenCalled();
+  });
+});
 
 // Helper to shape preset rows the way the model returns them.
 const preset = (command, prompt) => ({ command, prompt });

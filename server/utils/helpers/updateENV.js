@@ -1507,6 +1507,7 @@ function dumpENV() {
     // Other Configuration Keys
     "DISABLE_VIEW_CHAT_HISTORY",
     "DISABLE_SWAGGER_DOCS",
+    "WORKSPACE_DELETION_PROTECTION",
     // Simple SSO
     "SIMPLE_SSO_ENABLED",
     "SIMPLE_SSO_NO_LOGIN",
@@ -1556,6 +1557,25 @@ function dumpENV() {
 
     // Deny-by-default for embed widgets that have no allowlist configured
     "EMBED_REQUIRE_ALLOWLIST",
+
+    // AWS Bedrock endpoint overrides
+    "AWS_BEDROCK_LLM_MANTLE_ENDPOINT",
+    "AWS_BEDROCK_LLM_RUNTIME_ENDPOINT",
+    "AWS_BEDROCK_LLM_CONTROL_ENDPOINT",
+    "GENERIC_OPEN_AI_EMBEDDING_API_DELAY_MS",
+
+    // Memory extraction, scheduled jobs and document sync workers
+    "MEMORY_EXTRACTION_INTERVAL",
+    "MEMORY_IDLE_THRESHOLD_MS",
+    "SCHEDULED_JOB_MAX_CONCURRENT",
+    "SCHEDULED_JOB_TIMEOUT_MS",
+    "DOCUMENT_SYNC_STALE_AFTER_MS",
+
+    // Legacy provider overrides still read by the runtime
+    "CEREBRAS_MODEL_TOKEN_LIMIT",
+    "DEEPSEEK_MAX_TOKENS",
+    "LLMMAN_RESPONSE_TIMEOUT",
+    "VERTEX_AI_LLM_MAX_TOKENS",
   ];
 
   // Simple sanitization of each value to prevent ENV injection via newline or quote escaping.

@@ -108,7 +108,7 @@ async function recentChatHistory({
  * Also does variable substitution on the prompt if there are any defined variables.
  * @param {Object|null} workspace - the workspace object
  * @param {Object|null} user - the user object
- * @param {{prompt?: string, rawHistory?: object[]}} [opts] - current user message + chat history, used for reranking injected memories
+ * @param {{prompt?: string, rawHistory?: object[], skipMemories?: boolean}} [opts] - current message/history for reranking; skipMemories disables stored memories in anonymous contexts
  * @returns {Promise<string>}
  */
 async function chatPrompt(workspace, user = null, opts = {}) {
@@ -121,6 +121,9 @@ async function chatPrompt(workspace, user = null, opts = {}) {
     user?.id,
     workspace?.id
   );
+  // Single-user memories have a null owner; anonymous embeds must not load them.
+  if (opts.skipMemories === true) return systemPrompt;
+
   return promptWithMemories({
     systemPrompt,
     userId: user?.id ?? null,
