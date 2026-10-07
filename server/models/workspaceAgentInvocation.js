@@ -12,11 +12,19 @@ const WorkspaceAgentInvocation = {
   close: async function (uuid) {
     if (!uuid) return;
     try {
-      await prisma.workspace_agent_invocations.update({
-        where: { uuid: String(uuid) },
+      // No row needs to be returned. updateMany writes directly instead of
+      // reading first and upgrading a SQLite transaction's read lock to write.
+      // The condition also makes repeated/disconnected closes idempotent.
+      await prisma.workspace_agent_invocations.updateMany({
+        where: { uuid: String(uuid), closed: false },
         data: { closed: true },
       });
-    } catch {}
+    } catch (error) {
+      console.error(
+        "[WorkspaceAgentInvocation] Failed to persist closure:",
+        error.code || "unknown"
+      );
+    }
   },
 
   new: async function ({ prompt, workspace, user = null, thread = null }) {
