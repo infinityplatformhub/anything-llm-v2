@@ -107,7 +107,7 @@ function DnDFileUploader({ workspace, threadSlug, children }) {
   async function handleRemoveParsedFile(event) {
     const { document } = event.detail;
     setFiles((prev) =>
-      prev.filter((prevFile) => prevFile.document.id !== document.id)
+      prev.filter((prevFile) => prevFile.document?.id !== document.id)
     );
   }
 
@@ -419,9 +419,12 @@ function DnDFileUploader({ workspace, threadSlug, children }) {
     setTokenCount(0);
     setIsEmbedding(false);
     window.dispatchEvent(new CustomEvent(ATTACHMENTS_PROCESSED_EVENT));
+    const allEmbedded = results.every(({ response }) => response.ok);
     showToast(
-      `${pendingFiles.length} ${pluralize("file", pendingFiles.length)} embedded successfully`,
-      "success"
+      allEmbedded
+        ? `${pendingFiles.length} ${pluralize("file", pendingFiles.length)} embedded successfully`
+        : "Failed to embed files",
+      allEmbedded ? "success" : "error"
     );
   };
 

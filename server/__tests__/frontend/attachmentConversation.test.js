@@ -60,6 +60,31 @@ const {
   ATTACHMENTS_PROCESSED_EVENT,
 } = moduleOutput.exports;
 const DnDWrapper = moduleOutput.exports.default;
+const menuOutput = { exports: {} };
+const menuCode = transformSync(
+  fs.readFileSync(
+    `${frontend}/src/components/WorkspaceChat/ChatContainer/PromptInput/AttachItem/ParsedFilesMenu/index.jsx`,
+    "utf8"
+  ),
+  { loader: "jsx", jsx: "automatic", format: "cjs" }
+).code;
+new Function("require", "module", "exports", menuCode)(
+  (specifier) => {
+    if (specifier === "../../../DnDWrapper") return moduleOutput.exports;
+    if (specifier === "@/models/workspace") return workspaceApi;
+    if (specifier === "@/utils/toast") return toast;
+    if (specifier === "@/utils/numbers") return { nFormatter: String };
+    if (specifier === "@/hooks/useUser")
+      return {
+        useUser: () => ({ user: { role: "admin" } }),
+        __esModule: true,
+        default: () => ({ user: { role: "admin" } }),
+      };
+    return frontendRequire(specifier);
+  },
+  menuOutput,
+  menuOutput.exports
+);
 const attachOutput = { exports: {} };
 const attachCode = transformSync(
   fs.readFileSync(
@@ -82,6 +107,124 @@ new Function("require", "module", "exports", attachCode)(
   },
   attachOutput,
   attachOutput.exports
+);
+
+it("removes a parsed document while retaining an image with no document metadata", async () => {
+  const listeners = jest.spyOn(window, "addEventListener");
+  await render();
+  await act(async () =>
+    context.onDrop([
+      new File(["image"], "image.png", { type: "image/png" }),
+      new File(["text"], "doc.txt", { type: "text/plain" }),
+    ])
+  );
+  expect(context.files).toHaveLength(2);
+  const remove = listeners.mock.calls.find(
+    ([name]) => name === "PARSED_FILE_ATTACHMENT_REMOVED"
+  )[1];
+  await act(async () =>
+    remove(
+      new CustomEvent("PARSED_FILE_ATTACHMENT_REMOVED", {
+        detail: { document: { id: 1 } },
+      })
+    )
+  );
+  expect(context.files).toHaveLength(1);
+  expect(context.files[0].file.name).toBe("image.png");
+  listeners.mockRestore();
+});
+
+it("removing an image does not attempt to delete a parsed document", async () => {
+  const listeners = jest.spyOn(window, "addEventListener");
+  await act(async () =>
+    root.render(
+      React.createElement(
+        DnDFileUploaderProvider,
+        { workspace: { slug: "one" } },
+        React.createElement(attachOutput.exports.default, {
+          workspaceSlug: "one",
+        })
+      )
+    )
+  );
+  const remove = listeners.mock.calls.find(
+    ([name]) => name === "ATTACHMENT_REMOVE"
+  )[1];
+  await expect(
+    remove(
+      new CustomEvent("ATTACHMENT_REMOVE", { detail: { uid: "image-uid" } })
+    )
+  ).resolves.toBeUndefined();
+  expect(workspaceApi.deleteParsedFiles).not.toHaveBeenCalled();
+  listeners.mockRestore();
+});
+
+it.each([
+  [true, "success"],
+  [false, "error"],
+])("modal embedding reports actual response ok=%s", async (ok, severity) => {
+  workspaceApi.getParsedFiles.mockResolvedValue({
+    currentContextTokenCount: 100,
+    contextWindow: 100,
+  });
+  await render();
+  await act(async () =>
+    context.onDrop([new File(["text"], "doc.txt", { type: "text/plain" })])
+  );
+  expect(modal.show).toBe(true);
+  workspaceApi.embedParsedFile.mockResolvedValue({
+    response: { ok },
+    data: {},
+  });
+  await act(async () => modal.onEmbed());
+  expect(toast).toHaveBeenLastCalledWith(
+    ok ? "1 file embedded successfully" : "Failed to embed files",
+    severity
+  );
+  expect(context.files[0].status).toBe(ok ? "embedded" : "failed");
+});
+
+it.each([
+  [[true, true], "success"],
+  [[true, false], "error"],
+  [[false, false], "error"],
+])(
+  "parsed menu embedding reports batch results %j",
+  async (responses, severity) => {
+    for (const ok of responses)
+      workspaceApi.embedParsedFile.mockResolvedValueOnce({
+        response: { ok },
+        data: {},
+      });
+    await act(async () =>
+      root.render(
+        React.createElement(menuOutput.exports.default, {
+          files: [
+            { id: 1, title: "one" },
+            { id: 2, title: "two" },
+          ],
+          setFiles: jest.fn(),
+          currentTokens: 100,
+          contextWindow: 100,
+          setCurrentTokens: jest.fn(),
+          workspaceSlug: "one",
+          isLoading: false,
+        })
+      )
+    );
+    const button = Array.from(document.querySelectorAll("button")).find(
+      (node) => node.textContent === "Embed Files into Workspace"
+    );
+    expect(button).toBeDefined();
+    await act(async () => button.click());
+    expect(toast).toHaveBeenLastCalledWith(
+      severity === "success"
+        ? "2 files embedded successfully"
+        : "Failed to embed files",
+      severity
+    );
+    expect(document.body.textContent).not.toContain("Embedding 1 of");
+  }
 );
 function Probe() {
   context = React.useContext(DndUploaderContext);
@@ -223,6 +366,7 @@ it("waits for the new conversation's health check instead of an old completion",
   expect(document.getElementById("attach-item-btn").disabled).toBe(false);
 });
 afterEach(async () => {
+  jest.restoreAllMocks();
   await act(async () => root.unmount());
   dom.window.close();
   for (const [name, descriptor] of Object.entries(originals)) {
