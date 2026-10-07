@@ -1,0 +1,84 @@
+{
+  "apiVersion": "v1", "kind": "List", "items": [
+    {
+      "apiVersion": "v1", "kind": "PersistentVolumeClaim",
+      "metadata": {"name": "anythingllm-postgres-data", "namespace": "anythingllm", "labels": {"app.kubernetes.io/name": "anythingllm-postgres", "app.kubernetes.io/managed-by": "anythingllm-pg-provision"}},
+      "spec": {"accessModes": ["ReadWriteOnce"], "storageClassName": "ebs-ssd", "resources": {"requests": {"storage": "20Gi"}}}
+    },
+    {
+      "apiVersion": "v1", "kind": "Service",
+      "metadata": {"name": "anythingllm-postgres", "namespace": "anythingllm", "labels": {"app.kubernetes.io/name": "anythingllm-postgres", "app.kubernetes.io/managed-by": "anythingllm-pg-provision"}},
+      "spec": {"type": "ClusterIP", "selector": {"app.kubernetes.io/name": "anythingllm-postgres"}, "ports": [{"name": "postgres", "port": 5432, "targetPort": 5432}]}
+    },
+    {
+      "apiVersion": "v1", "kind": "ConfigMap",
+      "metadata": {"name": "anythingllm-postgres-config", "namespace": "anythingllm", "labels": {"app.kubernetes.io/name": "anythingllm-postgres", "app.kubernetes.io/managed-by": "anythingllm-pg-provision"}},
+      "data": {
+        "pg_hba.conf": "local all all trust\nhostnossl all all 0.0.0.0/0 reject\nhostnossl all all ::/0 reject\nhostssl all all 0.0.0.0/0 scram-sha-256\nhostssl all all ::/0 scram-sha-256\n",
+        "10-bootstrap.sh": "#!/bin/bash\nset -euo pipefail\npsql --username postgres --dbname postgres --set ON_ERROR_STOP=1 <<'SQL'\n\\getenv migrator_password MIGRATOR_PASSWORD\n\\getenv app_password APP_PASSWORD\nCREATE ROLE anythingllm_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'migrator_password';\nCREATE ROLE anythingllm_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'app_password';\nCREATE DATABASE anythingllm OWNER anythingllm_migrator;\nREVOKE ALL ON DATABASE anythingllm FROM PUBLIC;\nGRANT CONNECT ON DATABASE anythingllm TO anythingllm_app;\n\\connect anythingllm\nREVOKE ALL ON SCHEMA public FROM PUBLIC;\nALTER SCHEMA public OWNER TO anythingllm_migrator;\nGRANT USAGE ON SCHEMA public TO anythingllm_app;\nALTER DEFAULT PRIVILEGES FOR ROLE anythingllm_migrator IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO anythingllm_app;\nALTER DEFAULT PRIVILEGES FOR ROLE anythingllm_migrator IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO anythingllm_app;\nSQL\n"
+      }
+    },
+    {
+      "apiVersion": "apps/v1", "kind": "StatefulSet",
+      "metadata": {"name": "anythingllm-postgres", "namespace": "anythingllm", "labels": {"app.kubernetes.io/name": "anythingllm-postgres", "app.kubernetes.io/managed-by": "anythingllm-pg-provision"}},
+      "spec": {
+        "serviceName": "anythingllm-postgres", "replicas": 1,
+        "persistentVolumeClaimRetentionPolicy": {"whenDeleted": "Retain", "whenScaled": "Retain"},
+        "selector": {"matchLabels": {"app.kubernetes.io/name": "anythingllm-postgres"}},
+        "template": {
+          "metadata": {"labels": {"app.kubernetes.io/name": "anythingllm-postgres", "app.kubernetes.io/managed-by": "anythingllm-pg-provision"}},
+          "spec": {
+            "automountServiceAccountToken": false,
+            "terminationGracePeriodSeconds": 60,
+            "securityContext": {"fsGroup": 999, "seccompProfile": {"type": "RuntimeDefault"}},
+            "initContainers": [{
+              "name": "tls-permissions",
+              "image": "postgres:17-bookworm@sha256:66aafa11cf15800a3c94763f7e11d1e7b2e37e5e84bc4ce027cb6e1e4bfaf4df",
+              "command": ["bash", "-ec", "cp /tls-source/server.crt /tls-source/server.key /tls-source/ca.crt /tls/; chown 999:999 /tls/*; chmod 600 /tls/server.key; chmod 644 /tls/server.crt /tls/ca.crt"],
+              "securityContext": {"runAsUser": 0, "allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"], "add": ["CHOWN", "FOWNER", "DAC_OVERRIDE"]}},
+              "resources": {"requests": {"cpu": "50m", "memory": "32Mi"}, "limits": {"cpu": "250m", "memory": "64Mi"}},
+              "volumeMounts": [{"name": "tls-source", "mountPath": "/tls-source", "readOnly": true}, {"name": "tls", "mountPath": "/tls"}]
+            }],
+            "containers": [{
+              "name": "postgres",
+              "image": "postgres:17-bookworm@sha256:66aafa11cf15800a3c94763f7e11d1e7b2e37e5e84bc4ce027cb6e1e4bfaf4df",
+              "args": ["postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/tls/server.crt", "-c", "ssl_key_file=/tls/server.key", "-c", "hba_file=/config/pg_hba.conf", "-c", "password_encryption=scram-sha-256", "-c", "shared_buffers=128MB", "-c", "max_connections=50", "-c", "log_statement=none", "-c", "log_min_error_statement=panic"],
+              "securityContext": {"runAsUser": 999, "runAsGroup": 999, "runAsNonRoot": true, "allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}},
+              "env": [
+                {"name": "PGDATA", "value": "/var/lib/postgresql/data/pgdata"},
+                {"name": "POSTGRES_INITDB_ARGS", "value": "--auth-host=scram-sha-256 --auth-local=trust"},
+                {"name": "POSTGRES_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "anythingllm-postgres-auth", "key": "POSTGRES_PASSWORD"}}},
+                {"name": "MIGRATOR_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "anythingllm-postgres-auth", "key": "MIGRATOR_PASSWORD"}}},
+                {"name": "APP_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "anythingllm-postgres-auth", "key": "APP_PASSWORD"}}}
+              ],
+              "ports": [{"name": "postgres", "containerPort": 5432}],
+              "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}},
+              "startupProbe": {"exec": {"command": ["pg_isready", "-U", "postgres", "-d", "postgres"]}, "periodSeconds": 5, "failureThreshold": 120, "timeoutSeconds": 5},
+              "readinessProbe": {"exec": {"command": ["pg_isready", "-U", "postgres", "-d", "postgres"]}, "periodSeconds": 10, "failureThreshold": 3, "timeoutSeconds": 5},
+              "livenessProbe": {"exec": {"command": ["pg_isready", "-U", "postgres", "-d", "postgres"]}, "periodSeconds": 10, "failureThreshold": 6, "timeoutSeconds": 5},
+              "volumeMounts": [
+                {"name": "data", "mountPath": "/var/lib/postgresql/data"},
+                {"name": "tls", "mountPath": "/tls", "readOnly": true},
+                {"name": "config", "mountPath": "/config", "readOnly": true},
+                {"name": "config", "mountPath": "/docker-entrypoint-initdb.d/10-bootstrap.sh", "subPath": "10-bootstrap.sh", "readOnly": true},
+                {"name": "shm", "mountPath": "/dev/shm"}
+              ]
+            }],
+            "volumes": [
+              {"name": "data", "persistentVolumeClaim": {"claimName": "anythingllm-postgres-data"}},
+              {"name": "tls-source", "secret": {"secretName": "anythingllm-postgres-tls", "defaultMode": 256}},
+              {"name": "tls", "emptyDir": {"medium": "Memory", "sizeLimit": "8Mi"}},
+              {"name": "config", "configMap": {"name": "anythingllm-postgres-config", "defaultMode": 292}},
+              {"name": "shm", "emptyDir": {"medium": "Memory", "sizeLimit": "128Mi"}}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+      "metadata": {"name": "anythingllm-postgres", "namespace": "anythingllm", "labels": {"app.kubernetes.io/name": "anythingllm-postgres", "app.kubernetes.io/managed-by": "anythingllm-pg-provision"}},
+      "spec": {"podSelector": {"matchLabels": {"app.kubernetes.io/name": "anythingllm-postgres"}}, "policyTypes": ["Ingress"], "ingress": [{"from": [{"podSelector": {"matchLabels": {"app": "anythingllm"}}}, {"podSelector": {"matchLabels": {"anythingllm-db-maintenance": "true"}}}], "ports": [{"protocol": "TCP", "port": 5432}]}]}
+    }
+  ]
+}
