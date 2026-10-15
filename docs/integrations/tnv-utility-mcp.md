@@ -37,7 +37,7 @@ If an interrupted run leaves `.tnv-utility.lock`, confirm that the process ID in
 1. Open **My MCP** in the deployed application.
 2. Find `tnv-utility` and enter that user's TNv Utility API key.
 3. Connect and enable the integration for that user.
-4. Confirm that the five tools are available.
+4. Confirm that the seven tools are available.
 
 The key is sent to `https://utility-production-4bec.up.railway.app/mcp` as `X-API-Key` through the existing personal connection. Do not add a shared key to the global catalog or paste a key into chat. Each user connects and enables their own entry. Sharing a Utility API key grants access to the same TNv test dataset.
 
@@ -47,11 +47,15 @@ The [TNv MCP guide](https://utility-production-4bec.up.railway.app/mcp-docs) pub
 
 - `search_recommendation_novels` finds novels and their IDs.
 - `list_recommendation_readers` lists reader IDs from the test dataset.
-- `recommend_novels` returns related or personal recommendations immediately.
+- `recommend_novels` returns related or personal recommendations. It may incur BGE and Jev inference charges.
+- `recommendation_sections` returns the `trending`, `trending_for_you`, and `because_you_read` sections with evidence for each item. It may incur inference charges and stores a delivery receipt.
+- `explain_recommendation` explains an item from an earlier result using that result's `request_id`, `section_id`, and `novel_id`. It reads the stored evidence and does not rerank.
 - `submit_duplicate_check` creates a real duplicate-check job and may incur inference charges.
 - `get_duplicate_check` reads a job's status and similarity evidence without starting inference.
 
-For personal recommendations, supply one TNv account selector in the chat. Use an email, username, user ID, or legacy reader ID. Do not infer that the AnythingLLM account is the TNv account. TNv matches accounts against a local snapshot and does not verify account ownership. If a username is ambiguous, use the TNv user ID. If the account is absent, report `account_not_found` rather than inventing a reader profile.
+For personal recommendations, supply one TNv account selector in the chat. Use an email, username, user ID, or legacy reader ID. Do not infer that the AnythingLLM account is the TNv account. TNv matches accounts against a local snapshot and does not verify account ownership. If a username matches several accounts, TNv returns `account_ambiguous`; use the TNv user ID instead. If the account is absent, report `account_not_found` rather than inventing a reader profile.
+
+`recommendation_sections` accepts at most one account selector. Omit the selector for general discovery. A supplied `novel_id` is a related seed, not evidence that the reader read it. Sections without evidence are reported as unavailable. Historical data carries a dated title rather than a current trending claim. A delivery receipt records that items were returned; it is not an impression, a click, or a reading event. To answer why an item was recommended, call `explain_recommendation` with the identifiers from the original result. An expired or missing receipt returns `not_found`.
 
 For a duplicate check, supply the actual full text of exactly ten chapters in order. Preserve paragraph boundaries. Each chapter needs at least 100 Unicode characters after trimming. This minimum does not guarantee that TNv can select the required context from the paragraphs. Do not invent, summarize, or pad chapters to satisfy validation. Reuse an `idempotency_key` for a retry of the same submission, then poll the returned job ID with `get_duplicate_check`. Report similarity evidence without claiming that similarity proves plagiarism.
 
@@ -67,6 +71,6 @@ Run the persisted-catalog tests from the repository root.
 node node_modules/jest/bin/jest.js server/__tests__/utils/MCP/tnvUtilityCatalog.test.js --runInBand
 ```
 
-In the deployed application, connect a test user's key, list the five tools, and search for a novel. Use the returned novel ID for a related recommendation. Verify a personal recommendation with a TNv account selector supplied by the user. Check that a second user without a connection cannot use the first user's credentials. Confirm that existing MCP connections still work.
+In the deployed application, connect a test user's key, list the seven tools, and search for a novel. Use the returned novel ID for a related recommendation. Verify a personal recommendation with a TNv account selector supplied by the user. Check that a second user without a connection cannot use the first user's credentials. Confirm that existing MCP connections still work.
 
 Exercise duplicate submission only with real chapter text provided for that purpose. Follow the returned job through `get_duplicate_check`. Keep account details, keys, and chapter text out of test logs.
