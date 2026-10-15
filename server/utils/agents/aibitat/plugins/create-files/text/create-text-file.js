@@ -126,13 +126,17 @@ module.exports.CreateTextFile = {
                 displayFilename,
               });
 
-              this.super.socket.send("fileDownloadCard", {
-                filename: savedFile.displayFilename,
-                storageFilename: savedFile.filename,
-                fileSize: savedFile.fileSize,
-              });
+              await createFilesLib.registerOutput(
+                this.super,
+                "TextFileDownload",
+                {
+                  filename: savedFile.displayFilename,
+                  storageFilename: savedFile.filename,
+                  fileSize: savedFile.fileSize,
+                }
+              );
 
-              createFilesLib.registerOutput(this.super, "TextFileDownload", {
+              this.super.socket.send("fileDownloadCard", {
                 filename: savedFile.displayFilename,
                 storageFilename: savedFile.filename,
                 fileSize: savedFile.fileSize,

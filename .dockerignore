@@ -18,3 +18,4 @@ server/generated/prisma-postgresql/
 **/.log
 !docker/.env.example
 !frontend/.env.production
+kube.yml

@@ -321,13 +321,17 @@ module.exports.CreatePptxPresentation = {
                 displayFilename,
               });
 
-              this.super.socket.send("fileDownloadCard", {
-                filename: savedFile.displayFilename,
-                storageFilename: savedFile.filename,
-                fileSize: savedFile.fileSize,
-              });
+              await createFilesLib.registerOutput(
+                this.super,
+                "PptxFileDownload",
+                {
+                  filename: savedFile.displayFilename,
+                  storageFilename: savedFile.filename,
+                  fileSize: savedFile.fileSize,
+                }
+              );
 
-              createFilesLib.registerOutput(this.super, "PptxFileDownload", {
+              this.super.socket.send("fileDownloadCard", {
                 filename: savedFile.displayFilename,
                 storageFilename: savedFile.filename,
                 fileSize: savedFile.fileSize,

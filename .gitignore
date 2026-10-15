@@ -28,3 +28,4 @@ server/generated/prisma-postgresql/
 server/__tests__/utils/agents/comkey/*.pem
 server/__tests__/utils/agents/push-notifications/vapid-keys.json
 server/__tests__/utils/agents/plugins/anythingllm_mcp_servers.json
+kube.yml

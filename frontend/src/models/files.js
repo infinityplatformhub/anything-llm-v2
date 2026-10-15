@@ -4,22 +4,29 @@ import { baseHeaders } from "@/utils/request";
 const StorageFiles = {
   /**
    * Download a file from the server
-   * @param {string} filename - The filename to download
-   * @returns {Promise<Blob|null>}
+   * @param {string} storageFilename - The filename to download
+   * @returns {Promise<Blob>}
    */
   download: async function (storageFilename) {
-    return await fetch(
-      `${API_BASE}/agent-skills/generated-files/${encodeURIComponent(storageFilename)}`,
+    const response = await fetch(
+      `${API_BASE}/agent-skills/generated-files/${encodeURIComponent(
+        storageFilename
+      )}`,
       { headers: baseHeaders() }
-    )
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to download file");
-        return res.blob();
-      })
-      .catch((e) => {
-        console.error("Download failed:", e);
-        return null;
-      });
+    );
+    if (response.status === 401 || response.status === 403)
+      throw new Error(
+        "Your session has expired or you do not have permission to download this file. Please sign in again."
+      );
+    if (response.status === 404)
+      throw new Error(
+        "This file is no longer available or you do not have access to it."
+      );
+    if (!response.ok)
+      throw new Error(
+        `Failed to download file (HTTP ${response.status}). Please try again.`
+      );
+    return response.blob();
   },
 
   /**

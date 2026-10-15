@@ -329,13 +329,17 @@ module.exports.CreateExcelFile = {
                 displayFilename,
               });
 
-              this.super.socket.send("fileDownloadCard", {
-                filename: savedFile.displayFilename,
-                storageFilename: savedFile.filename,
-                fileSize: savedFile.fileSize,
-              });
+              await createFilesLib.registerOutput(
+                this.super,
+                "ExcelFileDownload",
+                {
+                  filename: savedFile.displayFilename,
+                  storageFilename: savedFile.filename,
+                  fileSize: savedFile.fileSize,
+                }
+              );
 
-              createFilesLib.registerOutput(this.super, "ExcelFileDownload", {
+              this.super.socket.send("fileDownloadCard", {
                 filename: savedFile.displayFilename,
                 storageFilename: savedFile.filename,
                 fileSize: savedFile.fileSize,
