@@ -3,6 +3,7 @@ import { saveAs } from "file-saver";
 import { DownloadSimple, CircleNotch } from "@phosphor-icons/react";
 import { humanFileSize } from "@/utils/numbers";
 import StorageFiles from "@/models/files";
+import showToast from "@/utils/toast";
 
 /**
  * @param {{content: {filename: string, storageFilename?: string, fileSize?: number}}} props
@@ -14,15 +15,24 @@ function FileDownloadCard({ props }) {
 
   const handleDownload = async () => {
     if (downloading) return;
-    if (!storageFilename) return;
+    if (!storageFilename) {
+      showToast(
+        "This file has no download reference. Please generate it again.",
+        "error"
+      );
+      return;
+    }
 
     setDownloading(true);
     try {
       const blob = await StorageFiles.download(storageFilename);
       if (!blob) throw new Error("Failed to download file");
       saveAs(blob, filename || storageFilename);
-    } catch {
-      console.error("Failed to download file");
+    } catch (error) {
+      showToast(
+        error.message || "Failed to download file. Please try again.",
+        "error"
+      );
     } finally {
       setDownloading(false);
     }
@@ -50,6 +60,7 @@ function FileDownloadCard({ props }) {
             </div>
           </div>
           <button
+            type="button"
             onClick={handleDownload}
             disabled={downloading}
             className="flex items-center gap-x-2 px-4 py-2 rounded-lg border border-zinc-600 light:border-theme-sidebar-border hover:bg-zinc-700 light:hover:bg-theme-bg-secondary transition-colors text-white light:text-theme-text-primary text-sm font-medium flex-shrink-0 ml-4 disabled:opacity-50 disabled:cursor-not-allowed"

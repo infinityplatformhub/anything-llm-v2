@@ -154,8 +154,9 @@ class CreateFilesManager {
    * @param {object} aibitat - The aibitat instance to register the output on
    * @param {string} type - The type of output (e.g., "PptxFileDownload")
    * @param {object} payload - The output payload data
+   * @returns {Promise<void>}
    */
-  registerOutput(aibitat, type, payload) {
+  async registerOutput(aibitat, type, payload) {
     if (!aibitat) {
       console.warn(
         "[CreateFilesManager] Cannot register output - aibitat instance not provided"
@@ -168,6 +169,19 @@ class CreateFilesManager {
     }
 
     aibitat._pendingOutputs.push({ type, payload });
+
+    // Downloads are authorized against chat outputs, so persist the reference
+    // before publishing the card, while the agent is still composing its reply.
+    if (aibitat.trackedChatId) {
+      const {
+        WorkspaceChats,
+      } = require("../../../../../models/workspaceChats");
+      const saved = await WorkspaceChats._update(aibitat.trackedChatId, {
+        response: JSON.stringify({ outputs: aibitat._pendingOutputs }),
+      });
+      if (!saved) throw new Error("Failed to save generated file reference");
+    }
+
     console.log(
       `[CreateFilesManager] Registered output: type=${type}, total pending=${aibitat._pendingOutputs.length}`
     );
