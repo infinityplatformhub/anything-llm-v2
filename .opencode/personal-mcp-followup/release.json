@@ -1,0 +1,31 @@
+{
+  "cause": "Personal MCP redacted persisted chat while websocket reconnect did not carry the current browser conversation.",
+  "fix": "Owner-verified same-page conversation replay through a bounded one-shot HTTP-to-websocket handoff. Shared persisted history remains redacted.",
+  "deployed_image": "infinityplatform-ap-southeast-1.cr.bytepluses.com/infi/anythingllm-v2@sha256:ac023d069e85844b8ecd7406a1f02d81144f90501b27df7362d97d46db95ebd4",
+  "base_image": "e990846b1cd8482ef9c24eb08cca7f1295dde1973609c338c84d1ecdae99b32a",
+  "validation": {
+    "server_suites": 116,
+    "tests": 1614,
+    "five_minute_browser_followup": "PASS",
+    "reset_drops_context": "PASS",
+    "expired_and_other_socket_cannot_consume_context": "PASS",
+    "candidate_node_18_smoke": "PASS",
+    "targeted_eslint_and_prettier": "PASS",
+    "rollout": "PASS",
+    "live_ping_status": 200,
+    "live_frontend_sha256": "7f9e5b5726b9c0ef3d1b61c25185732af80018f3c8510c58e7924513b8b0dbac"
+  },
+  "files": {
+    "server/endpoints/chat.js": "7ad28630aa0f9605926c848b4bc957283a0d9063a3854299228db18334113c48",
+    "server/utils/chats/stream.js": "9462eb687cec44ef70545f568d284314dba03cde51a8505727393923e3808d9f",
+    "server/utils/chats/agents.js": "1ff45306400c56dd63b855d6cbb11a664aad816c06403e212c7b8b5e38bb5c8c",
+    "server/utils/chats/invocationHistory.js": "201a9b99db08af980ef08cae1cd1d99d3a4d9e4b2798199cffa0dbab1d316681",
+    "server/utils/agents/index.js": "f92f5df3747743bff38af0abef06eaf7c8233bceef56f5aa0b5a244c129ac125",
+    "frontend/src/components/WorkspaceChat/ChatContainer/index.jsx": "70713939fe697b8f9ed47a73b0a47dac4430132e7fc37bb50814328fe2405c89",
+    "frontend/src/models/workspace.js": "fd37c0c3a2a4d1564d5e09709bef18462ced1e239609d0ed492766bebbba7422",
+    "frontend/src/models/workspaceThread.js": "8289a6f0fa5cc4b4cd5fbd7c29b873ed52ff64635c2f94c9a2343b6b41e6c4f8",
+    "frontend/src/utils/chat/conversationHistory.js": "ff9bcdc2c7d238abe11d2125f707414b34d0c4a7be1f7467396583a4e4a136ee",
+    "server/__tests__/endpoints/personalMcpActualHandler.test.js": "4d52e763e2114841dbbbc09b2378b9ca426fda52158b892e0f64ada3401ea2b9",
+    "server/__tests__/frontend/personalMcpFollowup.test.js": "439f625e78ed6851ab182f27d9ca58ce1c67dcf5d7db8407d72de2447a91b39c"
+  }
+}

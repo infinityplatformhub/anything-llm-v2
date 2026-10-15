@@ -19,3 +19,12 @@ e2e/.state/
 e2e/logs/
 test-results/
 playwright-report/
+
+# Separate generated PostgreSQL client; SQLite client remains unchanged.
+server/generated/prisma-postgresql/
+
+# Local release checkouts and generated test credentials.
+.scratch/
+server/__tests__/utils/agents/comkey/*.pem
+server/__tests__/utils/agents/push-notifications/vapid-keys.json
+server/__tests__/utils/agents/plugins/anythingllm_mcp_servers.json

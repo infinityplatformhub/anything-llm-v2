@@ -17,7 +17,7 @@ class MCPCompatibilityLayer extends MCPHypervisor {
    * This will also boot all MCP servers if they have not been started yet.
    * @returns {Promise<string[]>} Array of flow names in @@mcp_{name} format
    */
-  async activeMCPServers(workspace) {
+  async activeMCPServers(workspace, caller) {
     if (workspace === undefined) {
       await this.bootMCPServers();
       return Object.keys(this.mcps)
@@ -29,11 +29,29 @@ class MCPCompatibilityLayer extends MCPHypervisor {
     const connections = await WorkspaceMcpConnection.list(workspace.id);
     await this.bootMCPServers();
     const active = [];
+    if (caller) {
+      const owned = await this.workspaceServerConfigs(workspace.id);
+      const ownedNames = new Set(owned.map((entry) => entry.name));
+      const catalog = [
+        ...owned,
+        ...this.mcpServerConfigs.filter((entry) => !ownedNames.has(entry.name)),
+      ];
+      for (const { name, server } of catalog) {
+        if (server.anythingllm?.perUserAuth !== true) continue;
+        try {
+          await this.bootPersonalServer(workspace, name, caller);
+          active.push(`@@mcp_${name}`);
+        } catch {
+          /* No private error bodies or credentials in generic logs. */
+        }
+      }
+    }
     for (const connection of connections) {
       if (!connection.enabled) continue;
       const name = connection.server_name;
       const config = await this.findServerConfig(name, workspace);
       if (!config) continue;
+      if (config.server?.anythingllm?.perUserAuth) continue;
       const perWorkspaceAuth = config.server?.anythingllm?.perWorkspaceAuth;
       if (perWorkspaceAuth && !connection.access_token) continue;
       if (config.owner === "workspace" || perWorkspaceAuth) {
@@ -58,6 +76,93 @@ class MCPCompatibilityLayer extends MCPHypervisor {
     const workspace = _aibitat?.handlerProps?.invocation?.workspace;
     const config = await this.findServerConfig(name, workspace);
     if (!config) return null;
+    if (config.server?.anythingllm?.perUserAuth) {
+      const identity = _aibitat?.handlerProps?.invocation?.mcpCaller;
+      let tools;
+      try {
+        await require("./personalCaller").assert(identity, workspace);
+        const invocation = _aibitat.handlerProps.invocation;
+        if (Number.isInteger(invocation.workspace_id)) {
+          await require("../../models/personalMcpContext").PersonalMcpContext.mark(
+            invocation
+          );
+          _aibitat.personalMcpUsed = true;
+        }
+        tools = await this.personalRuntime.tools(workspace, name, identity);
+      } catch {
+        return null;
+      }
+      let categoryRuntime;
+      const makeFunction = (aibitat, tool, binding) => ({
+              name: `${name}-${tool.name}`,
+              super: aibitat,
+              controller: new AbortController(),
+              description: tool.description,
+              isMCPTool: true,
+              privateMcp: true,
+              examples: [],
+              parameters: {
+                $schema: "http://json-schema.org/draft-07/schema#",
+                ...tool.inputSchema,
+              },
+              handler: async (args = {}) => {
+                await require("./personalCaller").assert(identity, workspace);
+                const invocation = aibitat.handlerProps?.invocation;
+                if (Number.isInteger(invocation?.workspace_id))
+                  await require("../../models/personalMcpContext").PersonalMcpContext.mark(
+                    invocation
+                  );
+                aibitat.personalMcpUsed = true;
+                if (aibitat.handlerProps?.invocation)
+                  aibitat.handlerProps.invocation.personalMcpUsed = true;
+                // A prompt may have been pre-registered before the first private
+                // tool ran. Redact it now as well, including abort/error paths.
+                if (aibitat.trackedChatId) {
+                  const {
+                    WorkspaceChats,
+                  } = require("../../models/workspaceChats");
+                  await WorkspaceChats.upsert(aibitat.trackedChatId, {
+                    workspaceId: workspace.id,
+                    prompt:
+                      "Personal MCP conversation is not stored in shared history.",
+                    response: {
+                      text: "Personal MCP response is not stored in shared history.",
+                      sources: [],
+                      type: "chat",
+                    },
+                    user: { id: identity.userId },
+                    threadId: aibitat.handlerProps.invocation.thread_id || null,
+                    include: false,
+                  });
+                }
+                try {
+                  const result =
+                    categoryRuntime ? await categoryRuntime.call(aibitat, tool, args, binding, makeFunction) : await new MCPCompatibilityLayer().callServerTool(
+                      workspace,
+                      name,
+                      { name: tool.name, arguments: args },
+                      identity
+                    );
+                  return MCPCompatibilityLayer.returnMCPResult(result);
+                } catch {
+                  return "Personal MCP tool unavailable; reconnect your account if required.";
+                }
+              },
+            });
+      if (name === 'redball-store' && config.server.anythingllm.categoryLoading === true && tools.some(tool => tool.name === 'load_tool_categories')) {
+        categoryRuntime = await require('./categoryTools').createCategoryRuntime({ runtime: this.personalRuntime, workspace, name, identity });
+        tools = tools.filter(tool => ['search_tools', 'load_tool_categories'].includes(tool.name));
+      }
+      return tools.map(tool => ({
+        name: `${name}-${tool.name}`, description: tool.description, toolName: `${name}:${tool.name}`,
+        plugin: () => ({ name: `${name}-${tool.name}`, setup: aibitat => {
+          const fn = makeFunction(aibitat, tool);
+          aibitat.function(fn);
+          if (categoryRuntime) categoryRuntime.attach(aibitat, fn);
+          return aibitat;
+        } }),
+      }));
+    }
     const scoped =
       config.owner === "workspace" ||
       config.server?.anythingllm?.perWorkspaceAuth;
@@ -152,13 +257,15 @@ class MCPCompatibilityLayer extends MCPHypervisor {
                         `MCP server ${name} is not currently running`
                       );
 
-                    aibitat.handlerProps.log(
-                      `Executing MCP server: ${name}:${tool.name} with args:`,
-                      args
-                    );
-                    aibitat.introspect(
-                      `Executing MCP server: ${name} with ${JSON.stringify(args, null, 2)}`
-                    );
+                    if (!aibitat.personalMcpUsed)
+                      aibitat.handlerProps.log(
+                        `Executing MCP server: ${name}:${tool.name} with args:`,
+                        args
+                      );
+                    if (!aibitat.personalMcpUsed)
+                      aibitat.introspect(
+                        `Executing MCP server: ${name} with ${JSON.stringify(args, null, 2)}`
+                      );
                     const request = { name: tool.name, arguments: args };
                     const result = scoped
                       ? await mcpLayer.callWorkspaceTool(
@@ -167,23 +274,27 @@ class MCPCompatibilityLayer extends MCPHypervisor {
                           request
                         )
                       : await currentMcp.callTool(request);
-                    aibitat.handlerProps.log(
-                      `MCP server: ${name}:${tool.name} completed successfully`,
-                      result
-                    );
-                    aibitat.introspect(
-                      `MCP server: ${name}:${tool.name} completed successfully`
-                    );
+                    if (!aibitat.personalMcpUsed)
+                      aibitat.handlerProps.log(
+                        `MCP server: ${name}:${tool.name} completed successfully`,
+                        result
+                      );
+                    if (!aibitat.personalMcpUsed)
+                      aibitat.introspect(
+                        `MCP server: ${name}:${tool.name} completed successfully`
+                      );
                     return MCPCompatibilityLayer.returnMCPResult(result);
                   } catch (error) {
-                    aibitat.handlerProps.log(
-                      `MCP server: ${name}:${tool.name} failed with error:`,
-                      error
-                    );
-                    aibitat.introspect(
-                      `MCP server: ${name}:${tool.name} failed with error:`,
-                      error
-                    );
+                    if (!aibitat.personalMcpUsed)
+                      aibitat.handlerProps.log(
+                        `MCP server: ${name}:${tool.name} failed with error:`,
+                        error
+                      );
+                    if (!aibitat.personalMcpUsed)
+                      aibitat.introspect(
+                        `MCP server: ${name}:${tool.name} failed with error:`,
+                        error
+                      );
                     return `The tool ${name}:${tool.name} failed with error: ${error?.message || "An unknown error occurred"}`;
                   }
                 },
@@ -212,7 +323,11 @@ class MCPCompatibilityLayer extends MCPHypervisor {
   async servers() {
     await this.bootMCPServers();
     const servers = this.mcpServerConfigs
-      .filter(({ server }) => server.anythingllm?.perWorkspaceAuth)
+      .filter(
+        ({ server }) =>
+          server.anythingllm?.perWorkspaceAuth ||
+          server.anythingllm?.perUserAuth
+      )
       .map(({ name, server }) => ({
         name,
         config: server,
@@ -317,6 +432,8 @@ class MCPCompatibilityLayer extends MCPHypervisor {
         error: `MCP server ${name} not found in config file.`,
       };
 
+    if (server.server?.anythingllm?.perUserAuth)
+      await this.invalidateGlobalPersonalServer(name);
     const mcp = this.mcps[name];
     const online = !!mcp ? !!(await mcp.ping()) : false; // If the server is not in the mcps object, it is not running
     if (online) this.pruneMCPServer(name);

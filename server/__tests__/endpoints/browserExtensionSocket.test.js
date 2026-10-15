@@ -80,7 +80,7 @@ async function connect(key) {
 // Three files have to agree and nothing compares them: the extension builds its
 // URL from SOCKET_PATH (browser-companion/src/background/socket.js), the server
 // declares the route with app.ws(...) (endpoints/browserExtension.js), and that
-// router is mounted under "/api" (server/index.js). Get any one wrong and the
+// router is mounted under "/api" (server/app.js). Get any one wrong and the
 // extension simply never connects — no error on the server, which never sees
 // the request, and a reconnect loop in a background page nobody is watching.
 //
@@ -108,7 +108,7 @@ describe("the socket path the extension dials", () => {
 
     // The extension resolves SOCKET_PATH against the configured apiBase, which
     // already ends in the mount; the server route is relative to apiRouter.
-    const mount = read("server/index.js").match(
+    const mount = read("server/app.js").match(
       /app\.use\(\s*"(\/api)"\s*,\s*apiRouter\s*\)/
     )?.[1];
     expect(mount).toBe("/api");

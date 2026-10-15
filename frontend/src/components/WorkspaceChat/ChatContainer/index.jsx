@@ -1,4 +1,5 @@
 import { useState, useEffect, useContext, useRef, useCallback } from "react";
+import { conversationHistoryForAgent } from "@/utils/chat/conversationHistory";
 import ChatHistory from "./ChatHistory";
 import { CLEAR_ATTACHMENTS_EVENT, DndUploaderContext } from "./DnDWrapper";
 import PromptInput, {
@@ -34,11 +35,14 @@ import paths from "@/utils/paths";
 import QuickActions from "@/components/lib/QuickActions";
 import SuggestedMessages from "@/components/lib/SuggestedMessages";
 import ChatSettingsMenu from "./ChatSettingsMenu";
+import AndroidConnection from "./AndroidConnection";
+import androidBridge from "@/utils/android/bridge";
 import WorkspaceModelPicker from "./WorkspaceModelPicker";
 import { ChatSidebarProvider } from "./ChatSidebar";
 import SourcesSidebar from "./SourcesSidebar";
 import MemoriesSidebar from "./MemoriesSidebar";
 import ActiveGenerationGuard from "./ActiveGenerationGuard";
+import { baseHeaders } from "@/utils/request";
 
 export default function ChatContainer({
   workspace,
@@ -55,7 +59,11 @@ export default function ChatContainer({
   const { chatHistoryRef } = useChatContainerQuickScroll();
   const pendingMessageChecked = useRef(false);
   const pendingResetRef = useRef(false);
+  const androidBindingRef = useRef(null);
   const activeThreadSlug = threadSlug;
+  useEffect(() => {
+    androidBridge.bindOwner(baseHeaders().Authorization || "single-user");
+  }, []);
 
   const isEmpty =
     chatHistory.length === 0 && !sessionStorage.getItem(PENDING_HOME_MESSAGE);
@@ -337,11 +345,19 @@ export default function ChatContainer({
       const attachments = promptMessage?.attachments ?? parseAttachments();
       window.dispatchEvent(new CustomEvent(CLEAR_ATTACHMENTS_EVENT));
 
+      const androidBinding = androidBridge.getBinding();
       await Workspace.multiplexStream({
         workspaceSlug: workspace.slug,
         threadSlug: activeThreadSlug,
         prompt: promptMessage.userMessage,
-        chatHandler: (chatResult) =>
+        androidBridge: androidBinding,
+        conversationHistory: conversationHistoryForAgent(
+          remHistory,
+          promptMessage.userMessage
+        ),
+        chatHandler: (chatResult) => {
+          if (chatResult.type === "agentInitWebsocketConnection")
+            androidBindingRef.current = androidBinding;
           handleChat(
             chatResult,
             setLoadingResponse,
@@ -349,7 +365,8 @@ export default function ChatContainer({
             remHistory,
             _chatHistory,
             setSocketId
-          ),
+          );
+        },
         attachments,
       });
       return;
@@ -371,10 +388,22 @@ export default function ChatContainer({
     function handleWSS() {
       try {
         if (!socketId || !!websocket) return;
+        const androidProtocol = androidBindingRef.current?.token
+          ? `anythingllm-android.${androidBindingRef.current.token}`
+          : null;
+        const protocols = baseHeaders().Authorization
+          ? [
+              "anythingllm-agent",
+              `anythingllm-session.${baseHeaders().Authorization.slice(7)}`,
+            ]
+          : ["anythingllm-agent"];
+        if (androidProtocol) protocols.push(androidProtocol);
         socket = new WebSocket(
-          `${websocketURI()}/api/agent-invocation/${socketId}`
+          `${websocketURI()}/api/agent-invocation/${socketId}`,
+          protocols
         );
         socket.supportsAgentStreaming = false;
+        androidBridge.attachSocket(socket, androidBindingRef.current?.token);
 
         onAbortStream = () => {
           setAgentSessionActive(false);
@@ -391,6 +420,7 @@ export default function ChatContainer({
             // agent pauses to wait on the user. Passive bookkeeping events
             // (null) leave the loading state as-is.
             const data = safeJsonParse(event.data, null);
+            if (androidBridge.handleEvent(socket, data)) return;
             const loadingState = agentEventLoadingState(data);
             if (loadingState !== null) setLoadingResponse(loadingState);
             handleSocketResponse(socket, event, setChatHistory);
@@ -466,6 +496,7 @@ export default function ChatContainer({
     return () => {
       removeAbortListener();
       if (socket) {
+        androidBridge.detachSocket(socket);
         setAgentSessionActive(false);
         window.dispatchEvent(new CustomEvent(AGENT_SESSION_END));
         socket.close();
@@ -488,6 +519,7 @@ export default function ChatContainer({
           <div className="flex-1 min-w-0 relative md:rounded-[16px] bg-zinc-900 light:bg-white w-full h-full overflow-hidden border-none light:border-solid light:border light:border-theme-modal-border">
             {isMobile && <SidebarMobileHeader />}
             <WorkspaceModelPicker workspaceSlug={workspace.slug} />
+            <AndroidConnection />
             <DnDFileUploaderWrapper>
               <div className="flex flex-col h-full w-full items-center justify-center">
                 <div className="flex flex-col items-center w-full max-w-[750px]">
@@ -546,6 +578,7 @@ export default function ChatContainer({
         <div className="flex-1 min-w-0 relative md:rounded-[16px] bg-zinc-900 light:bg-white text-white light:text-slate-900 h-full overflow-hidden border-none light:border-solid light:border light:border-theme-modal-border">
           {isMobile && <SidebarMobileHeader />}
           <WorkspaceModelPicker workspaceSlug={workspace.slug} />
+          <AndroidConnection />
           <DnDFileUploaderWrapper>
             <div className="flex flex-col h-full w-full pb-20 md:pb-0">
               <div className="contents">

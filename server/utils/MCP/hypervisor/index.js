@@ -1,3 +1,4 @@
+const { credentialHeaders } = require("../personalAuth");
 const { safeJsonParse } = require("../../http");
 const path = require("path");
 const fs = require("fs");
@@ -77,6 +78,75 @@ class MCPHypervisor {
   mcpLoadingResults = {};
   workspaceBoots = new Map();
   workspaceShadowWarnings = new Set();
+  personalDefinitions = new Map();
+
+  async syncPersonalDefinitions() {
+    const {
+      PersonalMcpGrant: Grant,
+    } = require("../../../models/personalMcpGrant");
+    const definitions = new Map(
+      this.mcpServerConfigs
+        .filter((entry) => entry.server.anythingllm?.perUserAuth === true)
+        .map((entry) => [entry.name, Grant.fingerprint(entry.server)])
+    );
+    for (const [name, fingerprint] of this.personalDefinitions) {
+      if (definitions.get(name) !== fingerprint)
+        await this.invalidateGlobalPersonalServer(name);
+    }
+    this.personalDefinitions = definitions;
+  }
+
+  get personalRuntime() {
+    if (!this._personalRuntime) {
+      const { PersonalMcpRuntime } = require("../personalRuntime");
+      this._personalRuntime = new PersonalMcpRuntime(this);
+    }
+    return this._personalRuntime;
+  }
+
+  async bootPersonalServer(workspace, name, caller) {
+    return this.personalRuntime.boot(workspace, name, caller);
+  }
+
+  async invalidatePersonalServer(workspaceId, name) {
+    const { PersonalMcpGrant } = require("../../../models/personalMcpGrant");
+    await PersonalMcpGrant.invalidate(workspaceId, name);
+    await this.personalRuntime.stop(workspaceId, name);
+  }
+
+  async invalidateGlobalPersonalServer(name) {
+    const prisma = require("../../prisma");
+    const {
+      PersonalMcpGrant: Grant,
+    } = require("../../../models/personalMcpGrant");
+    const shadows = await prisma.workspace_mcp_servers.findMany({
+      where: { name },
+      select: { workspace_id: true },
+    });
+    const shadowIds = new Set(shadows.map((row) => row.workspace_id));
+    const grants = await prisma.personal_mcp_grants.findMany({
+      where: { server_name: name },
+      select: { workspace_id: true },
+    });
+    const workspaces = new Set(grants.map((row) => row.workspace_id));
+    if (this._personalRuntime) {
+      for (const key of [
+        ...this._personalRuntime.clients.keys(),
+        ...this._personalRuntime.boots.keys(),
+      ]) {
+        const [workspaceId, , serverName] = JSON.parse(key);
+        if (serverName === name) workspaces.add(workspaceId);
+      }
+    }
+    for (const workspaceId of workspaces) {
+      if (shadowIds.has(workspaceId)) continue;
+      await Grant.invalidate(workspaceId, name);
+      if (this._personalRuntime)
+        await this._personalRuntime.stop(workspaceId, name);
+    }
+    // Pending callbacks carry definition fingerprint + grant generation; global
+    // rows are tombstoned above. Shadowed workspace rows are intentionally untouched.
+  }
 
   async workspaceServerConfigs(workspaceId) {
     const rows = await WorkspaceMcpServer.listDecrypted(workspaceId);
@@ -106,6 +176,58 @@ class MCPHypervisor {
     return global ? { ...global, owner: "global" } : null;
   }
 
+  // No constructor/setup, discovery, repair, or fallback on an unreadable
+  // override. Resolve only this persisted creator's enabled grant name.
+  static async findServerConfigStrict(name, workspaceId) {
+    try {
+      if (
+        !Number.isInteger(workspaceId) ||
+        workspaceId <= 0 ||
+        typeof name !== "string" ||
+        !name
+      )
+        throw new Error();
+      const owned = await WorkspaceMcpServer.findStrict(workspaceId, name);
+      if (owned) return { name, server: owned.config, owner: "workspace" };
+      const catalogPath =
+        process.env.NODE_ENV === "development"
+          ? path.resolve(
+              __dirname,
+              "../../../storage/plugins/anythingllm_mcp_servers.json"
+            )
+          : path.resolve(
+              process.env.STORAGE_DIR ??
+                path.resolve(__dirname, "../../../storage"),
+              "plugins/anythingllm_mcp_servers.json"
+            );
+      const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
+      const isObject = (value) =>
+        value !== null && typeof value === "object" && !Array.isArray(value);
+      if (
+        !isObject(catalog) ||
+        !Object.hasOwn(catalog, "mcpServers") ||
+        !isObject(catalog.mcpServers)
+      )
+        throw new Error();
+      if (!Object.hasOwn(catalog.mcpServers, name)) return null;
+      const server = catalog.mcpServers[name];
+      if (!isObject(server)) throw new Error();
+      if (Object.hasOwn(server, "anythingllm")) {
+        if (
+          !isObject(server.anythingllm) ||
+          (Object.hasOwn(server.anythingllm, "perUserAuth") &&
+            typeof server.anythingllm.perUserAuth !== "boolean")
+        )
+          throw new Error();
+      }
+      if (server.anythingllm?.perUserAuth === true)
+        validateWorkspaceServerConfig(server);
+      return { name, server, owner: "global" };
+    } catch {
+      throw new Error("personal_config_unavailable");
+    }
+  }
+
   async probeServerConfig(config, { timeoutMs, accessToken } = {}) {
     validateWorkspaceServerConfig(config);
     const configuredTimeout = Number(process.env.MCP_PROBE_TIMEOUT_MS);
@@ -125,9 +247,7 @@ class MCPHypervisor {
     try {
       const server = { ...config };
       if (accessToken) {
-        const headers = new Headers(server.headers);
-        headers.set("Authorization", `Bearer ${accessToken}`);
-        server.headers = Object.fromEntries(headers);
+        server.headers = credentialHeaders(config, accessToken);
       }
       const transport = this.createHttpTransport(server);
       const { tools } = await withTimeout(
@@ -231,6 +351,8 @@ class MCPHypervisor {
     if (!config)
       throw new Error(`MCP server ${name} is not enabled for this workspace`);
     const { server, owner } = config;
+    if (server?.anythingllm?.perUserAuth)
+      throw new Error("personal_auth_required");
     const perWorkspaceAuth = server?.anythingllm?.perWorkspaceAuth;
     if (owner === "workspace") validateWorkspaceServerConfig(server);
     if (!perWorkspaceAuth && owner !== "workspace")
@@ -322,7 +444,10 @@ class MCPHypervisor {
     }
   }
 
-  async callServerTool(workspace, name, request) {
+  async callServerTool(workspace, name, request, caller) {
+    const personal = await this.findServerConfig(name, workspace);
+    if (personal?.server?.anythingllm?.perUserAuth)
+      return this.personalRuntime.call(workspace, name, request, caller);
     if (
       !Number.isInteger(workspace?.id) ||
       workspace.id <= 0 ||
@@ -351,6 +476,8 @@ class MCPHypervisor {
     if (!config)
       throw new Error(`MCP server ${name} is not enabled for this workspace`);
     const { server } = config;
+    if (server?.anythingllm?.perUserAuth)
+      throw new Error("personal_auth_required");
     let client = await this.bootWorkspaceServer(workspace, name);
     try {
       return await client.callTool(args);
@@ -522,6 +649,7 @@ class MCPHypervisor {
    * and will also apply changes to the config file if any where made.
    */
   async reloadMCPServers() {
+    await this.syncPersonalDefinitions();
     this.pruneMCPServers();
     await this.bootMCPServers();
   }
@@ -541,7 +669,10 @@ class MCPHypervisor {
         error: `MCP server ${name} not found in config file`,
       };
 
-    if (config.server?.anythingllm?.perWorkspaceAuth)
+    if (
+      config.server?.anythingllm?.perWorkspaceAuth ||
+      config.server?.anythingllm?.perUserAuth
+    )
       return {
         success: false,
         error: "MCP server requires workspace authentication",
@@ -821,11 +952,14 @@ class MCPHypervisor {
    * @returns { Promise<{ [key: string]: {status: string, message: string} }> } The results of the boot process.
    */
   async bootMCPServers() {
+    await this.syncPersonalDefinitions();
     const serverDefinitions = this.mcpServerConfigs;
     if (
       serverDefinitions.some(
         ({ name, server }) =>
-          !server.anythingllm?.perWorkspaceAuth && this.mcps[name]
+          !server.anythingllm?.perWorkspaceAuth &&
+          !server.anythingllm?.perUserAuth &&
+          this.mcps[name]
       )
     ) {
       this.log("MCP Servers already running, skipping boot.");
@@ -833,7 +967,11 @@ class MCPHypervisor {
     }
 
     for (const { name, server } of serverDefinitions) {
-      if (server.anythingllm?.perWorkspaceAuth) continue;
+      if (
+        server.anythingllm?.perWorkspaceAuth ||
+        server.anythingllm?.perUserAuth
+      )
+        continue;
       if (
         server.anythingllm?.hasOwnProperty("autoStart") &&
         server.anythingllm.autoStart === false

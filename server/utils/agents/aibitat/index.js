@@ -997,6 +997,12 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
     } catch (error) {
       // User-initiated abort - rethrow as-is so the chat loop exits quietly.
       if (this._aborted) throw error;
+      if (
+        this.personalMcpUsed ||
+        this.browserDeviceUsed ||
+        this.handlerProps.invocation?.personalMcpUsed
+      )
+        throw new APIError("The agent model failed to respond.");
       console.error(`[AIbitat] Provider error: ${error.message}`, {
         hide_meta: true,
       });
@@ -1022,6 +1028,11 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
   ) {
     // Bail before any (further) LLM calls when the session was aborted mid-execution.
     if (this._aborted) return null;
+    if (this.categoryLoadedTools)
+      functions =
+        depth >= this.maxToolCalls
+          ? []
+          : this.categoryLoadedTools.functions(functions);
     const eventHandler = (type, data) => {
       this?.socket?.send(type, data);
     };
@@ -1044,6 +1055,10 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
 
     if (completionStream.functionCall) {
       const { name, arguments: args } = completionStream.functionCall;
+      if (this.categoryLoadedTools) {
+        if (depth >= this.maxToolCalls) return "Tool call limit reached.";
+        this.categoryLoadedTools.assertCallable(name, functions);
+      }
       const fn = this.functions.get(name);
       const reachedToolLimit = depth >= this.maxToolCalls;
 
@@ -1075,23 +1090,38 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
 
       fn.caller = byAgent || "agent";
 
-      if (this.providerInstance?.verbose) {
+      if (
+        this.providerInstance?.verbose &&
+        !fn.privateMcp &&
+        !(this.personalMcpUsed || this.browserDeviceUsed) &&
+        !this.handlerProps.invocation?.personalMcpUsed
+      ) {
         this?.introspect?.(
           `${fn.caller} is executing \`${name}\` tool ${JSON.stringify(args, null, 2)}`
         );
       }
 
-      this.handlerProps?.log?.(
-        `[debug]: ${fn.caller} is attempting to call \`${name}\` tool ${JSON.stringify(args, null, 2)}`
-      );
+      if (
+        !fn.privateMcp &&
+        !(this.personalMcpUsed || this.browserDeviceUsed) &&
+        !this.handlerProps.invocation?.personalMcpUsed
+      )
+        this.handlerProps?.log?.(
+          `[debug]: ${fn.caller} is attempting to call \`${name}\` tool ${JSON.stringify(args, null, 2)}`
+        );
 
       const result = await fn.handler(args);
       Telemetry.sendTelemetry("agent_tool_call", { tool: name }, null, true);
-      this.emitter.emit("toolCallResult", {
-        toolName: name,
-        arguments: args,
-        result,
-      });
+      if (
+        !fn.privateMcp &&
+        !(this.personalMcpUsed || this.browserDeviceUsed) &&
+        !this.handlerProps.invocation?.personalMcpUsed
+      )
+        this.emitter.emit("toolCallResult", {
+          toolName: name,
+          arguments: args,
+          result,
+        });
 
       /**
        * If the tool call has direct output enabled, return the result directly to the chat
@@ -1186,6 +1216,11 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
   ) {
     // Bail before any (further) LLM calls when the session was aborted mid-execution.
     if (this._aborted) return null;
+    if (this.categoryLoadedTools)
+      functions =
+        depth >= this.maxToolCalls
+          ? []
+          : this.categoryLoadedTools.functions(functions);
     // Create a stable UUID at the start of execution for event correlation
     if (!msgUUID) msgUUID = v4();
     const eventHandler = (type, data) => {
@@ -1210,6 +1245,10 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
 
     if (completion.functionCall) {
       const { name, arguments: args } = completion.functionCall;
+      if (this.categoryLoadedTools) {
+        if (depth >= this.maxToolCalls) return "Tool call limit reached.";
+        this.categoryLoadedTools.assertCallable(name, functions);
+      }
       const fn = this.functions.get(name);
       const reachedToolLimit = depth >= this.maxToolCalls;
 
@@ -1242,23 +1281,38 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
 
       fn.caller = byAgent || "agent";
 
-      if (this.providerInstance?.verbose) {
+      if (
+        this.providerInstance?.verbose &&
+        !fn.privateMcp &&
+        !(this.personalMcpUsed || this.browserDeviceUsed) &&
+        !this.handlerProps.invocation?.personalMcpUsed
+      ) {
         this?.introspect?.(
           `[debug]: ${fn.caller} is attempting to call \`${name}\` tool`
         );
       }
 
-      this.handlerProps?.log?.(
-        `[debug]: ${fn.caller} is attempting to call \`${name}\` tool`
-      );
+      if (
+        !fn.privateMcp &&
+        !(this.personalMcpUsed || this.browserDeviceUsed) &&
+        !this.handlerProps.invocation?.personalMcpUsed
+      )
+        this.handlerProps?.log?.(
+          `[debug]: ${fn.caller} is attempting to call \`${name}\` tool`
+        );
 
       const result = await fn.handler(args);
       Telemetry.sendTelemetry("agent_tool_call", { tool: name }, null, true);
-      this.emitter.emit("toolCallResult", {
-        toolName: name,
-        arguments: args,
-        result,
-      });
+      if (
+        !fn.privateMcp &&
+        !(this.personalMcpUsed || this.browserDeviceUsed) &&
+        !this.handlerProps.invocation?.personalMcpUsed
+      )
+        this.emitter.emit("toolCallResult", {
+          toolName: name,
+          arguments: args,
+          result,
+        });
 
       if (this.skipHandleExecution) {
         this.skipHandleExecution = false;

@@ -1,11 +1,36 @@
 const { v4 } = require("uuid");
 const prisma = require("../utils/prisma");
+const { configuration } = require("../utils/prisma/client");
 const bcrypt = require("bcryptjs");
 
 const RecoveryCode = {
   tablename: "recovery_codes",
   writable: [],
   issueForUser: async function (userId, codes) {
+    if (configuration.provider === "postgresql") {
+      return prisma.$transaction(async (tx) => {
+        // Lock the existing parent before checking unseen state. READ COMMITTED
+        // then observes the previous winner's update after a concurrent wait.
+        const users = await tx.$queryRaw`
+          SELECT id, seen_recovery_codes FROM users
+          WHERE id = ${userId} FOR UPDATE
+        `;
+        if (!users.length)
+          throw new Error("Failed to generate user recovery codes!");
+        if (users[0].seen_recovery_codes) return false;
+        await tx.recovery_codes.deleteMany({ where: { user_id: userId } });
+        for (const code of codes) {
+          await tx.recovery_codes.create({
+            data: { user_id: userId, code_hash: code.code_hash },
+          });
+        }
+        await tx.users.update({
+          where: { id: userId },
+          data: { seen_recovery_codes: true },
+        });
+        return true;
+      });
+    }
     const unseen = {
       id: userId,
       OR: [{ seen_recovery_codes: false }, { seen_recovery_codes: null }],

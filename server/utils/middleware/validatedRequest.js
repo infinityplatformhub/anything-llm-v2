@@ -106,6 +106,7 @@ async function validateMultiUserRequest(request, response, next) {
   }
 
   response.locals.user = user;
+  response.locals.browserSessionUserId = user.id;
   UserMetaCache.setFromRequest(request, user.id);
   next();
 }

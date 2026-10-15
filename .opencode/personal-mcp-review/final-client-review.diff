@@ -1,0 +1,3821 @@
+diff --git a/frontend/src/components/WorkspaceChat/ChatContainer/index.jsx b/frontend/src/components/WorkspaceChat/ChatContainer/index.jsx
+index c62ef6a2..8fe9d44e 100644
+--- a/frontend/src/components/WorkspaceChat/ChatContainer/index.jsx
++++ b/frontend/src/components/WorkspaceChat/ChatContainer/index.jsx
+@@ -39,6 +39,8 @@ import { ChatSidebarProvider } from "./ChatSidebar";
+ import SourcesSidebar from "./SourcesSidebar";
+ import MemoriesSidebar from "./MemoriesSidebar";
+ import ActiveGenerationGuard from "./ActiveGenerationGuard";
++import PersonalMcpConnections from "./PersonalMcpConnections";
++import { baseHeaders } from "@/utils/request";
+ 
+ export default function ChatContainer({
+   workspace,
+@@ -372,7 +374,13 @@ export default function ChatContainer({
+       try {
+         if (!socketId || !!websocket) return;
+         socket = new WebSocket(
+-          `${websocketURI()}/api/agent-invocation/${socketId}`
++          `${websocketURI()}/api/agent-invocation/${socketId}`,
++          baseHeaders().Authorization
++            ? [
++                "anythingllm-agent",
++                `anythingllm-session.${baseHeaders().Authorization.slice(7)}`,
++              ]
++            : ["anythingllm-agent"]
+         );
+         socket.supportsAgentStreaming = false;
+ 
+@@ -488,6 +496,7 @@ export default function ChatContainer({
+           <div className="flex-1 min-w-0 relative md:rounded-[16px] bg-zinc-900 light:bg-white w-full h-full overflow-hidden border-none light:border-solid light:border light:border-theme-modal-border">
+             {isMobile && <SidebarMobileHeader />}
+             <WorkspaceModelPicker workspaceSlug={workspace.slug} />
++            <PersonalMcpConnections workspaceSlug={workspace.slug} />
+             <DnDFileUploaderWrapper>
+               <div className="flex flex-col h-full w-full items-center justify-center">
+                 <div className="flex flex-col items-center w-full max-w-[750px]">
+@@ -546,6 +555,7 @@ export default function ChatContainer({
+         <div className="flex-1 min-w-0 relative md:rounded-[16px] bg-zinc-900 light:bg-white text-white light:text-slate-900 h-full overflow-hidden border-none light:border-solid light:border light:border-theme-modal-border">
+           {isMobile && <SidebarMobileHeader />}
+           <WorkspaceModelPicker workspaceSlug={workspace.slug} />
++          <PersonalMcpConnections workspaceSlug={workspace.slug} />
+           <DnDFileUploaderWrapper>
+             <div className="flex flex-col h-full w-full pb-20 md:pb-0">
+               <div className="contents">
+diff --git a/frontend/src/models/workspaceMcp.js b/frontend/src/models/workspaceMcp.js
+index e20461ad..4ecabeed 100644
+--- a/frontend/src/models/workspaceMcp.js
++++ b/frontend/src/models/workspaceMcp.js
+@@ -57,13 +57,20 @@ export function validateMcpConfig(config) {
+   if (config.anythingllm !== undefined) {
+     if (!isObject(config.anythingllm)) return "invalid_anythingllm";
+     for (const key of Object.keys(config.anythingllm))
+-      if (!["perWorkspaceAuth", "suppressedTools"].includes(key))
++      if (!["perWorkspaceAuth", "perUserAuth", "suppressedTools"].includes(key))
+         return `unknown_field:anythingllm.${key}`;
+     if (
+       config.anythingllm.perWorkspaceAuth !== undefined &&
+       typeof config.anythingllm.perWorkspaceAuth !== "boolean"
+     )
+       return "invalid_per_workspace_auth";
++    if (
++      (config.anythingllm.perUserAuth !== undefined &&
++        typeof config.anythingllm.perUserAuth !== "boolean") ||
++      (config.anythingllm.perUserAuth === true &&
++        config.anythingllm.perWorkspaceAuth === true)
++    )
++      return "invalid_anythingllm";
+     if (
+       config.anythingllm.suppressedTools !== undefined &&
+       (!Array.isArray(config.anythingllm.suppressedTools) ||
+@@ -138,6 +145,17 @@ async function request(
+ const serverPath = (slug, name) =>
+   `/workspace/${encodeURIComponent(slug)}/mcp-servers${name ? `/${encodeURIComponent(name)}` : ""}`;
+ const WorkspaceMcp = {
++  personal: async (slug) => {
++    const data = await request(
++      `/workspace/${encodeURIComponent(slug)}/mcp-personal`
++    );
++    if (!Array.isArray(data.servers)) throw new Error("request_failed");
++    return data.servers;
++  },
++  personalTools: (slug, name) =>
++    request(
++      `/workspace/${encodeURIComponent(slug)}/mcp-personal/${encodeURIComponent(name)}/tools`
++    ),
+   list: async (slug) => {
+     const data = await request(`/workspace/${encodeURIComponent(slug)}/mcp`);
+     if (!Array.isArray(data.connections)) throw new Error("request_failed");
+diff --git a/frontend/src/pages/WorkspaceSettings/AgentConfig/McpConnectors/ServerModal.jsx b/frontend/src/pages/WorkspaceSettings/AgentConfig/McpConnectors/ServerModal.jsx
+index 3ac2d37b..76dfc13a 100644
+--- a/frontend/src/pages/WorkspaceSettings/AgentConfig/McpConnectors/ServerModal.jsx
++++ b/frontend/src/pages/WorkspaceSettings/AgentConfig/McpConnectors/ServerModal.jsx
+@@ -44,6 +44,9 @@ export default function ServerModal({ slug, server, onClose, onSaved }) {
+   const [oauth, setOauth] = useState(
+     initial.anythingllm?.perWorkspaceAuth === true
+   );
++  const [personal, setPersonal] = useState(
++    initial.anythingllm?.perUserAuth === true
++  );
+   const [suppressed, setSuppressed] = useState(
+     initial.anythingllm?.suppressedTools || []
+   );
+@@ -66,7 +69,11 @@ export default function ServerModal({ slug, server, onClose, onSaved }) {
+         .filter((row) => row.key.trim())
+         .map((row) => [row.key.trim(), row.value])
+     ),
+-    anythingllm: { perWorkspaceAuth: oauth, suppressedTools: suppressed },
++    anythingllm: {
++      perWorkspaceAuth: oauth && !personal,
++      perUserAuth: personal,
++      suppressedTools: suppressed,
++    },
+   };
+   const duplicateHeader =
+     new Set(headers.map((row) => row.key.trim().toLowerCase())).size !==
+@@ -140,6 +147,7 @@ export default function ServerModal({ slug, server, onClose, onSaved }) {
+       }))
+     );
+     setOauth(definition.anythingllm?.perWorkspaceAuth === true);
++    setPersonal(definition.anythingllm?.perUserAuth === true);
+     setSuppressed(definition.anythingllm?.suppressedTools || []);
+     setExtraEntries(extra);
+     setTab("form");
+@@ -413,7 +421,21 @@ export default function ServerModal({ slug, server, onClose, onSaved }) {
+                   size="md"
+                   variant="horizontal"
+                   enabled={oauth}
+-                  onChange={(enabled) => change(setOauth, enabled)}
++                  onChange={(enabled) => {
++                    change(setOauth, enabled);
++                    if (enabled) setPersonal(false);
++                  }}
++                />
++                <Toggle
++                  label="Personal OAuth (per member)"
++                  description="Members connect their own account from workspace chat. No workspace tokens are copied."
++                  size="md"
++                  variant="horizontal"
++                  enabled={personal}
++                  onChange={(enabled) => {
++                    change(setPersonal, enabled);
++                    if (enabled) setOauth(false);
++                  }}
+                 />
+                 {test.state === "ok" && (
+                   <fieldset>
+diff --git a/server/endpoints/agentWebsocket.js b/server/endpoints/agentWebsocket.js
+index 2b25c9e1..266bf408 100644
+--- a/server/endpoints/agentWebsocket.js
++++ b/server/endpoints/agentWebsocket.js
+@@ -80,6 +80,35 @@ function agentWebsocket(app) {
+         return;
+       }
+ 
++      // The existing invocation UUID remains compatible for legacy tools. Personal
++      // tools additionally require a signed browser session belonging to its creator.
++      if (Number.isInteger(agentHandler.invocation.workspace?.id)) {
++        const mcp = new (require("../utils/MCP"))();
++        const owned = await mcp.workspaceServerConfigs(
++          agentHandler.invocation.workspace.id
++        );
++        const ownedNames = new Set(owned.map((entry) => entry.name));
++        const personal = [
++          ...owned,
++          ...mcp.mcpServerConfigs.filter(
++            (entry) => !ownedNames.has(entry.name)
++          ),
++        ].some((entry) => entry.server.anythingllm?.perUserAuth === true);
++        if (personal) {
++          try {
++            agentHandler.invocation.mcpCaller =
++              await require("../utils/MCP/personalCaller").fromSocket(
++                request,
++                agentHandler.invocation
++              );
++          } catch {
++            // Ordinary agent chats remain usable; without an owner-verified
++            // caller all personal discovery/calls fail closed independently.
++            agentHandler.invocation.mcpCaller = null;
++          }
++        }
++      }
++
+       // Installed before the "message" listener: a frame that arrives in
+       // between would otherwise reach relayToSocket with no bail handler set.
+       socket.checkBailCommand = (data) => {
+diff --git a/server/endpoints/mcpOAuth.js b/server/endpoints/mcpOAuth.js
+index de02152a..3e3d80ee 100644
+--- a/server/endpoints/mcpOAuth.js
++++ b/server/endpoints/mcpOAuth.js
+@@ -5,6 +5,9 @@ const MCPCompatibilityLayer = require("../utils/MCP");
+ const oauth = require("../utils/MCP/oauth");
+ const prisma = require("../utils/prisma");
+ const { EncryptionManager } = require("../utils/EncryptionManager");
++const { PersonalMcpGrant: Grant } = require("../models/personalMcpGrant");
++const personalCaller = require("../utils/MCP/personalCaller");
++const personalCalls = new Set();
+ const { validatedRequest } = require("../utils/middleware/validatedRequest");
+ const {
+   flexUserRoleValid,
+@@ -14,7 +17,10 @@ const {
+ function mcpOAuthEndpoints(app) {
+   if (!app) return;
+   const encryption = new EncryptionManager();
+-  const middleware = [validatedRequest, flexUserRoleValid([ROLES.admin])];
++  const middleware = [
++    validatedRequest,
++    flexUserRoleValid([ROLES.admin, ROLES.manager, ROLES.default]),
++  ];
+   const userId = (response) => response.locals.user?.id ?? null;
+ 
+   async function target(workspaceSlug, serverName) {
+@@ -31,12 +37,37 @@ function mcpOAuthEndpoints(app) {
+       ?.server;
+     if (
+       !workspace ||
+-      config?.anythingllm?.perWorkspaceAuth !== true ||
++      !(
++        config?.anythingllm?.perWorkspaceAuth === true ||
++        config?.anythingllm?.perUserAuth === true
++      ) ||
+       typeof config.url !== "string" ||
+       config.command
+     )
+       throw new Error("invalid_target");
+-    return { workspace, serverUrl: config.url, hypervisor };
++    if (config.anythingllm?.perUserAuth) {
++      require("../utils/MCP/serverConfig").validateWorkspaceServerConfig(
++        config
++      );
++    }
++    return {
++      workspace,
++      serverUrl: config.url,
++      hypervisor,
++      config,
++      personal: config.anythingllm?.perUserAuth === true,
++    };
++  }
++
++  async function authorize(response, destination) {
++    if (destination.personal)
++      return personalCaller.fromResponse(response, destination.workspace);
++    if (
++      response.locals?.multiUserMode &&
++      response.locals?.user?.role !== ROLES.admin
++    )
++      throw new Error("personal_auth_required");
++    return null;
+   }
+ 
+   app.get(
+@@ -45,10 +76,10 @@ function mcpOAuthEndpoints(app) {
+     async (request, response) => {
+       try {
+         const { workspaceSlug, serverName } = request.params;
+-        const { workspace, serverUrl } = await target(
+-          workspaceSlug,
+-          serverName
+-        );
++        const destination = await target(workspaceSlug, serverName);
++        const { workspace, serverUrl, config, personal, hypervisor } =
++          destination;
++        const identity = await authorize(response, destination);
+         if (!process.env.SERVER_URL || !process.env.JWT_SECRET)
+           return response.status(500).json({ error: "oauth_misconfigured" });
+         const origin = new URL(process.env.SERVER_URL);
+@@ -69,14 +100,26 @@ function mcpOAuthEndpoints(app) {
+           redirectUri,
+           wsSlug: workspaceSlug,
+           serverName,
+-          userId: userId(response),
++          userId: personal ? identity.userId : userId(response),
+         });
++        const grant = personal
++          ? await Grant.begin(workspace.id, identity.userId, serverName, config)
++          : null;
++        if (personal)
++          await hypervisor.personalRuntime.stop(
++            workspace.id,
++            serverName,
++            identity.userId
++          );
+         const encrypted = encryption.encrypt(
+           JSON.stringify({
+             codeVerifier: flow.codeVerifier,
+             workspaceId: workspace.id,
+             serverUrl,
+             redirectUri,
++            personal,
++            fingerprint: personal ? Grant.fingerprint(config) : null,
++            grantVersion: grant?.version,
+           })
+         );
+         if (!encrypted) throw new Error("oauth_state_failed");
+@@ -90,7 +133,9 @@ function mcpOAuthEndpoints(app) {
+           },
+         });
+         return response.status(200).json({ url: flow.url });
+-      } catch {
++      } catch (error) {
++        if (error.message === "personal_auth_required")
++          return response.status(401).json({ error: "personal_auth_required" });
+         return response.status(400).json({ error: "oauth_start_failed" });
+       }
+     }
+@@ -126,14 +171,28 @@ function mcpOAuthEndpoints(app) {
+     } catch {
+       return response.status(400).json({ error: "invalid_state" });
+     }
+-    const destination = `/workspace/${encodeURIComponent(state.wsSlug)}/settings/agent-config?mcp=${encodeURIComponent(state.serverName)}`;
++    const destination = `/workspace/${encodeURIComponent(state.wsSlug)}${flow.personal ? "" : "/settings/agent-config"}?mcp=${encodeURIComponent(state.serverName)}`;
+     try {
+-      const { workspace, serverUrl } = await target(
+-        state.wsSlug,
+-        state.serverName
+-      );
++      const current = await target(state.wsSlug, state.serverName);
++      const { workspace, serverUrl, config, personal, hypervisor } = current;
+       if (workspace.id !== flow.workspaceId || serverUrl !== flow.serverUrl)
+         throw new Error("invalid_target");
++      if (personal !== (flow.personal === true))
++        throw new Error("invalid_target");
++      if (personal) {
++        await personalCaller.fromOAuthState(state.userId, workspace);
++        const grant = await Grant.find(
++          workspace.id,
++          state.userId,
++          state.serverName,
++          config
++        );
++        if (
++          Grant.fingerprint(config) !== flow.fingerprint ||
++          grant?.version !== flow.grantVersion
++        )
++          throw new Error("invalid_target");
++      }
+       if (request.query.error) {
+         const error =
+           request.query.error === "access_denied"
+@@ -153,6 +212,33 @@ function mcpOAuthEndpoints(app) {
+         code: request.query.code,
+         codeVerifier: flow.codeVerifier,
+       });
++      if (personal) {
++        // Exchange can take time: recheck active membership + destination again.
++        const latest = await target(state.wsSlug, state.serverName);
++        await personalCaller.fromOAuthState(state.userId, latest.workspace);
++        if (
++          latest.workspace.id !== workspace.id ||
++          !latest.personal ||
++          Grant.fingerprint(latest.config) !== flow.fingerprint ||
++          !(await Grant.save(
++            workspace.id,
++            state.userId,
++            state.serverName,
++            flow.grantVersion,
++            config,
++            tokens
++          ))
++        ) {
++          await oauth.revokeTokens(tokens, serverUrl).catch(() => {});
++          throw new Error("invalid_target");
++        }
++        await hypervisor.personalRuntime.stop(
++          workspace.id,
++          state.serverName,
++          state.userId
++        );
++        return response.redirect(`${destination}&connected=1`);
++      }
+       await WorkspaceMcpConnection.saveTokens(
+         workspace.id,
+         state.serverName,
+@@ -178,10 +264,61 @@ function mcpOAuthEndpoints(app) {
+     }
+   });
+ 
++  app.post(
++    "/workspace/:slug/mcp-personal/:name/call",
++    [validatedRequest],
++    async (request, response) => {
++      let key;
++      try {
++        const workspace = await Workspace.get({ slug: request.params.slug });
++        const identity = await personalCaller.fromResponse(response, workspace);
++        const body = reqBody(request);
++        if (
++          typeof body?.toolName !== "string" ||
++          !body.toolName.trim() ||
++          !body.arguments ||
++          typeof body.arguments !== "object" ||
++          Array.isArray(body.arguments)
++        )
++          return response.status(400).json({ error: "invalid_arguments" });
++        key = JSON.stringify([
++          workspace.id,
++          identity.userId,
++          request.params.name,
++        ]);
++        if (personalCalls.has(key)) {
++          key = null;
++          return response.status(409).json({ error: "busy" });
++        }
++        personalCalls.add(key);
++        const value = await new MCPCompatibilityLayer().personalRuntime.call(
++          workspace,
++          request.params.name,
++          { name: body.toolName, arguments: body.arguments },
++          identity
++        );
++        const { boundedResult } = require("./workspaceMcpServers");
++        return response.status(200).json({
++          success: true,
++          ...boundedResult(MCPCompatibilityLayer.returnMCPResult(value)),
++        });
++      } catch {
++        return response
++          .status(401)
++          .json({ error: "personal_call_unavailable" });
++      } finally {
++        if (key) personalCalls.delete(key);
++      }
++    }
++  );
++
+   app.post("/mcp/oauth/disconnect", middleware, async (request, response) => {
+     try {
+       const { workspaceSlug, serverName } = reqBody(request);
+-      const { workspace, hypervisor } = await target(workspaceSlug, serverName);
++      const destination = await target(workspaceSlug, serverName);
++      const { workspace, hypervisor, personal, config, serverUrl } =
++        destination;
++      const identity = await authorize(response, destination);
+       const states = await prisma.lark_oauth_states.findMany({
+         where: { mode: "mcp" },
+         select: { state: true },
+@@ -192,7 +329,8 @@ function mcpOAuthEndpoints(app) {
+             const payload = oauth.verifyState(state);
+             return (
+               payload.wsSlug === workspaceSlug &&
+-              payload.serverName === serverName
++              payload.serverName === serverName &&
++              (!personal || payload.userId === identity.userId)
+             );
+           } catch {
+             return false;
+@@ -202,15 +340,109 @@ function mcpOAuthEndpoints(app) {
+       await prisma.lark_oauth_states.deleteMany({
+         where: { mode: "mcp", state: { in: matching } },
+       });
++      if (personal) {
++        const grant = await Grant.find(
++          workspace.id,
++          identity.userId,
++          serverName,
++          config
++        );
++        let remoteRevoked = false;
++        try {
++          if (grant?.access_token || grant?.refresh_token)
++            remoteRevoked = await oauth.revokeTokens(grant, serverUrl);
++        } catch {
++          /* Clear locally even when provider is unavailable. */
++        }
++        // CAS prevents a slow revoke from disconnecting a newer authorization.
++        if (grant)
++          await Grant.clearGeneration(
++            workspace.id,
++            identity.userId,
++            serverName,
++            grant.generation
++          );
++        await hypervisor.personalRuntime.stop(
++          workspace.id,
++          serverName,
++          identity.userId
++        );
++        return response.status(200).json({ success: true, remoteRevoked });
++      }
+       await WorkspaceMcpConnection.setEnabled(workspace.id, serverName, false);
+       await WorkspaceMcpConnection.clearTokens(workspace.id, serverName);
+       if (typeof hypervisor.stopWorkspaceServer === "function")
+         await hypervisor.stopWorkspaceServer(workspace.id, serverName);
+       return response.status(200).json({ success: true, remoteRevoked: false });
+-    } catch {
++    } catch (error) {
++      if (error.message === "personal_auth_required")
++        return response.status(401).json({ error: "personal_auth_required" });
+       return response.status(400).json({ error: "oauth_disconnect_failed" });
+     }
+   });
++
++  app.get(
++    "/workspace/:slug/mcp-personal",
++    [validatedRequest],
++    async (request, response) => {
++      try {
++        const workspace = await Workspace.get({ slug: request.params.slug });
++        const identity = await personalCaller.fromResponse(response, workspace);
++        const mcp = new MCPCompatibilityLayer();
++        const owned = await mcp.workspaceServerConfigs(workspace.id);
++        const names = new Set(owned.map((entry) => entry.name));
++        const catalog = [
++          ...owned,
++          ...mcp.mcpServerConfigs.filter((entry) => !names.has(entry.name)),
++        ];
++        const servers = await Promise.all(
++          catalog
++            .filter((entry) => entry.server.anythingllm?.perUserAuth === true)
++            .map(async ({ name, server }) => {
++              const grant = await Grant.find(
++                workspace.id,
++                identity.userId,
++                name,
++                server
++              );
++              return {
++                name,
++                accountLabel: grant?.enabled
++                  ? Grant.publicLabel(grant.account_label)
++                  : null,
++                connected: !!grant?.enabled && !!grant.access_token,
++                needsReauth: !!grant && !grant.enabled,
++                expiresAt: grant?.expires_at ?? null,
++              };
++            })
++        );
++        return response.status(200).json({ servers });
++      } catch {
++        return response.status(401).json({ error: "personal_auth_required" });
++      }
++    }
++  );
++
++  app.get(
++    "/workspace/:slug/mcp-personal/:name/tools",
++    [validatedRequest],
++    async (request, response) => {
++      try {
++        const workspace = await Workspace.get({ slug: request.params.slug });
++        const identity = await personalCaller.fromResponse(response, workspace);
++        const tools = await new MCPCompatibilityLayer().personalRuntime.tools(
++          workspace,
++          request.params.name,
++          identity
++        );
++        return response.status(200).json({ tools });
++      } catch {
++        return response
++          .status(401)
++          .json({ error: "personal_tools_unavailable" });
++      }
++    }
++  );
+ }
+ 
+ module.exports = { mcpOAuthEndpoints };
+diff --git a/server/endpoints/workspaceMcpServers.js b/server/endpoints/workspaceMcpServers.js
+index 541e34a6..0d71dd9c 100644
+--- a/server/endpoints/workspaceMcpServers.js
++++ b/server/endpoints/workspaceMcpServers.js
+@@ -107,6 +107,9 @@ function globalCatalogConfig(server) {
+     anythingllm: server.anythingllm
+       ? {
+           perWorkspaceAuth: server.anythingllm.perWorkspaceAuth === true,
++          ...(server.anythingllm.perUserAuth === true
++            ? { perUserAuth: true }
++            : {}),
+           suppressedTools: Array.isArray(server.anythingllm.suppressedTools)
+             ? server.anythingllm.suppressedTools.filter(
+                 (tool) => typeof tool === "string"
+@@ -251,6 +254,11 @@ function workspaceMcpServersEndpoints(app) {
+       );
+       validateWorkspaceServerConfig(config);
+       // Fail closed: never publish a new destination while old grants remain.
++      if (
++        existing.config.anythingllm?.perUserAuth ||
++        config.anythingllm?.perUserAuth
++      )
++        await mcp.invalidatePersonalServer(workspace.id, name);
+       if (serverEndpointChanged(existing.config, config))
+         await WorkspaceMcpConnection.clearTokens(workspace.id, name);
+       await WorkspaceMcpServer.update(workspace.id, name, config);
+@@ -267,8 +275,10 @@ function workspaceMcpServersEndpoints(app) {
+     [ROLES.admin],
+     async (request, response, workspace, mcp) => {
+       const { name } = request.params;
+-      if (!(await WorkspaceMcpServer.find(workspace.id, name)))
+-        return fail(response, 404, "server_not_found");
++      const existing = await WorkspaceMcpServer.find(workspace.id, name);
++      if (!existing) return fail(response, 404, "server_not_found");
++      if (existing.config.anythingllm?.perUserAuth)
++        await mcp.invalidatePersonalServer(workspace.id, name);
+       await mcp.stopWorkspaceServer(workspace.id, name);
+       await WorkspaceMcpServer.delete(workspace.id, name);
+       return response.status(200).json({ success: true });
+@@ -301,6 +311,8 @@ function workspaceMcpServersEndpoints(app) {
+             const saved = await mcp.findServerConfig(body.name, workspace);
+             if (!saved) return fail(response, 404, "server_not_found");
+             config = saved.server;
++            if (config.anythingllm?.perUserAuth)
++              return fail(response, 409, "personal_auth_required");
+             if (config.anythingllm?.perWorkspaceAuth) {
+               const connection = await WorkspaceMcpConnection.find(
+                 workspace.id,
+@@ -311,6 +323,8 @@ function workspaceMcpServersEndpoints(app) {
+               options.accessToken = connection.access_token;
+             }
+           }
++          if (config?.anythingllm?.perUserAuth)
++            return fail(response, 409, "personal_auth_required");
+           validateWorkspaceServerConfig(config);
+           try {
+             const { tools, latencyMs } = await mcp.probeServerConfig(
+@@ -388,4 +402,4 @@ function workspaceMcpServersEndpoints(app) {
+   );
+ }
+ 
+-module.exports = { workspaceMcpServersEndpoints };
++module.exports = { workspaceMcpServersEndpoints, boundedResult };
+diff --git a/server/prisma/schema.prisma b/server/prisma/schema.prisma
+index ab0b9839..8242a958 100644
+--- a/server/prisma/schema.prisma
++++ b/server/prisma/schema.prisma
+@@ -88,6 +88,7 @@ model users {
+   workspace_parsed_files       workspace_parsed_files[]
+   memories                     memories[]
+   lark_identity                lark_identities?
++  personal_mcp_grants           personal_mcp_grants[]
+ }
+ 
+ model recovery_codes {
+@@ -153,6 +154,27 @@ model workspaces {
+   agent_settings               workspace_agent_settings?
+   mcp_connections              workspace_mcp_connections[]
+   mcp_servers                  workspace_mcp_servers[]
++  personal_mcp_grants           personal_mcp_grants[]
++}
++
++model personal_mcp_grants {
++  id            Int        @id @default(autoincrement())
++  workspace_id  Int
++  user_id       Int
++  server_name   String
++  fingerprint   String
++  version       Int        @default(1)
++  generation    Int        @default(1)
++  refresh_until DateTime?
++  enabled       Boolean    @default(false)
++  tokens        String?
++  expires_at    DateTime?
++  lastUpdatedAt DateTime   @default(now())
++  workspace     workspaces @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
++  user          users      @relation(fields: [user_id], references: [id], onDelete: Cascade)
++
++  @@unique([workspace_id, user_id, server_name])
++  @@index([workspace_id, server_name])
+ }
+ 
+ model workspace_threads {
+diff --git a/server/utils/MCP/hypervisor/index.js b/server/utils/MCP/hypervisor/index.js
+index 5478ee5a..51d2b634 100644
+--- a/server/utils/MCP/hypervisor/index.js
++++ b/server/utils/MCP/hypervisor/index.js
+@@ -77,6 +77,75 @@ class MCPHypervisor {
+   mcpLoadingResults = {};
+   workspaceBoots = new Map();
+   workspaceShadowWarnings = new Set();
++  personalDefinitions = new Map();
++
++  async syncPersonalDefinitions() {
++    const {
++      PersonalMcpGrant: Grant,
++    } = require("../../../models/personalMcpGrant");
++    const definitions = new Map(
++      this.mcpServerConfigs
++        .filter((entry) => entry.server.anythingllm?.perUserAuth === true)
++        .map((entry) => [entry.name, Grant.fingerprint(entry.server)])
++    );
++    for (const [name, fingerprint] of this.personalDefinitions) {
++      if (definitions.get(name) !== fingerprint)
++        await this.invalidateGlobalPersonalServer(name);
++    }
++    this.personalDefinitions = definitions;
++  }
++
++  get personalRuntime() {
++    if (!this._personalRuntime) {
++      const { PersonalMcpRuntime } = require("../personalRuntime");
++      this._personalRuntime = new PersonalMcpRuntime(this);
++    }
++    return this._personalRuntime;
++  }
++
++  async bootPersonalServer(workspace, name, caller) {
++    return this.personalRuntime.boot(workspace, name, caller);
++  }
++
++  async invalidatePersonalServer(workspaceId, name) {
++    const { PersonalMcpGrant } = require("../../../models/personalMcpGrant");
++    await PersonalMcpGrant.invalidate(workspaceId, name);
++    await this.personalRuntime.stop(workspaceId, name);
++  }
++
++  async invalidateGlobalPersonalServer(name) {
++    const prisma = require("../../prisma");
++    const {
++      PersonalMcpGrant: Grant,
++    } = require("../../../models/personalMcpGrant");
++    const shadows = await prisma.workspace_mcp_servers.findMany({
++      where: { name },
++      select: { workspace_id: true },
++    });
++    const shadowIds = new Set(shadows.map((row) => row.workspace_id));
++    const grants = await prisma.personal_mcp_grants.findMany({
++      where: { server_name: name },
++      select: { workspace_id: true },
++    });
++    const workspaces = new Set(grants.map((row) => row.workspace_id));
++    if (this._personalRuntime) {
++      for (const key of [
++        ...this._personalRuntime.clients.keys(),
++        ...this._personalRuntime.boots.keys(),
++      ]) {
++        const [workspaceId, , serverName] = JSON.parse(key);
++        if (serverName === name) workspaces.add(workspaceId);
++      }
++    }
++    for (const workspaceId of workspaces) {
++      if (shadowIds.has(workspaceId)) continue;
++      await Grant.invalidate(workspaceId, name);
++      if (this._personalRuntime)
++        await this._personalRuntime.stop(workspaceId, name);
++    }
++    // Pending callbacks carry definition fingerprint + grant generation; global
++    // rows are tombstoned above. Shadowed workspace rows are intentionally untouched.
++  }
+ 
+   async workspaceServerConfigs(workspaceId) {
+     const rows = await WorkspaceMcpServer.listDecrypted(workspaceId);
+@@ -231,6 +300,8 @@ class MCPHypervisor {
+     if (!config)
+       throw new Error(`MCP server ${name} is not enabled for this workspace`);
+     const { server, owner } = config;
++    if (server?.anythingllm?.perUserAuth)
++      throw new Error("personal_auth_required");
+     const perWorkspaceAuth = server?.anythingllm?.perWorkspaceAuth;
+     if (owner === "workspace") validateWorkspaceServerConfig(server);
+     if (!perWorkspaceAuth && owner !== "workspace")
+@@ -322,7 +393,10 @@ class MCPHypervisor {
+     }
+   }
+ 
+-  async callServerTool(workspace, name, request) {
++  async callServerTool(workspace, name, request, caller) {
++    const personal = await this.findServerConfig(name, workspace);
++    if (personal?.server?.anythingllm?.perUserAuth)
++      return this.personalRuntime.call(workspace, name, request, caller);
+     if (
+       !Number.isInteger(workspace?.id) ||
+       workspace.id <= 0 ||
+@@ -351,6 +425,8 @@ class MCPHypervisor {
+     if (!config)
+       throw new Error(`MCP server ${name} is not enabled for this workspace`);
+     const { server } = config;
++    if (server?.anythingllm?.perUserAuth)
++      throw new Error("personal_auth_required");
+     let client = await this.bootWorkspaceServer(workspace, name);
+     try {
+       return await client.callTool(args);
+@@ -522,6 +598,7 @@ class MCPHypervisor {
+    * and will also apply changes to the config file if any where made.
+    */
+   async reloadMCPServers() {
++    await this.syncPersonalDefinitions();
+     this.pruneMCPServers();
+     await this.bootMCPServers();
+   }
+@@ -541,7 +618,10 @@ class MCPHypervisor {
+         error: `MCP server ${name} not found in config file`,
+       };
+ 
+-    if (config.server?.anythingllm?.perWorkspaceAuth)
++    if (
++      config.server?.anythingllm?.perWorkspaceAuth ||
++      config.server?.anythingllm?.perUserAuth
++    )
+       return {
+         success: false,
+         error: "MCP server requires workspace authentication",
+@@ -821,11 +901,14 @@ class MCPHypervisor {
+    * @returns { Promise<{ [key: string]: {status: string, message: string} }> } The results of the boot process.
+    */
+   async bootMCPServers() {
++    await this.syncPersonalDefinitions();
+     const serverDefinitions = this.mcpServerConfigs;
+     if (
+       serverDefinitions.some(
+         ({ name, server }) =>
+-          !server.anythingllm?.perWorkspaceAuth && this.mcps[name]
++          !server.anythingllm?.perWorkspaceAuth &&
++          !server.anythingllm?.perUserAuth &&
++          this.mcps[name]
+       )
+     ) {
+       this.log("MCP Servers already running, skipping boot.");
+@@ -833,7 +916,11 @@ class MCPHypervisor {
+     }
+ 
+     for (const { name, server } of serverDefinitions) {
+-      if (server.anythingllm?.perWorkspaceAuth) continue;
++      if (
++        server.anythingllm?.perWorkspaceAuth ||
++        server.anythingllm?.perUserAuth
++      )
++        continue;
+       if (
+         server.anythingllm?.hasOwnProperty("autoStart") &&
+         server.anythingllm.autoStart === false
+diff --git a/server/utils/MCP/index.js b/server/utils/MCP/index.js
+index c16f239e..e152ebf6 100644
+--- a/server/utils/MCP/index.js
++++ b/server/utils/MCP/index.js
+@@ -17,7 +17,7 @@ class MCPCompatibilityLayer extends MCPHypervisor {
+    * This will also boot all MCP servers if they have not been started yet.
+    * @returns {Promise<string[]>} Array of flow names in @@mcp_{name} format
+    */
+-  async activeMCPServers(workspace) {
++  async activeMCPServers(workspace, caller) {
+     if (workspace === undefined) {
+       await this.bootMCPServers();
+       return Object.keys(this.mcps)
+@@ -29,11 +29,29 @@ class MCPCompatibilityLayer extends MCPHypervisor {
+     const connections = await WorkspaceMcpConnection.list(workspace.id);
+     await this.bootMCPServers();
+     const active = [];
++    if (caller) {
++      const owned = await this.workspaceServerConfigs(workspace.id);
++      const ownedNames = new Set(owned.map((entry) => entry.name));
++      const catalog = [
++        ...owned,
++        ...this.mcpServerConfigs.filter((entry) => !ownedNames.has(entry.name)),
++      ];
++      for (const { name, server } of catalog) {
++        if (server.anythingllm?.perUserAuth !== true) continue;
++        try {
++          await this.bootPersonalServer(workspace, name, caller);
++          active.push(`@@mcp_${name}`);
++        } catch {
++          /* No private error bodies or credentials in generic logs. */
++        }
++      }
++    }
+     for (const connection of connections) {
+       if (!connection.enabled) continue;
+       const name = connection.server_name;
+       const config = await this.findServerConfig(name, workspace);
+       if (!config) continue;
++      if (config.server?.anythingllm?.perUserAuth) continue;
+       const perWorkspaceAuth = config.server?.anythingllm?.perWorkspaceAuth;
+       if (perWorkspaceAuth && !connection.access_token) continue;
+       if (config.owner === "workspace" || perWorkspaceAuth) {
+@@ -58,6 +76,74 @@ class MCPCompatibilityLayer extends MCPHypervisor {
+     const workspace = _aibitat?.handlerProps?.invocation?.workspace;
+     const config = await this.findServerConfig(name, workspace);
+     if (!config) return null;
++    if (config.server?.anythingllm?.perUserAuth) {
++      const identity = _aibitat?.handlerProps?.invocation?.mcpCaller;
++      let tools;
++      try {
++        tools = await this.personalRuntime.tools(workspace, name, identity);
++      } catch {
++        return null;
++      }
++      return tools.map((tool) => ({
++        name: `${name}-${tool.name}`,
++        description: tool.description,
++        toolName: `${name}:${tool.name}`,
++        plugin: () => ({
++          name: `${name}-${tool.name}`,
++          setup: (aibitat) =>
++            aibitat.function({
++              name: `${name}-${tool.name}`,
++              super: aibitat,
++              controller: new AbortController(),
++              description: tool.description,
++              isMCPTool: true,
++              privateMcp: true,
++              examples: [],
++              parameters: {
++                $schema: "http://json-schema.org/draft-07/schema#",
++                ...tool.inputSchema,
++              },
++              handler: async (args = {}) => {
++                aibitat.personalMcpUsed = true;
++                if (aibitat.handlerProps?.invocation)
++                  aibitat.handlerProps.invocation.personalMcpUsed = true;
++                // A prompt may have been pre-registered before the first private
++                // tool ran. Redact it now as well, including abort/error paths.
++                if (aibitat.trackedChatId) {
++                  const {
++                    WorkspaceChats,
++                  } = require("../../models/workspaceChats");
++                  await WorkspaceChats.upsert(aibitat.trackedChatId, {
++                    workspaceId: workspace.id,
++                    prompt:
++                      "Personal MCP conversation is not stored in shared history.",
++                    response: {
++                      text: "Personal MCP response is not stored in shared history.",
++                      sources: [],
++                      type: "chat",
++                    },
++                    user: { id: identity.userId },
++                    threadId: aibitat.handlerProps.invocation.thread_id || null,
++                    include: false,
++                  });
++                }
++                try {
++                  const result =
++                    await new MCPCompatibilityLayer().callServerTool(
++                      workspace,
++                      name,
++                      { name: tool.name, arguments: args },
++                      identity
++                    );
++                  return MCPCompatibilityLayer.returnMCPResult(result);
++                } catch {
++                  return "Personal MCP tool unavailable; reconnect your account if required.";
++                }
++              },
++            }),
++        }),
++      }));
++    }
+     const scoped =
+       config.owner === "workspace" ||
+       config.server?.anythingllm?.perWorkspaceAuth;
+@@ -212,7 +298,11 @@ class MCPCompatibilityLayer extends MCPHypervisor {
+   async servers() {
+     await this.bootMCPServers();
+     const servers = this.mcpServerConfigs
+-      .filter(({ server }) => server.anythingllm?.perWorkspaceAuth)
++      .filter(
++        ({ server }) =>
++          server.anythingllm?.perWorkspaceAuth ||
++          server.anythingllm?.perUserAuth
++      )
+       .map(({ name, server }) => ({
+         name,
+         config: server,
+@@ -317,6 +407,8 @@ class MCPCompatibilityLayer extends MCPHypervisor {
+         error: `MCP server ${name} not found in config file.`,
+       };
+ 
++    if (server.server?.anythingllm?.perUserAuth)
++      await this.invalidateGlobalPersonalServer(name);
+     const mcp = this.mcps[name];
+     const online = !!mcp ? !!(await mcp.ping()) : false; // If the server is not in the mcps object, it is not running
+     if (online) this.pruneMCPServer(name);
+diff --git a/server/utils/MCP/oauth.js b/server/utils/MCP/oauth.js
+index f722aec8..147f6067 100644
+--- a/server/utils/MCP/oauth.js
++++ b/server/utils/MCP/oauth.js
+@@ -104,6 +104,11 @@ async function discover(serverUrl) {
+   ])
+     if (httpUrl(metadata[key]).origin !== issuerUrl.origin)
+       throw new Error("invalid_oauth_metadata");
++  if (
++    metadata.revocation_endpoint &&
++    httpUrl(metadata.revocation_endpoint).origin !== issuerUrl.origin
++  )
++    throw new Error("invalid_oauth_metadata");
+   discoveryCache.set(serverUrl, { metadata, exp: Date.now() + 5 * 60 * 1000 });
+   return metadata;
+ }
+@@ -248,6 +253,9 @@ async function requestTokens(serverUrl, params) {
+   return {
+     access_token: data.access_token,
+     refresh_token: data.refresh_token,
++    ...(typeof data.account_label === "string"
++      ? { account_label: data.account_label }
++      : {}),
+     expires_at:
+       Number.isFinite(expiresIn) && expiresIn > 0 && expiresIn <= 34560000
+         ? new Date(Date.now() + expiresIn * 1000)
+@@ -279,6 +287,34 @@ async function refreshTokens(refreshToken, serverUrl) {
+   return { ...tokens, refresh_token: tokens.refresh_token ?? refreshToken };
+ }
+ 
++async function revokeTokens(tokens, serverUrl) {
++  const metadata = await discover(serverUrl);
++  if (!metadata.revocation_endpoint) return false;
++  const setting = await SystemSettings.get({ label: "mcp_oauth_clients" });
++  const client = JSON.parse(setting?.value || "{}")[serverUrl];
++  if (!client?.client_id) throw new Error("invalid_oauth_client");
++  // Refresh first to revoke the grant, then access. RFC 7009 success may be empty.
++  for (const [token, hint] of [
++    [tokens.refresh_token, "refresh_token"],
++    [tokens.access_token, "access_token"],
++  ]) {
++    if (!token) continue;
++    const response = await fetch(httpUrl(metadata.revocation_endpoint), {
++      method: "POST",
++      redirect: "error",
++      signal: AbortSignal.timeout(15000),
++      headers: { "Content-Type": "application/x-www-form-urlencoded" },
++      body: new URLSearchParams({
++        client_id: client.client_id,
++        token,
++        token_type_hint: hint,
++      }).toString(),
++    });
++    if (!response.ok) throw new Error("oauth_revocation_failed");
++  }
++  return true;
++}
++
+ module.exports = {
+   httpUrl,
+   discover,
+@@ -287,4 +323,5 @@ module.exports = {
+   verifyState,
+   exchangeCode,
+   refreshTokens,
++  revokeTokens,
+ };
+diff --git a/server/utils/MCP/serverConfig.js b/server/utils/MCP/serverConfig.js
+index 689d3e2a..9740bf4c 100644
+--- a/server/utils/MCP/serverConfig.js
++++ b/server/utils/MCP/serverConfig.js
+@@ -69,7 +69,7 @@ function validateWorkspaceServerConfig(config) {
+     if (!isObject(options)) throw new Error("invalid_anythingllm");
+     allowFields(
+       options,
+-      ["perWorkspaceAuth", "suppressedTools"],
++      ["perWorkspaceAuth", "perUserAuth", "suppressedTools"],
+       "anythingllm."
+     );
+     if (
+@@ -77,6 +77,12 @@ function validateWorkspaceServerConfig(config) {
+       typeof options.perWorkspaceAuth !== "boolean"
+     )
+       throw new Error("invalid_anythingllm");
++    if (
++      (Object.hasOwn(options, "perUserAuth") &&
++        typeof options.perUserAuth !== "boolean") ||
++      (options.perUserAuth === true && options.perWorkspaceAuth === true)
++    )
++      throw new Error("invalid_anythingllm");
+     if (
+       Object.hasOwn(options, "suppressedTools") &&
+       (!Array.isArray(options.suppressedTools) ||
+diff --git a/server/utils/agents/aibitat/index.js b/server/utils/agents/aibitat/index.js
+index bc269438..acac1993 100644
+--- a/server/utils/agents/aibitat/index.js
++++ b/server/utils/agents/aibitat/index.js
+@@ -997,6 +997,8 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
+     } catch (error) {
+       // User-initiated abort - rethrow as-is so the chat loop exits quietly.
+       if (this._aborted) throw error;
++      if (this.personalMcpUsed || this.handlerProps.invocation?.personalMcpUsed)
++        throw new APIError("The agent model failed to respond.");
+       console.error(`[AIbitat] Provider error: ${error.message}`, {
+         hide_meta: true,
+       });
+@@ -1075,23 +1077,25 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
+ 
+       fn.caller = byAgent || "agent";
+ 
+-      if (this.providerInstance?.verbose) {
++      if (this.providerInstance?.verbose && !fn.privateMcp) {
+         this?.introspect?.(
+           `${fn.caller} is executing \`${name}\` tool ${JSON.stringify(args, null, 2)}`
+         );
+       }
+ 
+-      this.handlerProps?.log?.(
+-        `[debug]: ${fn.caller} is attempting to call \`${name}\` tool ${JSON.stringify(args, null, 2)}`
+-      );
++      if (!fn.privateMcp)
++        this.handlerProps?.log?.(
++          `[debug]: ${fn.caller} is attempting to call \`${name}\` tool ${JSON.stringify(args, null, 2)}`
++        );
+ 
+       const result = await fn.handler(args);
+       Telemetry.sendTelemetry("agent_tool_call", { tool: name }, null, true);
+-      this.emitter.emit("toolCallResult", {
+-        toolName: name,
+-        arguments: args,
+-        result,
+-      });
++      if (!fn.privateMcp)
++        this.emitter.emit("toolCallResult", {
++          toolName: name,
++          arguments: args,
++          result,
++        });
+ 
+       /**
+        * If the tool call has direct output enabled, return the result directly to the chat
+@@ -1254,11 +1258,12 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
+ 
+       const result = await fn.handler(args);
+       Telemetry.sendTelemetry("agent_tool_call", { tool: name }, null, true);
+-      this.emitter.emit("toolCallResult", {
+-        toolName: name,
+-        arguments: args,
+-        result,
+-      });
++      if (!fn.privateMcp)
++        this.emitter.emit("toolCallResult", {
++          toolName: name,
++          arguments: args,
++          result,
++        });
+ 
+       if (this.skipHandleExecution) {
+         this.skipHandleExecution = false;
+diff --git a/server/utils/agents/aibitat/plugins/chat-history.js b/server/utils/agents/aibitat/plugins/chat-history.js
+index c5bbee49..62f741d1 100644
+--- a/server/utils/agents/aibitat/plugins/chat-history.js
++++ b/server/utils/agents/aibitat/plugins/chat-history.js
+@@ -52,7 +52,9 @@ const chatHistory = {
+               user: { id: aibitat.handlerProps.invocation.user_id || null },
+               threadId: aibitat.handlerProps.invocation.thread_id || null,
+               include: false,
+-              prompt: userMessage,
++              prompt: aibitat.personalMcpUsed
++                ? "Personal MCP conversation is not stored in shared history."
++                : userMessage,
+               response: {},
+             });
+             if (chat) aibitat.registerChatId(chat.id);
+@@ -98,6 +100,8 @@ const chatHistory = {
+         aibitat,
+         { prompt, response, attachments = [] } = {}
+       ) {
++        if (aibitat.personalMcpUsed)
++          return this._storePersonal(aibitat, prompt);
+         const invocation = aibitat.handlerProps.invocation;
+         const metrics = aibitat.providerInstance?.getCumulativeUsage?.() ?? {};
+         const citations = aibitat._pendingCitations ?? [];
+@@ -133,6 +137,8 @@ const chatHistory = {
+         aibitat,
+         { prompt, response, attachments = [], options = {} } = {}
+       ) {
++        if (aibitat.personalMcpUsed)
++          return this._storePersonal(aibitat, prompt);
+         const invocation = aibitat.handlerProps.invocation;
+         const metrics = aibitat.providerInstance?.getCumulativeUsage?.() ?? {};
+         const citations = aibitat._pendingCitations ?? [];
+@@ -171,6 +177,25 @@ const chatHistory = {
+         this._cleanup(aibitat);
+       },
+ 
++      _storePersonal: async function (aibitat) {
++        const invocation = aibitat.handlerProps.invocation;
++        await WorkspaceChats.upsert(aibitat.trackedChatId, {
++          workspaceId: Number(invocation.workspace_id),
++          prompt: "Personal MCP conversation is not stored in shared history.",
++          response: {
++            text: "Personal MCP response is not stored in shared history.",
++            sources: [],
++            type: "chat",
++          },
++          user: { id: invocation.user_id },
++          threadId: invocation.thread_id || null,
++          include: false,
++        });
++        // Keep personalMcpUsed sticky for the entire invocation: later replies
++        // can still derive from a private tool result in in-memory context.
++        this._cleanup(aibitat);
++      },
++
+       _autoRenameThread: async function (aibitat, prompt) {
+         const invocation = aibitat.handlerProps.invocation;
+         if (!invocation?.thread_id) return true;
+diff --git a/server/utils/agents/aibitat/providers/ai-provider.js b/server/utils/agents/aibitat/providers/ai-provider.js
+index 73477461..df9ae525 100644
+--- a/server/utils/agents/aibitat/providers/ai-provider.js
++++ b/server/utils/agents/aibitat/providers/ai-provider.js
+@@ -146,6 +146,7 @@ class Provider {
+   }
+ 
+   providerLog(text, ...args) {
++    if (this.invocation?.personalMcpUsed) return;
+     console.log(
+       `\x1b[36m[AgentLLM${this?.model ? ` - ${this.model}` : ""}]\x1b[0m ${text}`,
+       ...args
+diff --git a/server/utils/agents/defaults.js b/server/utils/agents/defaults.js
+index fc4c27f9..cd0586b8 100644
+--- a/server/utils/agents/defaults.js
++++ b/server/utils/agents/defaults.js
+@@ -63,7 +63,8 @@ const WORKSPACE_AGENT = {
+     _provider = null,
+     workspace = null,
+     user = null,
+-    prompt = ""
++    prompt = "",
++    mcpCaller = null
+   ) => {
+     let [role, clarifyingQuestionsSkills] = await Promise.all([
+       Provider.systemPrompt({
+@@ -86,7 +87,10 @@ const WORKSPACE_AGENT = {
+         ...clarifyingQuestionsSkills,
+         ...ImportedPlugin.activeImportedPlugins(),
+         ...AgentFlows.activeFlowPlugins(),
+-        ...(await new MCPCompatibilityLayer().activeMCPServers(workspace)),
++        ...(await new MCPCompatibilityLayer().activeMCPServers(
++          workspace,
++          mcpCaller
++        )),
+       ],
+     };
+   },
+diff --git a/server/utils/agents/index.js b/server/utils/agents/index.js
+index 6703765e..b70c8c7c 100644
+--- a/server/utils/agents/index.js
++++ b/server/utils/agents/index.js
+@@ -650,7 +650,8 @@ class AgentHandler {
+     // safely assume that the MCP server is running and the tools are available/loaded.
+     if (name.startsWith("@@mcp_")) {
+       const activeServers = await new MCPCompatibilityLayer().activeMCPServers(
+-        this.invocation?.workspace ?? null
++        this.invocation?.workspace ?? null,
++        this.invocation?.mcpCaller
+       );
+       if (!activeServers.includes(name)) return;
+       const mcpPluginName = name.replace("@@mcp_", "");
+@@ -740,7 +741,8 @@ class AgentHandler {
+         if (entry.startsWith("@@mcp_")) {
+           const activeServers =
+             await new MCPCompatibilityLayer().activeMCPServers(
+-              this.invocation?.workspace ?? null
++              this.invocation?.workspace ?? null,
++              this.invocation?.mcpCaller
+             );
+           if (!activeServers.includes(entry)) continue;
+         }
+@@ -769,7 +771,8 @@ class AgentHandler {
+       this.provider,
+       this.invocation.workspace,
+       user,
+-      this.invocation.prompt
++      this.invocation.prompt,
++      this.invocation.mcpCaller
+     );
+ 
+     this.aibitat.agent(USER_AGENT.name, userAgentDef);
+@@ -869,7 +872,9 @@ class AgentHandler {
+       chats: await this.#chatHistory(20),
+       handlerProps: {
+         invocation: this.invocation,
+-        log: this.log,
++        log: (...values) => {
++          if (!this.invocation?.personalMcpUsed) this.log(...values);
++        },
+         routingMetadata: this.routingMetadata || null,
+       },
+     });
+diff --git a/server/utils/middleware/validatedRequest.js b/server/utils/middleware/validatedRequest.js
+index 1f4c65d2..54cbcea4 100644
+--- a/server/utils/middleware/validatedRequest.js
++++ b/server/utils/middleware/validatedRequest.js
+@@ -106,6 +106,7 @@ async function validateMultiUserRequest(request, response, next) {
+   }
+ 
+   response.locals.user = user;
++  response.locals.browserSessionUserId = user.id;
+   UserMetaCache.setFromRequest(request, user.id);
+   next();
+ }
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/docs/plans/personal-mcp-client-report.md b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/docs/plans/personal-mcp-client-report.md
+new file mode 100644
+index 0000000..951696c
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/docs/plans/personal-mcp-client-report.md
+@@ -0,0 +1,159 @@
++# Personal Medusa MCP client — local implementation report
++
++Branch: `feat/personal-mcp-oauth`. Worktree: `anything-llm-v2-mcp-oauth/personal-mcp-oauth`.
++
++## Status and boundaries
++
++Implemented the personal client slice locally; **not approved for production rollout**. No commit, push, deployment, role creation, production edit, or child agent was performed. Parent owns final independent review and patch packaging.
++
++The two external brief/handoff reads and the later `task-4-preflight-review.md` read were denied by sandbox permission. No bypass was attempted. Implementation uses the requirements and review findings pasted by the parent. **Parent action:** provide the exact review document within this permitted worktree if evidence beyond the pasted findings needs reconciliation.
++
++## Auth and exact methods
++
++An admin opts a remote server into `anythingllm.perUserAuth: true`. It cannot also set `perWorkspaceAuth: true`; stdio is rejected. URLs remain configurable. No Medusa hostname/resource URL is guessed. Existing workspace/static/global modes keep their existing paths and credentials; the new table starts empty.
++
++* `validatedRequest` records `response.locals.browserSessionUserId` only after verifying a multi-user browser JWT and loading an active user.
++* `personalCaller.fromResponse(response, workspace)` issues an opaque process-local caller after current active-user and membership checks. A request `userId` is never used.
++* `personalCaller.fromSocket(request, invocation)` verifies a signed session JWT carried in `Sec-WebSocket-Protocol: anythingllm-agent, anythingllm-session.<JWT>` (or a Bearer session header), requires the invocation creator, and rechecks membership. It does not accept a query `userId`.
++* `personalCaller.assert(caller, workspace)` rechecks current user status and membership on boot, discovery, and call. Caller capabilities cannot be fabricated by passing an object containing a user ID.
++* `personalCaller.fromOAuthState(userId, workspace)` is used after consuming the signed, single-use OAuth state from storage. Callback rechecks it before and after token exchange.
++* `PersonalMcpGrant.begin/find/save/clear/clearGeneration/invalidate/acquireRefresh/releaseRefresh` operate on `(workspace_id, user_id, server_name)`. Tokens use AES-256-GCM with owner/definition binding and persistent `SIG_KEY`/`SIG_SALT`; missing keys fail closed. No environment file is written by this model.
++* `version` is a compare-and-swap token for writes. `generation` changes on connect/disconnect/config invalidation, but not refresh. The database `refresh_until` lease serializes rotating-refresh use across processes; losers fail closed, rather than replaying refresh. Runtime boot promises are deduplicated per workspace/user/server.
++* `MCPHypervisor.bootPersonalServer(workspace, name, caller)` delegates to `PersonalMcpRuntime`. Personal clients never enter global/workspace `mcps` or global loading results. Each runtime cache entry holds a grant version and definition fingerprint; post-connect, post-discovery and post-call checks reject changed/revoked ownership state.
++* `MCPHypervisor.callServerTool(workspace, name, request, caller)` dispatches personal tools through advertised, unsuppressed tool enforcement. Personal calls are **never retried**, including after a 401. Expiring credentials refresh before connecting; a tool 401 clears only the matching caller/version and requires reconnect.
++* `MCPCompatibilityLayer.activeMCPServers(workspace, caller)` adds personal servers only for a verified caller. Agent defaults, attachment and mid-session toggles propagate `invocation.mcpCaller`. API-only/anonymous/ephemeral job paths have no such capability and cannot expose personal tools.
++* The websocket endpoint does **not close ordinary chats** when personal authentication fails or merely because a personal definition exists. It sets no personal caller; legacy tools still run. Personal plugins remain unavailable to other invocation viewers.
++
++### HTTP surface (paths relative to `/api`)
++
++| Method/path | Contract |
++| --- | --- |
++| `GET /mcp/oauth/start/:workspaceSlug/:serverName` | Personal: active browser workspace member only, for own grant. Legacy: existing admin restriction remains. Returns `{url}`. |
++| `GET /mcp/oauth/callback` | Signed state + encrypted verifier, single-use row. Checks workspace ID, definition fingerprint/mode/URL, user active/membership and grant version. Personal redirect goes to `/workspace/<slug>?mcp=<name>&connected=1` or bounded error, not admin settings. |
++| `POST /mcp/oauth/disconnect` | Body `{workspaceSlug,serverName}`; ignores supplied `userId`. Personal: refresh/access revocation first, then local clear using authorization generation. Returns `{success:true,remoteRevoked:boolean}`. Remote failure still clears local state; a newer reconnect is preserved. |
++| `GET /workspace/:slug/mcp-personal` | Member-only catalog of personal definitions with **own** `{name,connected,needsReauth,expiresAt,accountLabel}`. No tokens, headers, other users' labels or full definitions. |
++| `GET /workspace/:slug/mcp-personal/:name/tools` | Current caller's advertised, unsuppressed tools only. |
++| `POST /workspace/:slug/mcp-personal/:name/call` | Body `{toolName,arguments}`. Personal MCP tools only, current caller only. No arbitrary URL/method proxy. Per-caller concurrency gate. Returns bounded `{success,result,truncated}`; default output limit 64 KiB. No mutation retries. |
++
++Definition CRUD stays on the existing admin-only management routes. Workspace changes invalidate personal grants before publishing the replacement. Global definition swap/delete invalidates only workspaces not shadowed by a same-name workspace-owned definition, preserving shadowed grants, clients and pending callbacks. Durable fingerprints and callback CAS also prevent old tokens from being used at a changed destination after process restart.
++
++### Provider wire contract
++
++OAuth remains discovery-driven: protected resource metadata comes from the configured MCP origin; its authorization server advertises issuer/registration/authorization/token/revocation URLs. Supports Authorization Code + S256, public client auth method `none`, and rotating refresh. Optional revocation endpoint must be on the issuer origin. Revocation form contains `client_id`, `token`, `token_type_hint`; RFC 7009 empty 200 is accepted. Redirects are not followed when sending credentials.
++
++Parent reports issuer `https://store.teamredball.com`, discovery `/.well-known/oauth-authorization-server`, and `/mcp-auth/{authorize,token,register,revoke}`. Set `SERVER_URL=https://workspace.approof.studio` to produce the registered callback `https://workspace.approof.studio/api/mcp/oauth/callback`; actual MCP resource URL remains undecided. Only public MCP access/refresh tokens are accepted/stored, plus bounded optional `account_label`; arbitrary token response fields/raw Medusa JWTs are discarded. Label is plain text, controls/angle brackets removed, whitespace normalized, max 120 characters, rendered as React text. If provider does not supply the public label, UI shows connection state without inventing identity.
++
++## Member UX and privacy
++
++`PersonalMcpConnections.jsx` is mounted in both empty and populated workspace chat, an existing member-accessible surface. It offers own Connect/Disconnect and linked-account label. No definition editor or admin settings permission is opened to the default role. Existing admin modal has a mutually exclusive personal OAuth switch and preserves JSON/form round trips.
++
++Personal plugins omit args/results/errors from generic MCP logging/introspection. The AIbitat execution loop omits personal `toolCallResult` trace events and private argument diagnostics. A sticky invocation privacy marker suppresses generic handler/provider diagnostics after private tool context enters the conversation. These are narrow personal-context redactions, not unrelated provider rewrites.
++
++Shared persisted chat receives placeholders for **both prompt and response**, no citations/outputs/attachments, and `include:false` after personal use. Follow-up pre-registration also redacts private input (including abort paths). First-use pre-registered chat is redacted when a personal handler starts. Private replies remain in owner-verified session memory and are passed to the selected LLM for answering; they are intentionally not durable shared chat/history/RAG material. The browser explicitly explains the non-persistence.
++
++## TDD and verification evidence
++
++Raw local logs are retained in the ignored local `server/storage/personal-mcp-test-evidence/` directory (fixture-only credentials/content); the packaged evidence summary is `docs/plans/personal-mcp-evidence.md`.
++
++* Grant/config/caller tests were written first; initial run failed on missing new modules, then 5 tests passed after implementation and local Prisma generation.
++* Runtime red: 7 failures, including global personal boot, absent personal methods, empty personal discovery. Green covered A/B client/header separation, CAS refresh/disconnect/reconnect races, no mutation replay, suppressed/unadvertised tools, no private plugin logs.
++* Refresh lease red: `Grant.acquireRefresh is not a function`; green checks lease uniqueness and generation-aware disconnect preserving reconnect.
++* OAuth/member tests written before routes: ordinary member connect, own-only status/disconnect, callback membership/suspension/destination changes, single-use state, stale callback, remote revoke order/failure, reconnect during revocation, legacy admin restrictions.
++* Privacy red demonstrated private derived response/citations/outputs in `_store`; follow-up red demonstrated pre-registration storing a private prompt. Green replaces prompts/responses and excludes retrieval. Private provider diagnostics test failed before the privacy guard.
++* Review S1/S3/S4 red bundle failed for absent global-scoped invalidation, unredacted follow-up prompt, and missing sanitized label. Green tests cover global-vs-shadow grants/clients, private follow-up, and discarding raw provider identity fields.
++* Real websocket endpoint callback tests (not just helper/string tests) cover owner, other member, anonymous, API-only session; ordinary cluster still starts while only owner obtains personal capability.
++* Actual AIbitat streaming and non-streaming execution tests assert no private args/results in trace listeners or generic diagnostics.
++* Real OAuth HTTP + Prisma + **real MCP SDK** integration test uses two accounts in one workspace; actual calls return A/B-specific company data, refresh only A, disconnect only A, and assert no issued token/result leakage in logs. Existing legacy MCP E2E is preserved.
++
++Recorded focused gate before final formatting: **20 suites / 348 tests PASS**. MCP E2E: **2 suites / 19 tests PASS**. Root-wide Jest attempt: **109 suites / 1533 tests PASS**, but **7 collector suites fail to load** because isolated collector dependencies are absent (listed below); this is not a green full-project claim.
++
++Root Jest invocation:
++
++```sh
++STORAGE_DIR="$PWD/server/storage" \
++PERSONAL_MCP_TEST_PG_URL='postgres://medusa:local-mcp-test-only@127.0.0.1:55471/anythingllm_mcp_oauth_test' \
++ANYTHINGLLM_DATABASE_URL='file:/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/storage/anythingllm.db' \
++node node_modules/jest/bin/jest.js --runInBand \
++  --setupFilesAfterEnv ./server/__tests__/utils/lark/_polyfill.js
++```
++
++The existing SlowBuffer test preload is necessary with local Node 25/jsonwebtoken. No product dependency changes were made. Collector load failures:
++
++* `collector/__tests__/utils/extensions/WebsiteDepth/index.test.js`: missing `langchain/document_loaders/web/puppeteer`.
++* `collector/__tests__/utils/extensions/RepoLoader/GithubRepo.test.js`: missing `@langchain/community/document_loaders/web/github`.
++* `collector/__tests__/utils/extensions/RepoLoader/GiteaRepo.test.js`: missing `ignore`.
++* `collector/__tests__/utils/extensions/Confluence/ConfluenceLoader.test.js`: missing `slugify`.
++* `collector/__tests__/utils/WhisperProviders/ffmpeg/index.test.js`: missing `fix-path`.
++* `collector/__tests__/processLink/helpers/htmlToMarkdown.test.js`: missing `turndown`.
++* `collector/__tests__/utils/downloadURIToFile/index.test.js`: missing `dotenv`.
++
++Collector dependencies/source were not modified to paper over unrelated failures.
++
++## Migration route — PostgreSQL, not SQLite history
++
++Production information supplied by parent: live schema/generated client use `postgresql` + `env("DATABASE_URL")`; entrypoint still runs `prisma generate` then `migrate deploy`; historical migration contains SQLite `AUTOINCREMENT` and SQLite lock. Direct pod env did not show database variables; dotenv may hold them. **Do not print dotenv/secrets or treat the current entrypoint as a safe PG migration strategy.**
++
++New artifacts:
++
++* SQLite development migration: `server/prisma/migrations/20261008000000_personal_mcp_grants/migration.sql`.
++* Standalone PostgreSQL additive transaction: `server/prisma/postgresql/personal-mcp-grants.sql`.
++
++No old migration was rewritten. No old token copy/backfill SQL exists. Development DB was migrated locally; generation stayed in this worktree. The evolving, unpublished new migration gained generation/refresh lease fields; the disposable SQLite DB was updated locally to match. Do not treat its local migration checksum as release evidence; validate the final migration on a fresh fixture.
++
++### Tested PG procedure
++
++`personalPostgresql.test.js` connects only to parent-authorized `anythingllm_mcp_oauth_test` on `127.0.0.1:55471`. It starts a transaction, creates an isolated fixture schema + minimal existing users/workspaces, executes the **actual standalone PG DDL**, verifies A/B unique scope, stale-write CAS, timestamps/defaults, and user/workspace FK cascades, then rolls back. It never touches `redball_mcp_oauth_test`, other worker data, production, or original client data. It does not replay SQLite history or alter `_prisma_migrations`.
++
++### Explicit production rollout plan (operator/parent only, after gates)
++
++1. Finish independent review and real-browser/provider integration gates below; confirm live database provider/name, backup and stable encryption keys privately.
++2. Build an immutable PG-specific release artifact **outside the live pod**. Use the confirmed PG schema with this new model and inverse user/workspace relations; generate the PG client in isolated release/worktree output. Do not regenerate live schema from this SQLite default or copy this worktree's SQLite-generated `node_modules` into production.
++3. Arrange a reviewed startup override/new release entrypoint that starts the server **without automatic `prisma migrate deploy`**. The current `/usr/local/bin/docker-entrypoint.sh` cannot be assumed safe. Do not restart the old entrypoint as a migration shortcut. Do not rewrite old migration SQL/lock/history.
++4. Apply only `server/prisma/postgresql/personal-mcp-grants.sql` through an operator-owned PG migration job, using the privately confirmed PG connection. Example, after setting `PG_SERVICE_URL` securely (never echo it): `psql "$PG_SERVICE_URL" -v ON_ERROR_STOP=1 -f server/prisma/postgresql/personal-mcp-grants.sql`. This file uses one transaction and fails on an unexpected pre-existing table instead of silently accepting drift. Verify empty new table, columns/indexes/FKs and no legacy-table changes.
++5. Record this standalone migration in the deployment's PG migration system. Do not mark/replay the SQLite history in Prisma. If Prisma migration deployment is required later, design a separately approved PG baseline/history strategy; it is not part of this patch.
++6. Deploy the already-generated PG artifact with the migration-free startup override, initially no personal definition enabled. Confirm both legacy and personal smoke tests using two real member sessions. Configure the final resource URL and callback only after parent backend approval.
++7. Rollback application with personal feature disabled if needed; leave the additive table intact rather than destructively dropping user grants. Any table-removal/data deletion requires separate approval.
++
++Not executed: production job, entrypoint override, PG full-app Prisma generation/deployment, or production smoke tests. PG test proves new-table DDL/CAS/cascade behavior, **not** full production schema/entrypoint compatibility.
++
++## Remaining gates / integration limits
++
++* Parent's final independent security review remains required. Exact external review document inaccessible; only pasted findings were consumed.
++* No real-browser A/B Playwright login/OAuth UI flow or browser WebSocket handshake through production proxy has been run. Endpoint callbacks and real SDK/OAuth HTTP are covered locally; verify subprotocol handling, TLS/proxy routing and member-visible UX in real browsers.
++* Actual Medusa OAuth backend final review and resource deployment URL remain pending. Test protected-resource metadata, advertised scopes, public `account_label` emission, client registration/callback whitelist, refresh rotation and revocation against that service. No hardcoded guessed resource.
++* PG full application/generated-client integration and reviewed replacement startup path remain rollout blockers. New-table PG test is separate from legacy SQLite migration history.
++* Refresh losers and transient failures fail closed; there is no cross-process wait/retry loop. SDK calls retain existing request deadlines; per-caller HTTP concurrency is process-local. Do not claim multi-replica stress verification.
++* Privacy requires private result content to reach the selected LLM and verified owner's socket; this is not a zero-external-processing feature. Shared durable history is redacted, so private replies/follow-ups intentionally do not survive reload.
++* Root-wide suite is blocked by absent collector dependencies; no collector packages or unrelated source are edited.
++
++## File inventory
++
++New product files: `server/models/personalMcpGrant.js`, `server/utils/MCP/personalCaller.js`, `server/utils/MCP/personalRuntime.js`, both migration SQL files, `frontend/src/components/WorkspaceChat/ChatContainer/PersonalMcpConnections.jsx`.
++
++Modified product files: `server/prisma/schema.prisma`; `server/utils/middleware/validatedRequest.js`; `server/endpoints/{mcpOAuth,workspaceMcpServers,agentWebsocket}.js`; `server/utils/MCP/{index,oauth,serverConfig}.js`; `server/utils/MCP/hypervisor/index.js`; `server/utils/agents/{defaults,index}.js`; `server/utils/agents/aibitat/index.js`; `server/utils/agents/aibitat/plugins/chat-history.js`; `server/utils/agents/aibitat/providers/ai-provider.js` (personal-context guard only); `frontend/src/models/workspaceMcp.js`; `frontend/src/components/WorkspaceChat/ChatContainer/index.jsx`; `frontend/src/pages/WorkspaceSettings/AgentConfig/McpConnectors/ServerModal.jsx`.
++
++New tests: `server/__tests__/utils/MCP/personal{Client,Runtime,Privacy,Execution,Frontend,Postgresql,Revocation}.test.js`; `server/__tests__/endpoints/personalMcp{OAuth,Socket}.test.js`; `server/__tests__/e2e/mcp/personal.e2e.test.js`. Existing legacy tests were not rewritten.
++
++## Fix-loop round 1 delta
++
++* S1: global deletion/config-sync uses `invalidateGlobalPersonalServer`; workspace-owned shadows are excluded from grant invalidation and client closure. Callback versions/fingerprints preserve shadowed pending flows.
++* S2: endpoint ownership check only grants a personal caller; failed/no browser identity does not close or gate ordinary legacy agent invocation. Endpoint tests execute the real route callback with owner/other/anonymous/API-only identities.
++* S3: redact persisted prompt as well as response; follow-up pre-registration and first-use tracked row also redact on private context. Privacy marker remains sticky across later turns. Tests include private follow-up input and aborted-turn pre-registration.
++* S4: store sanitized public label inside encrypted grant, return only own `accountLabel`, render as React text in member chat; strip unrecognized identity fields/raw JWTs.
++* Q1: actual streaming/non-streaming execution tests and actual websocket endpoint callback tests added. Real network browser/proxy handshake remains explicitly unverified.
++* Q2: independent PG DDL verification and operator-only PG deployment procedure above; no SQLite history replay.
++
++### Final local gates
++
++* Server-wide Jest: **107 suites / 1,514 tests PASS**, exit 0, after final privacy fixes.
++* Root-wide Jest: **109 suites / 1,535 collected tests PASS**; **7 collector suites fail to load**, exit 1, exclusively the missing dependencies listed above. Not a fully green root run.
++* MCP E2E (legacy + personal real SDK): **2 suites / 21 tests PASS**, exit 0 (final run includes actual HTTP 401/503 after mutation; remote mutation counter remains exactly one).
++* Dedicated PG migration test: PASS as part of server-wide gate; fixture schema/rows rolled back.
++* Final SQLite new-table SQL: PASS against fresh in-memory fixture including generation/lease columns.
++* Frontend `npm run build`: PASS, exit 0. Existing bundle-size/dependency warnings remain; no real-browser claim.
++* ESLint on all changed server/frontend product files: PASS, exit 0.
++* `git diff --check`: PASS; no prior migration/package/lockfile edits and no commits.
++
++An additional red/green execution regression proves private-context provider exceptions no longer log an echoed private result; it changes only the shared execution error boundary, not unrelated provider implementations.
++
++Controller follow-up gate: real installed StreamableHTTP SDK uses fixed bearer headers without `_authProvider`; an actual HTTP server advertises `mutate`, records the mutation and then returns 401 or 503. Both parameterized tests assert exactly one remote call/mutation and no application retry. Mixed legacy/personal websocket endpoint tests execute the actual route callback, continue legacy cluster/tool behavior for owner/other/anonymous/API-only identities, and permit personal behavior only to the owner. Final focused socket/privacy/PG run: **3 suites / 10 tests PASS**. No real-browser handshake claim is made.
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/docs/plans/personal-mcp-evidence.md b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/docs/plans/personal-mcp-evidence.md
+new file mode 100644
+index 0000000..12a9d97
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/docs/plans/personal-mcp-evidence.md
+@@ -0,0 +1,61 @@
++# Personal MCP local verification evidence
++
++Date: 2026-10-08. Branch: `feat/personal-mcp-oauth`.
++
++All database-backed Jest commands set:
++`ANYTHINGLLM_DATABASE_URL=file:/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/storage/anythingllm.db`.
++
++Local Node uses the existing `server/__tests__/utils/lark/_polyfill.js` preload for removed SlowBuffer compatibility. Commands run from this worktree root unless stated otherwise.
++
++## Final outputs
++
++```text
++Server: node node_modules/jest/bin/jest.js server/__tests__ --runInBand
++        --setupFilesAfterEnv ./server/__tests__/utils/lark/_polyfill.js
++Test Suites: 107 passed, 107 total
++Tests:       1514 passed, 1514 total
++Exit: 0
++
++Root: same command without server/__tests__ filter
++Test Suites: 7 failed, 109 passed, 116 total
++Tests:       1535 passed, 1535 total
++Exit: 1 (collector missing dependencies; exact suite names in report)
++
++MCP E2E: node node_modules/jest/bin/jest.js server/__tests__/e2e/mcp
++         --runInBand --config '{"testEnvironment":"node","testMatch":["**/*.e2e.test.js"]}'
++Test Suites: 2 passed, 2 total
++Tests:       21 passed, 21 total
++Exit: 0
++
++Frontend: npm run build (cwd frontend)
++Exit: 0
++
++ESLint: explicit changed product-file lists (cwd server/frontend)
++Exit: 0
++
++git diff --check
++Exit: 0
++```
++
++PG test environment additionally sets `PERSONAL_MCP_TEST_PG_URL` to the parent-provided disposable `anythingllm_mcp_oauth_test` database at `127.0.0.1:55471`. New table SQL was executed inside a transaction-scoped schema, tested and rolled back; no backend-worker or production schema was touched.
++
++## Observed RED before implementation
++
++| Test iteration | Observed failure |
++| --- | --- |
++| Personal grant/caller | Missing `personalMcpGrant` module; initial environment error corrected with existing SlowBuffer preload before implementation. |
++| Runtime | 7 failures: personal server globally booted, no A/B personal discovery, missing `bootPersonalServer`; then green. |
++| Refresh lease | `Grant.acquireRefresh is not a function`; then green for unique DB lease and generation-scoped disconnect. |
++| Personal member OAuth | Missing revocation/member route/authorization support; then green with legacy OAuth suite preserved. |
++| History privacy | Serialized private result/citations/outputs present in shared save; then redacted. |
++| Frontend contract | Personal config rejected; personal chat controls absent; then accepted/mounted. |
++| Global swap/delete | Grant remained enabled after swap; scoped invalidation added. |
++| Review fixes | Missing global-only invalidation, unsanitized/missing account label, private follow-up prompt stored; then covered green. |
++| Aborted follow-up | Pre-registration contained `private-follow-up-aborted`; then placeholder. |
++| Provider exception privacy | Generic error output contained `private-echoed-result`; then bounded generic exception without echoed payload. |
++
++Real endpoint callback tests cover websocket owner/other/anonymous/API-only identities without blocking ordinary chat. Actual AIbitat streaming/non-streaming execution tests cover generic trace/log isolation. Real OAuth HTTP and MCP SDK test covers same-workspace A/B call results, rotating refresh and disconnect isolation.
++
++Raw iteration logs remain local under ignored `server/storage/personal-mcp-test-evidence/`. They are not application artifacts and are not needed for the parent patch.
++
++Final transport follow-up: actual HTTP/SDK `tools/call` records a mutation then returns 401/503; each test observes one call and one mutation, no `_authProvider` and no replay. Socket/privacy/PG focused run: 3 suites / 10 tests PASS, exit 0.
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/frontend/src/components/WorkspaceChat/ChatContainer/PersonalMcpConnections.jsx b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/frontend/src/components/WorkspaceChat/ChatContainer/PersonalMcpConnections.jsx
+new file mode 100644
+index 0000000..10ece78
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/frontend/src/components/WorkspaceChat/ChatContainer/PersonalMcpConnections.jsx
+@@ -0,0 +1,93 @@
++import { useEffect, useState } from "react";
++import WorkspaceMcp from "@/models/workspaceMcp";
++
++export default function PersonalMcpConnections({ workspaceSlug }) {
++  const [servers, setServers] = useState([]);
++  const [busy, setBusy] = useState(null);
++  const [message, setMessage] = useState("");
++  useEffect(() => {
++    let alive = true;
++    WorkspaceMcp.personal(workspaceSlug)
++      .then((rows) => {
++        if (alive) setServers(rows);
++      })
++      .catch(() => {
++        if (alive) setServers([]);
++      });
++    return () => {
++      alive = false;
++    };
++  }, [workspaceSlug]);
++  async function action(server, connect) {
++    if (busy) return;
++    setBusy(server.name);
++    setMessage("");
++    try {
++      if (connect) {
++        const url = await WorkspaceMcp.start(workspaceSlug, server.name);
++        window.location.assign(url);
++      } else {
++        const result = await WorkspaceMcp.disconnect(
++          workspaceSlug,
++          server.name
++        );
++        setServers(await WorkspaceMcp.personal(workspaceSlug));
++        if (!result.remoteRevoked)
++          setMessage(
++            "Disconnected locally. Remote revocation could not be confirmed."
++          );
++      }
++    } catch {
++      setMessage(
++        "Connection unavailable. Try again or contact your workspace administrator."
++      );
++    } finally {
++      setBusy(null);
++    }
++  }
++  if (!servers.length) return null;
++  return (
++    <details className="absolute right-4 top-14 z-20 rounded-lg bg-zinc-800 light:bg-white border border-theme-modal-border p-3 text-sm text-white light:text-slate-900 max-w-sm">
++      <summary className="cursor-pointer">My MCP connections</summary>
++      <p className="mt-2 text-xs">
++        Only your account is connected. Personal tool replies are not saved in
++        shared history.
++      </p>
++      {servers.map((server) => (
++        <div
++          key={server.name}
++          className="flex gap-3 items-center justify-between mt-3"
++        >
++          <span>
++            {server.name}:{" "}
++            {server.connected
++              ? "Connected"
++              : server.needsReauth
++                ? "Reconnect required"
++                : "Not connected"}
++            {server.connected && server.accountLabel && (
++              <span className="block text-xs">{server.accountLabel}</span>
++            )}
++          </span>
++          <button
++            type="button"
++            disabled={!!busy}
++            onClick={() => action(server, !server.connected)}
++            className="rounded px-3 py-1 bg-blue-600 disabled:opacity-50"
++          >
++            {busy === server.name
++              ? "Working…"
++              : server.connected
++                ? "Disconnect"
++                : "Connect"}
++          </button>
++        </div>
++      ))}
++      {message && (
++        <p role="status" className="mt-3 text-xs">
++          {message}
++        </p>
++      )}
++    </details>
++  );
++}
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/e2e/mcp/personal.e2e.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/e2e/mcp/personal.e2e.test.js
+new file mode 100644
+index 0000000..25304b1
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/e2e/mcp/personal.e2e.test.js
+@@ -0,0 +1,275 @@
++/** Real OAuth HTTP + Prisma + MCP SDK; no production or provider credentials. */
++require("../lark/helpers/preload");
++const { MockMcp } = require("./helpers/mockMcp");
++const crypto = require("crypto");
++const prisma = require("../../../utils/prisma");
++const Layer = require("../../../utils/MCP");
++const { PersonalMcpGrant: Grant } = require("../../../models/personalMcpGrant");
++const caller = require("../../../utils/MCP/personalCaller");
++const oauth = require("../../../utils/MCP/oauth");
++const { mcpOAuthEndpoints } = require("../../../endpoints/mcpOAuth");
++const { SystemSettings } = require("../../../models/systemSettings");
++const http = require("http");
++jest.setTimeout(60000);
++let provider, workspace, a, b, layer, routes, original, logs;
++beforeAll(async () => {
++  original = {
++    NODE_ENV: process.env.NODE_ENV,
++    SERVER_URL: process.env.SERVER_URL,
++    JWT_SECRET: process.env.JWT_SECRET,
++  };
++  process.env.NODE_ENV = "development";
++  process.env.JWT_SECRET = "personal-e2e";
++  process.env.SERVER_URL = "http://localhost:3001";
++  process.env.SIG_KEY ||= "e2e-key";
++  process.env.SIG_SALT ||= "e2e-salt";
++  logs = ["log", "error", "warn"].map((name) =>
++    jest.spyOn(console, name).mockImplementation(() => {})
++  );
++  provider = await new MockMcp().start();
++  workspace = await prisma.workspaces.create({
++    data: { name: "Personal SDK E2E", slug: crypto.randomUUID() },
++  });
++  for (const name of ["a", "b"]) {
++    const user = await prisma.users.create({
++      data: { username: name + crypto.randomUUID(), password: "unused" },
++    });
++    await prisma.workspace_users.create({
++      data: { workspace_id: workspace.id, user_id: user.id },
++    });
++    if (name === "a") a = user;
++    else b = user;
++  }
++  layer = new Layer();
++  const config = {
++    type: "streamable",
++    url: `${provider.origin}/mcp`,
++    anythingllm: { perUserAuth: true },
++  };
++  jest
++    .spyOn(layer, "mcpServerConfigs", "get")
++    .mockReturnValue([{ name: "personal-medusa", server: config }]);
++  let registry = "{}";
++  jest
++    .spyOn(SystemSettings, "get")
++    .mockImplementation(async ({ label }) =>
++      label === "mcp_oauth_clients" ? { value: registry } : null
++    );
++  jest
++    .spyOn(SystemSettings, "_updateSettings")
++    .mockImplementation(async (values) => {
++      registry = values.mcp_oauth_clients;
++      return { success: true };
++    });
++  routes = {};
++  const register = (path, middleware, handler) =>
++    (routes[path] = handler || middleware);
++  mcpOAuthEndpoints({ get: register, post: register });
++});
++afterAll(async () => {
++  if (layer) await layer.personalRuntime.stopAll();
++  if (provider) await provider.stop();
++  if (workspace)
++    await prisma.workspaces.delete({ where: { id: workspace.id } });
++  for (const user of [a, b])
++    if (user) await prisma.users.delete({ where: { id: user.id } });
++  await prisma.$disconnect();
++  jest.restoreAllMocks();
++  for (const [key, value] of Object.entries(original))
++    if (value === undefined) delete process.env[key];
++    else process.env[key] = value;
++});
++async function invoke(path, user, values = {}) {
++  const response = {
++    locals: { user, browserSessionUserId: user?.id, multiUserMode: true },
++    statusCode: 200,
++    status(code) {
++      this.statusCode = code;
++      return this;
++    },
++    json(body) {
++      this.body = body;
++      return this;
++    },
++    redirect(url) {
++      this.location = url;
++      this.statusCode = 302;
++      return this;
++    },
++  };
++  await routes[path](
++    {
++      params: { workspaceSlug: workspace.slug, serverName: "personal-medusa" },
++      query: {},
++      body: {},
++      ...values,
++    },
++    response
++  );
++  return response;
++}
++async function connect(user, label) {
++  provider.label = label;
++  const start = await invoke(
++    "/mcp/oauth/start/:workspaceSlug/:serverName",
++    user
++  );
++  expect(start.statusCode).toBe(200);
++  const authorization = await fetch(start.body.url, { redirect: "manual" });
++  const callback = new URL(authorization.headers.get("location"));
++  const response = await invoke("/mcp/oauth/callback", null, {
++    query: Object.fromEntries(callback.searchParams),
++  });
++  expect(response.location).toContain("connected=1");
++}
++it("A/B share workspace but actual SDK calls use only their personal account, refresh and disconnect stay isolated", async () => {
++  await connect(a, "A private company");
++  await connect(b, "B private company");
++  const ca = await caller.fromResponse(
++    { locals: { user: a, browserSessionUserId: a.id } },
++    workspace
++  );
++  const cb = await caller.fromResponse(
++    { locals: { user: b, browserSessionUserId: b.id } },
++    workspace
++  );
++  const request = { name: "get_company_info", arguments: {} };
++  expect(
++    JSON.stringify(
++      await layer.callServerTool(workspace, "personal-medusa", request, ca)
++    )
++  ).toContain("A private company");
++  expect(
++    JSON.stringify(
++      await layer.callServerTool(workspace, "personal-medusa", request, cb)
++    )
++  ).toContain("B private company");
++  const config = layer.mcpServerConfigs[0].server;
++  const grant = await Grant.find(workspace.id, a.id, "personal-medusa", config);
++  await Grant.save(
++    workspace.id,
++    a.id,
++    "personal-medusa",
++    grant.version,
++    config,
++    {
++      access_token: grant.access_token,
++      refresh_token: grant.refresh_token,
++      expires_at: new Date(0),
++    }
++  );
++  expect(
++    JSON.stringify(
++      await layer.callServerTool(workspace, "personal-medusa", request, ca)
++    )
++  ).toContain("A private company");
++  expect(
++    provider
++      .requestsFor("/oauth/token")
++      .filter((req) => req.body.grant_type === "refresh_token")
++  ).toHaveLength(1);
++  const disconnected = await invoke("/mcp/oauth/disconnect", a, {
++    body: {
++      workspaceSlug: workspace.slug,
++      serverName: "personal-medusa",
++      userId: b.id,
++    },
++  });
++  expect(disconnected.body.success).toBe(true);
++  await expect(
++    layer.callServerTool(workspace, "personal-medusa", request, ca)
++  ).rejects.toThrow("MCP authentication required");
++  expect(
++    JSON.stringify(
++      await layer.callServerTool(workspace, "personal-medusa", request, cb)
++    )
++  ).toContain("B private company");
++  expect(JSON.stringify(logs.flatMap((spy) => spy.mock.calls))).not.toMatch(
++    /mcp-access-|mcp-refresh-|A private company|B private company/
++  );
++});
++
++it.each([401, 503])(
++  "real SDK never replays a tool mutation when HTTP response is %s",
++  async (status) => {
++    let mutations = 0,
++      calls = 0;
++    const mock = http.createServer(async (req, res) => {
++      let raw = "";
++      for await (const chunk of req) raw += chunk;
++      const body = raw ? JSON.parse(raw) : {};
++      res.setHeader("Content-Type", "application/json");
++      if (body.method === "initialize")
++        return res.end(
++          JSON.stringify({
++            jsonrpc: "2.0",
++            id: body.id,
++            result: {
++              protocolVersion: "2025-03-26",
++              capabilities: { tools: {} },
++              serverInfo: { name: "mutation-fixture", version: "1" },
++            },
++          })
++        );
++      if (body.method === "notifications/initialized") {
++        res.statusCode = 202;
++        return res.end();
++      }
++      if (body.method === "tools/list")
++        return res.end(
++          JSON.stringify({
++            jsonrpc: "2.0",
++            id: body.id,
++            result: {
++              tools: [{ name: "mutate", inputSchema: { type: "object" } }],
++            },
++          })
++        );
++      if (body.method === "tools/call") {
++        calls++;
++        mutations++;
++        res.statusCode = status;
++        return res.end(JSON.stringify({ error: "failure-after-mutation" }));
++      }
++      res.statusCode = 405;
++      res.end();
++    });
++    await new Promise((resolve) => mock.listen(0, "127.0.0.1", resolve));
++    const name = `mutation-${status}`;
++    const config = {
++      type: "streamable",
++      url: `http://127.0.0.1:${mock.address().port}/mcp`,
++      anythingllm: { perUserAuth: true },
++    };
++    const originalConfigs = layer.mcpServerConfigs;
++    const getter = jest
++      .spyOn(layer, "mcpServerConfigs", "get")
++      .mockReturnValue([...originalConfigs, { name, server: config }]);
++    try {
++      const grant = await Grant.begin(workspace.id, a.id, name, config);
++      await Grant.save(workspace.id, a.id, name, grant.version, config, {
++        access_token: "fixture-public-mcp-token",
++        refresh_token: "fixture-refresh",
++      });
++      const identity = await caller.fromResponse(
++        { locals: { user: a, browserSessionUserId: a.id } },
++        workspace
++      );
++      await expect(
++        layer.callServerTool(
++          workspace,
++          name,
++          { name: "mutate", arguments: {} },
++          identity
++        )
++      ).rejects.toThrow();
++      expect(calls).toBe(1);
++      expect(mutations).toBe(1);
++    } finally {
++      await layer.personalRuntime.stop(workspace.id, name);
++      getter.mockReturnValue(originalConfigs);
++      mock.closeAllConnections();
++      await new Promise((resolve) => mock.close(resolve));
++    }
++  }
++);
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/endpoints/personalMcpOAuth.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/endpoints/personalMcpOAuth.test.js
+new file mode 100644
+index 0000000..c6b637c
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/endpoints/personalMcpOAuth.test.js
+@@ -0,0 +1,295 @@
++/* global jest */
++const {
++  describe,
++  it,
++  expect,
++  beforeAll,
++  afterAll,
++  beforeEach,
++  afterEach,
++} = require("@jest/globals");
++require("../utils/lark/_polyfill");
++jest.mock("../../utils/MCP", () => jest.fn());
++const crypto = require("crypto");
++const prisma = require("../../utils/prisma");
++const Layer = require("../../utils/MCP");
++const oauth = require("../../utils/MCP/oauth");
++const { PersonalMcpGrant: Grant } = require("../../models/personalMcpGrant");
++const { mcpOAuthEndpoints } = require("../../endpoints/mcpOAuth");
++let workspace, a, b, routes, config, stop;
++beforeAll(async () => {
++  process.env.JWT_SECRET = "personal-state-test";
++  process.env.SERVER_URL = "https://workspace.example";
++  process.env.SIG_KEY ||= "test-key";
++  process.env.SIG_SALT ||= "test-salt";
++  workspace = await prisma.workspaces.create({
++    data: { name: "Personal endpoints", slug: crypto.randomUUID() },
++  });
++  for (const name of ["a", "b"]) {
++    const user = await prisma.users.create({
++      data: { username: name + crypto.randomUUID(), password: "unused" },
++    });
++    await prisma.workspace_users.create({
++      data: { workspace_id: workspace.id, user_id: user.id },
++    });
++    if (name === "a") a = user;
++    else b = user;
++  }
++});
++beforeEach(async () => {
++  Layer.returnMCPResult = (value) => JSON.stringify(value);
++  config = {
++    url: "https://configurable.example/mcp",
++    type: "http",
++    anythingllm: { perUserAuth: true },
++  };
++  stop = jest.fn().mockResolvedValue();
++  Layer.mockImplementation(() => ({
++    findServerConfig: async () => ({ server: config }),
++    mcpServerConfigs: [{ name: "medusa", server: config }],
++    workspaceServerConfigs: async () => [],
++    personalRuntime: {
++      stop,
++      tools: async () => [{ name: "read" }],
++      call: async () => ({ content: [{ text: "private-call" }] }),
++    },
++  }));
++  jest.spyOn(oauth, "authorizeUrl").mockImplementation(async (args) => {
++    const payload = {
++      wsSlug: args.wsSlug,
++      serverName: args.serverName,
++      userId: args.userId,
++      nonce: crypto.randomUUID(),
++      exp: Date.now() + 600000,
++    };
++    const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
++    const state =
++      encoded +
++      "." +
++      crypto
++        .createHmac("sha256", process.env.JWT_SECRET)
++        .update(encoded)
++        .digest("base64url");
++    return {
++      ...payload,
++      state,
++      codeVerifier: "verifier",
++      url: `https://store.teamredball.com/mcp-auth/authorize?state=${state}`,
++    };
++  });
++  jest.spyOn(oauth, "exchangeCode").mockResolvedValue({
++    access_token: "private-access",
++    refresh_token: "private-refresh",
++  });
++  jest.spyOn(oauth, "revokeTokens").mockResolvedValue(true);
++  routes = {};
++  const register = (path, middleware, handler) =>
++    (routes[path] =
++      typeof middleware === "function"
++        ? { middleware: [], handler: middleware }
++        : { middleware, handler });
++  mcpOAuthEndpoints({ get: register, post: register });
++  await prisma.personal_mcp_grants.deleteMany({
++    where: { workspace_id: workspace.id },
++  });
++});
++afterEach(async () => {
++  await prisma.lark_oauth_states.deleteMany({
++    where: { user_id: { in: [a.id, b.id] }, mode: "mcp" },
++  });
++  jest.restoreAllMocks();
++});
++afterAll(async () => {
++  await prisma.workspaces.delete({ where: { id: workspace.id } });
++  for (const user of [a, b])
++    await prisma.users.delete({ where: { id: user.id } });
++  await prisma.$disconnect();
++});
++async function invoke(path, user = a, values = {}, verified = true) {
++  const route = routes[path];
++  expect(route).toBeDefined();
++  const req = {
++    params: {
++      workspaceSlug: workspace.slug,
++      serverName: "medusa",
++      slug: workspace.slug,
++      name: "medusa",
++    },
++    query: {},
++    body: {},
++    ...values,
++  };
++  const res = {
++    locals: {
++      user,
++      multiUserMode: true,
++      ...(verified && user ? { browserSessionUserId: user.id } : {}),
++    },
++    statusCode: 200,
++    status(code) {
++      this.statusCode = code;
++      return this;
++    },
++    json(value) {
++      this.body = value;
++      return this;
++    },
++    sendStatus(code) {
++      this.statusCode = code;
++      return this;
++    },
++    end() {
++      return this;
++    },
++    redirect(value) {
++      this.location = value;
++      this.statusCode = 302;
++      return this;
++    },
++  };
++  let allowed = true;
++  // The browser validator is tested independently; execute real authorization guard.
++  for (const middleware of route.middleware.slice(1)) {
++    allowed = false;
++    await middleware(req, res, () => (allowed = true));
++    if (!allowed) break;
++  }
++  if (allowed) await route.handler(req, res);
++  return res;
++}
++async function start(user = a) {
++  const res = await invoke(
++    "/mcp/oauth/start/:workspaceSlug/:serverName",
++    user,
++    { body: { userId: b.id } }
++  );
++  expect(res.statusCode).toBe(200);
++  return new URL(res.body.url).searchParams.get("state");
++}
++async function callback(state) {
++  return invoke("/mcp/oauth/callback", null, {
++    query: { state, code: "valid" },
++  });
++}
++describe("personal OAuth and member surface", () => {
++  it("member direct call accepts only own advertised tools with bounded output and no management access", async () => {
++    const response = await invoke(
++      "/workspace/:slug/mcp-personal/:name/call",
++      a,
++      { body: { toolName: "read", arguments: {}, userId: b.id } }
++    );
++    expect(response.statusCode).toBe(200);
++    expect(response.body.result).toContain("private-call");
++    expect(response.body.truncated).toBe(false);
++  });
++  it("ordinary members connect only own grant and callback returns to member chat", async () => {
++    const res = await callback(await start());
++    expect(res.location).toContain(`/workspace/${workspace.slug}?`);
++    expect(res.location).toContain("connected=1");
++    expect(await Grant.find(workspace.id, b.id, "medusa", config)).toBeNull();
++    expect(
++      (await Grant.find(workspace.id, a.id, "medusa", config)).access_token
++    ).toBe("private-access");
++    const status = await invoke("/workspace/:slug/mcp-personal", b);
++    expect(status.body.servers[0].connected).toBe(false);
++    expect(JSON.stringify(status.body)).not.toContain("private-access");
++  });
++  it("API-key/anonymous/unverified identities fail closed", async () => {
++    expect(
++      (
++        await invoke(
++          "/mcp/oauth/start/:workspaceSlug/:serverName",
++          a,
++          {},
++          false
++        )
++      ).statusCode
++    ).toBe(401);
++    expect(
++      (await invoke("/workspace/:slug/mcp-personal", null)).statusCode
++    ).toBe(401);
++  });
++  it.each(["membership", "suspended", "destination"])(
++    "callback rechecks %s before exchange",
++    async (mode) => {
++      const state = await start();
++      if (mode === "membership")
++        await prisma.workspace_users.deleteMany({
++          where: { workspace_id: workspace.id, user_id: a.id },
++        });
++      if (mode === "suspended")
++        await prisma.users.update({
++          where: { id: a.id },
++          data: { suspended: 1 },
++        });
++      if (mode === "destination")
++        config = { ...config, url: "https://changed.example/mcp" };
++      const res = await callback(state);
++      expect(res.location).toContain("error=oauth_callback_failed");
++      expect(oauth.exchangeCode).not.toHaveBeenCalled();
++      if (mode === "membership")
++        await prisma.workspace_users.create({
++          data: { workspace_id: workspace.id, user_id: a.id },
++        });
++      if (mode === "suspended")
++        await prisma.users.update({
++          where: { id: a.id },
++          data: { suspended: 0 },
++        });
++    }
++  );
++  it("single-use callback cannot overwrite disconnect or newer reconnect", async () => {
++    const state = await start();
++    await invoke("/mcp/oauth/disconnect", a, {
++      body: {
++        workspaceSlug: workspace.slug,
++        serverName: "medusa",
++        userId: b.id,
++      },
++    });
++    expect((await callback(state)).statusCode).toBe(400);
++    const newer = await start();
++    expect((await callback(newer)).location).toContain("connected=1");
++    expect((await callback(newer)).statusCode).toBe(400);
++  });
++  it("revokes remotely before local clear; remote failure still clears only A", async () => {
++    await callback(await start(a));
++    await callback(await start(b));
++    let observed;
++    oauth.revokeTokens.mockImplementationOnce(async () => {
++      observed = (await Grant.find(workspace.id, a.id, "medusa", config))
++        .enabled;
++      throw new Error("private-provider-body");
++    });
++    const res = await invoke("/mcp/oauth/disconnect", a, {
++      body: { workspaceSlug: workspace.slug, serverName: "medusa" },
++    });
++    expect(observed).toBe(true);
++    expect(res.body).toEqual({ success: true, remoteRevoked: false });
++    expect(
++      (await Grant.find(workspace.id, a.id, "medusa", config)).enabled
++    ).toBe(false);
++    expect(
++      (await Grant.find(workspace.id, b.id, "medusa", config)).enabled
++    ).toBe(true);
++  });
++  it("disconnect cannot clear a grant reconnected during remote revocation", async () => {
++    await callback(await start());
++    oauth.revokeTokens.mockImplementationOnce(async () => {
++      await callback(await start());
++      return true;
++    });
++    await invoke("/mcp/oauth/disconnect", a, {
++      body: { workspaceSlug: workspace.slug, serverName: "medusa" },
++    });
++    expect(
++      (await Grant.find(workspace.id, a.id, "medusa", config)).enabled
++    ).toBe(true);
++  });
++  it("ordinary members cannot use the legacy workspace grant flow", async () => {
++    config.anythingllm = { perWorkspaceAuth: true };
++    expect(
++      (await invoke("/mcp/oauth/start/:workspaceSlug/:serverName")).statusCode
++    ).toBe(401);
++  });
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/endpoints/personalMcpSocket.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/endpoints/personalMcpSocket.test.js
+new file mode 100644
+index 0000000..f42606f
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/endpoints/personalMcpSocket.test.js
+@@ -0,0 +1,112 @@
++/* global jest */
++const {
++  describe,
++  it,
++  expect,
++  beforeAll,
++  afterAll,
++  afterEach,
++} = require("@jest/globals");
++require("../utils/lark/_polyfill");
++jest.mock("../../utils/agents", () => ({ AgentHandler: jest.fn() }));
++jest.mock("../../models/telemetry", () => ({
++  Telemetry: { sendTelemetry: jest.fn().mockResolvedValue() },
++}));
++jest.mock("../../utils/MCP", () => jest.fn());
++jest.mock("../../utils/agents/aibitat/plugins/websocket", () => ({
++  WEBSOCKET_BAIL_COMMANDS: [],
++}));
++const { EventEmitter } = require("events");
++const crypto = require("crypto");
++const JWT = require("jsonwebtoken");
++const prisma = require("../../utils/prisma");
++const { AgentHandler } = require("../../utils/agents");
++const Layer = require("../../utils/MCP");
++const caller = require("../../utils/MCP/personalCaller");
++const { agentWebsocket } = require("../../endpoints/agentWebsocket");
++let workspace, a, b;
++beforeAll(async () => {
++  process.env.JWT_SECRET = "socket-endpoint-test";
++  workspace = await prisma.workspaces.create({
++    data: { name: "Socket endpoint", slug: crypto.randomUUID() },
++  });
++  for (const name of ["a", "b"]) {
++    const user = await prisma.users.create({
++      data: { username: name + crypto.randomUUID(), password: "unused" },
++    });
++    await prisma.workspace_users.create({
++      data: { workspace_id: workspace.id, user_id: user.id },
++    });
++    if (name === "a") a = user;
++    else b = user;
++  }
++});
++afterEach(() => jest.clearAllMocks());
++afterAll(async () => {
++  await prisma.workspaces.delete({ where: { id: workspace.id } });
++  for (const user of [a, b])
++    await prisma.users.delete({ where: { id: user.id } });
++  await prisma.$disconnect();
++});
++describe("actual agent websocket endpoint personal exposure", () => {
++  it.each(["owner", "other", "anonymous", "api-only"])(
++    "preserves ordinary chats but only owner session gets personal identity: %s",
++    async (mode) => {
++      Layer.mockImplementation(() => ({
++        workspaceServerConfigs: async () => [],
++        mcpServerConfigs: [
++          { name: "legacy", server: { url: "https://legacy.example/mcp" } },
++          { name: "personal", server: { anythingllm: { perUserAuth: true } } },
++        ],
++      }));
++      const handler = {
++        invocation: { uuid: "known", user_id: a.id, workspace },
++        init: jest.fn(),
++        createAIbitat: jest.fn().mockResolvedValue(),
++        startAgentCluster: jest.fn().mockResolvedValue(),
++      };
++      const legacyTool = jest.fn();
++      const personalTool = jest.fn();
++      handler.startAgentCluster.mockImplementation(async () => {
++        legacyTool();
++        if (handler.invocation.mcpCaller) {
++          await caller.assert(handler.invocation.mcpCaller, workspace);
++          personalTool();
++        }
++      });
++      handler.init.mockResolvedValue(handler);
++      AgentHandler.mockImplementation(() => handler);
++      let route;
++      agentWebsocket({ ws: (_path, fn) => (route = fn) });
++      const socket = new EventEmitter();
++      socket.close = jest.fn();
++      socket.send = jest.fn();
++      socket.OPEN = 1;
++      socket.readyState = 1;
++      const headers = {};
++      if (["owner", "other"].includes(mode))
++        headers["sec-websocket-protocol"] =
++          "anythingllm-agent, anythingllm-session." +
++          JWT.sign(
++            { id: mode === "owner" ? a.id : b.id },
++            process.env.JWT_SECRET
++          );
++      if (mode === "api-only") headers.authorization = "Bearer fixture-api-key";
++      await route(socket, { params: { uuid: "known" }, headers });
++      expect(handler.startAgentCluster).toHaveBeenCalledTimes(1);
++      expect(legacyTool).toHaveBeenCalledTimes(1);
++      expect(personalTool).toHaveBeenCalledTimes(mode === "owner" ? 1 : 0);
++      expect(socket.close).not.toHaveBeenCalled();
++      if (mode === "owner")
++        expect(
++          await caller.assert(handler.invocation.mcpCaller, workspace)
++        ).toBe(a.id);
++      else {
++        expect(handler.invocation.mcpCaller).toBeNull();
++        await expect(
++          caller.assert(handler.invocation.mcpCaller, workspace)
++        ).rejects.toThrow("personal_auth_required");
++      }
++    }
++  );
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalClient.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalClient.test.js
+new file mode 100644
+index 0000000..d7a8cc3
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalClient.test.js
+@@ -0,0 +1,221 @@
++/* global jest */
++const {
++  describe,
++  it,
++  expect,
++  beforeAll,
++  afterAll,
++  beforeEach,
++} = require("@jest/globals");
++require("../../utils/lark/_polyfill");
++const crypto = require("crypto");
++const prisma = require("../../../utils/prisma");
++const {
++  validateWorkspaceServerConfig,
++} = require("../../../utils/MCP/serverConfig");
++let Grant, caller, workspace, a, b;
++const config = {
++  url: "https://medusa.example/mcp",
++  type: "http",
++  anythingllm: { perUserAuth: true },
++};
++beforeAll(async () => {
++  process.env.SIG_KEY ||= "personal-test-key";
++  process.env.SIG_SALT ||= "personal-test-salt";
++  workspace = await prisma.workspaces.create({
++    data: { name: "Personal MCP", slug: crypto.randomUUID() },
++  });
++  a = await prisma.users.create({
++    data: { username: crypto.randomUUID(), password: "unused" },
++  });
++  b = await prisma.users.create({
++    data: { username: crypto.randomUUID(), password: "unused" },
++  });
++  for (const user of [a, b])
++    await prisma.workspace_users.create({
++      data: { workspace_id: workspace.id, user_id: user.id },
++    });
++});
++beforeEach(async () => {
++  Grant = require("../../../models/personalMcpGrant").PersonalMcpGrant;
++  caller = require("../../../utils/MCP/personalCaller");
++  await prisma.personal_mcp_grants.deleteMany({
++    where: { workspace_id: workspace.id },
++  });
++});
++afterAll(async () => {
++  if (workspace)
++    await prisma.workspaces.delete({ where: { id: workspace.id } });
++  if (a) await prisma.users.delete({ where: { id: a.id } });
++  if (b) await prisma.users.delete({ where: { id: b.id } });
++  await prisma.$disconnect();
++});
++describe("personal MCP config and grants", () => {
++  it("stores only a bounded public account label and ignores raw provider identity objects", async () => {
++    const grant = await Grant.begin(workspace.id, a.id, "medusa", config);
++    await Grant.save(workspace.id, a.id, "medusa", grant.version, config, {
++      access_token: "private-token",
++      account_label: "  Alice\nShop  ",
++      medusa_jwt: "must-not-store",
++    });
++    const found = await Grant.find(workspace.id, a.id, "medusa", config);
++    expect(found.account_label).toBe("Alice Shop");
++    expect(found.medusa_jwt).toBeUndefined();
++  });
++  it("accepts personal remote auth but rejects ambiguous auth modes", () => {
++    expect(validateWorkspaceServerConfig(config)).toEqual(config);
++    expect(() =>
++      validateWorkspaceServerConfig({
++        ...config,
++        anythingllm: { perUserAuth: true, perWorkspaceAuth: true },
++      })
++    ).toThrow("invalid_anythingllm");
++    expect(() =>
++      validateWorkspaceServerConfig({
++        ...config,
++        anythingllm: { perUserAuth: "yes" },
++      })
++    ).toThrow("invalid_anythingllm");
++    expect(() =>
++      validateWorkspaceServerConfig({
++        command: "node",
++        anythingllm: { perUserAuth: true },
++      })
++    ).toThrow("stdio_not_supported");
++  });
++  it("encrypts tokens and isolates A/B in one workspace without copying legacy tokens", async () => {
++    const grant = await Grant.begin(workspace.id, a.id, "medusa", config);
++    expect(
++      await Grant.save(workspace.id, a.id, "medusa", grant.version, config, {
++        access_token: "private-access",
++        refresh_token: "private-refresh",
++      })
++    ).toBe(true);
++    expect(await Grant.find(workspace.id, b.id, "medusa", config)).toBeNull();
++    const row = await prisma.personal_mcp_grants.findFirst({
++      where: { user_id: a.id },
++    });
++    expect(JSON.stringify(row)).not.toMatch(/private-access|private-refresh/);
++    expect(
++      await Grant.find(workspace.id, a.id, "medusa", config)
++    ).toMatchObject({
++      enabled: true,
++      access_token: "private-access",
++      refresh_token: "private-refresh",
++    });
++  });
++  it("disconnect tombstone prevents stale refresh and callback overwrite", async () => {
++    const first = await Grant.begin(workspace.id, a.id, "medusa", config);
++    await Grant.clear(workspace.id, a.id, "medusa");
++    expect(
++      await Grant.save(workspace.id, a.id, "medusa", first.version, config, {
++        access_token: "stale",
++      })
++    ).toBe(false);
++    const second = await Grant.begin(workspace.id, a.id, "medusa", config);
++    expect(
++      await Grant.save(workspace.id, a.id, "medusa", second.version, config, {
++        access_token: "fresh",
++      })
++    ).toBe(true);
++    expect(
++      await Grant.save(workspace.id, a.id, "medusa", second.version, config, {
++        access_token: "stale-refresh",
++      })
++    ).toBe(false);
++    expect(
++      (await Grant.find(workspace.id, a.id, "medusa", config)).access_token
++    ).toBe("fresh");
++  });
++  it("definition changes invalidate all personal grants and old callback versions", async () => {
++    const first = await Grant.begin(workspace.id, a.id, "medusa", config);
++    await Grant.invalidate(workspace.id, "medusa");
++    expect(
++      await Grant.save(workspace.id, a.id, "medusa", first.version, config, {
++        access_token: "stale",
++      })
++    ).toBe(false);
++    expect(
++      await Grant.find(workspace.id, a.id, "medusa", {
++        ...config,
++        url: "https://other.example/mcp",
++      })
++    ).toBeNull();
++  });
++  it("database refresh lease is owner scoped and disconnect clears refresh but not reconnect", async () => {
++    const first = await Grant.begin(workspace.id, a.id, "medusa", config);
++    await Grant.save(workspace.id, a.id, "medusa", first.version, config, {
++      access_token: "initial",
++      refresh_token: "refresh",
++    });
++    const original = await Grant.find(workspace.id, a.id, "medusa", config);
++    const lease = await Grant.acquireRefresh(
++      workspace.id,
++      a.id,
++      "medusa",
++      original.version,
++      config
++    );
++    expect(lease).toBe(original.version + 1);
++    expect(
++      await Grant.acquireRefresh(
++        workspace.id,
++        a.id,
++        "medusa",
++        original.version,
++        config
++      )
++    ).toBeNull();
++    await Grant.save(workspace.id, a.id, "medusa", lease, config, {
++      access_token: "refreshed",
++      refresh_token: "rotated",
++    });
++    await Grant.clearGeneration(
++      workspace.id,
++      a.id,
++      "medusa",
++      original.generation
++    );
++    expect(
++      (await Grant.find(workspace.id, a.id, "medusa", config)).enabled
++    ).toBe(false);
++    const newer = await Grant.begin(workspace.id, a.id, "medusa", config);
++    await Grant.save(workspace.id, a.id, "medusa", newer.version, config, {
++      access_token: "reconnected",
++    });
++    await Grant.clearGeneration(
++      workspace.id,
++      a.id,
++      "medusa",
++      original.generation
++    );
++    expect(
++      (await Grant.find(workspace.id, a.id, "medusa", config)).access_token
++    ).toBe("reconnected");
++  });
++  it("requires a verified caller, active user and current membership", async () => {
++    await expect(
++      caller.fromResponse({ locals: { user: a } }, workspace)
++    ).rejects.toThrow("personal_auth_required");
++    const response = { locals: { user: a, browserSessionUserId: a.id } };
++    const verified = await caller.fromResponse(response, workspace);
++    expect(await caller.assert(verified, workspace)).toBe(a.id);
++    await expect(caller.assert({ userId: a.id }, workspace)).rejects.toThrow(
++      "personal_auth_required"
++    );
++    await prisma.users.update({ where: { id: a.id }, data: { suspended: 1 } });
++    await expect(caller.assert(verified, workspace)).rejects.toThrow(
++      "personal_auth_required"
++    );
++    await prisma.users.update({ where: { id: a.id }, data: { suspended: 0 } });
++    await prisma.workspace_users.deleteMany({
++      where: { workspace_id: workspace.id, user_id: a.id },
++    });
++    await expect(caller.assert(verified, workspace)).rejects.toThrow(
++      "personal_auth_required"
++    );
++    await prisma.workspace_users.create({
++      data: { workspace_id: workspace.id, user_id: a.id },
++    });
++  });
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalExecution.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalExecution.test.js
+new file mode 100644
+index 0000000..3d419b3
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalExecution.test.js
+@@ -0,0 +1,72 @@
++/* global jest */
++const { it, expect } = require("@jest/globals");
++require("../../utils/lark/_polyfill");
++jest.mock("../../../models/telemetry", () => ({
++  Telemetry: { sendTelemetry: jest.fn() },
++}));
++const AIbitat = require("../../../utils/agents/aibitat");
++it("sanitizes private-context provider failures instead of logging echoed tool results", async () => {
++  const instance = new AIbitat({
++    handlerProps: { invocation: { personalMcpUsed: true }, log: jest.fn() },
++  });
++  const provider = {
++    resetCumulativeUsage: jest.fn(),
++    complete: jest.fn().mockRejectedValue(new Error("private-echoed-result")),
++  };
++  Object.defineProperty(instance, "providerInstance", { get: () => provider });
++  const log = jest.spyOn(console, "error").mockImplementation(() => {});
++  await expect(instance.handleExecution()).rejects.toThrow(
++    "The agent model failed to respond"
++  );
++  expect(JSON.stringify(log.mock.calls)).not.toContain("private-echoed-result");
++  log.mockRestore();
++});
++it.each(["handleExecution", "handleAsyncExecution"])(
++  "actual %s never emits private args/results to generic trace listeners or introspection",
++  async (method) => {
++    const instance = new AIbitat({
++      handlerProps: { invocation: {}, log: jest.fn() },
++    });
++    const completion = {
++      functionCall: {
++        name: "personal-read",
++        arguments: { secret: "private-args" },
++      },
++    };
++    const provider = {
++      verbose: true,
++      resetCumulativeUsage: jest.fn(),
++      getCumulativeUsage: () => ({}),
++      complete: jest
++        .fn()
++        .mockResolvedValueOnce(completion)
++        .mockResolvedValue({ textResponse: "safe-final" }),
++      stream: jest
++        .fn()
++        .mockResolvedValueOnce(completion)
++        .mockResolvedValue({ textResponse: "safe-final" }),
++    };
++    Object.defineProperty(instance, "providerInstance", {
++      get: () => provider,
++    });
++    instance.introspect = jest.fn();
++    const traces = jest.fn();
++    instance.emitter.on("toolCallResult", traces);
++    instance.function({
++      name: "personal-read",
++      privateMcp: true,
++      handler: async () => {
++        instance.personalMcpUsed = true;
++        return "private-result";
++      },
++    });
++    expect(await instance[method]([], [{}], "@agent")).toBe("safe-final");
++    expect(traces).not.toHaveBeenCalled();
++    expect(
++      JSON.stringify([
++        instance.handlerProps.log.mock.calls,
++        instance.introspect.mock.calls,
++      ])
++    ).not.toMatch(/private-args|private-result/);
++  }
++);
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalFrontend.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalFrontend.test.js
+new file mode 100644
+index 0000000..1f4f9b8
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalFrontend.test.js
+@@ -0,0 +1,48 @@
++const { describe, it, expect } = require("@jest/globals");
++const fs = require("fs");
++const path = require("path");
++const vm = require("vm");
++const frontend = path.resolve(__dirname, "../../../../frontend/src");
++describe("personal frontend contract", () => {
++  it("accepts personal opt-in but rejects mixed workspace/personal auth", () => {
++    const source = fs
++      .readFileSync(path.join(frontend, "models/workspaceMcp.js"), "utf8")
++      .replace(/^import .*;$/gm, "")
++      .replace(/export default WorkspaceMcp;/, "")
++      .replace(/export /g, "");
++    const context = vm.createContext({ URL, TextEncoder });
++    vm.runInContext(
++      source + ";globalThis.validate = validateMcpConfig;",
++      context
++    );
++    const config = {
++      url: "https://configurable.example/mcp",
++      anythingllm: { perUserAuth: true },
++    };
++    expect(context.validate(config)).toBeNull();
++    expect(
++      context.validate({
++        ...config,
++        anythingllm: { perUserAuth: true, perWorkspaceAuth: true },
++      })
++    ).toBe("invalid_anythingllm");
++  });
++  it("member chat mounts personal controls without navigating to admin settings", () => {
++    const chat = fs.readFileSync(
++      path.join(frontend, "components/WorkspaceChat/ChatContainer/index.jsx"),
++      "utf8"
++    );
++    expect(chat).toContain("<PersonalMcpConnections");
++    const ui = fs.readFileSync(
++      path.join(
++        frontend,
++        "components/WorkspaceChat/ChatContainer/PersonalMcpConnections.jsx"
++      ),
++      "utf8"
++    );
++    expect(ui).toContain("WorkspaceMcp.personal");
++    expect(ui).toContain("WorkspaceMcp.start");
++    expect(ui).toContain("WorkspaceMcp.disconnect");
++    expect(ui).not.toContain("/settings/");
++  });
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalPostgresql.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalPostgresql.test.js
+new file mode 100644
+index 0000000..abd3630
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalPostgresql.test.js
+@@ -0,0 +1,83 @@
++const { it, expect } = require("@jest/globals");
++const fs = require("fs");
++const path = require("path");
++const { Client } = require("pg");
++
++it("standalone new-table migration works on PostgreSQL without SQLite history", async () => {
++  const url = process.env.PERSONAL_MCP_TEST_PG_URL;
++  if (!url)
++    throw new Error(
++      "Set PERSONAL_MCP_TEST_PG_URL to the dedicated disposable PG database"
++    );
++  const parsed = new URL(url);
++  if (
++    parsed.hostname !== "127.0.0.1" ||
++    parsed.port !== "55471" ||
++    parsed.pathname !== "/anythingllm_mcp_oauth_test"
++  )
++    throw new Error("Refusing non-fixture PG destination");
++  const client = new Client({ connectionString: url });
++  await client.connect();
++  try {
++    await client.query("BEGIN");
++    await client.query("CREATE SCHEMA personal_client_migration_verify");
++    await client.query(
++      "SET LOCAL search_path TO personal_client_migration_verify"
++    );
++    // Independent baseline fixture, not another worker\'s tables or migration history.
++    await client.query(
++      "CREATE TABLE users (id SERIAL PRIMARY KEY); CREATE TABLE workspaces (id SERIAL PRIMARY KEY);"
++    );
++    const sql = fs
++      .readFileSync(
++        path.resolve(
++          __dirname,
++          "../../../prisma/postgresql/personal-mcp-grants.sql"
++        ),
++        "utf8"
++      )
++      .replace(/^BEGIN;|^COMMIT;/gm, "");
++    expect(sql).not.toMatch(/AUTOINCREMENT|PRAGMA|INSERT.*SELECT/i);
++    await client.query(sql);
++    await client.query(
++      "INSERT INTO users DEFAULT VALUES; INSERT INTO users DEFAULT VALUES; INSERT INTO workspaces DEFAULT VALUES;"
++    );
++    await client.query(
++      "INSERT INTO personal_mcp_grants (workspace_id,user_id,server_name,fingerprint,tokens) VALUES (1,1,'medusa','fp','cipher-a'),(1,2,'medusa','fp','cipher-b')"
++    );
++    const first = await client.query(
++      "UPDATE personal_mcp_grants SET version=version+1, tokens=NULL WHERE workspace_id=1 AND user_id=1 AND server_name='medusa' AND version=1"
++    );
++    const stale = await client.query(
++      "UPDATE personal_mcp_grants SET tokens='stale' WHERE workspace_id=1 AND user_id=1 AND server_name='medusa' AND version=1"
++    );
++    expect(first.rowCount).toBe(1);
++    expect(stale.rowCount).toBe(0);
++    expect(
++      (
++        await client.query(
++          "SELECT tokens FROM personal_mcp_grants WHERE user_id=2"
++        )
++      ).rows[0].tokens
++    ).toBe("cipher-b");
++    await client.query("DELETE FROM users WHERE id=1");
++    expect(
++      (
++        await client.query(
++          "SELECT count(*)::int AS count FROM personal_mcp_grants"
++        )
++      ).rows[0].count
++    ).toBe(1);
++    await client.query("DELETE FROM workspaces WHERE id=1");
++    expect(
++      (
++        await client.query(
++          "SELECT count(*)::int AS count FROM personal_mcp_grants"
++        )
++      ).rows[0].count
++    ).toBe(0);
++  } finally {
++    await client.query("ROLLBACK");
++    await client.end();
++  }
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalPrivacy.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalPrivacy.test.js
+new file mode 100644
+index 0000000..f2f8463
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalPrivacy.test.js
+@@ -0,0 +1,123 @@
++/* global jest */
++const { describe, it, expect, beforeAll, afterAll } = require("@jest/globals");
++require("../../utils/lark/_polyfill");
++const crypto = require("crypto");
++const JWT = require("jsonwebtoken");
++const prisma = require("../../../utils/prisma");
++const caller = require("../../../utils/MCP/personalCaller");
++const {
++  chatHistory,
++} = require("../../../utils/agents/aibitat/plugins/chat-history");
++const { WorkspaceChats } = require("../../../models/workspaceChats");
++let workspace, a, b;
++beforeAll(async () => {
++  process.env.JWT_SECRET = "socket-personal-test";
++  workspace = await prisma.workspaces.create({
++    data: { name: "Socket ownership", slug: crypto.randomUUID() },
++  });
++  for (const name of ["a", "b"]) {
++    const user = await prisma.users.create({
++      data: { username: name + crypto.randomUUID(), password: "unused" },
++    });
++    await prisma.workspace_users.create({
++      data: { workspace_id: workspace.id, user_id: user.id },
++    });
++    if (name === "a") a = user;
++    else b = user;
++  }
++});
++afterAll(async () => {
++  await prisma.workspaces.delete({ where: { id: workspace.id } });
++  for (const user of [a, b])
++    await prisma.users.delete({ where: { id: user.id } });
++  await prisma.$disconnect();
++});
++describe("personal websocket ownership and shared history", () => {
++  it("redacts follow-up input before pre-registering a chat even when the turn aborts", async () => {
++    const create = jest
++      .spyOn(WorkspaceChats, "new")
++      .mockResolvedValue({ chat: { id: 123 } });
++    const handlers = [];
++    const instance = {
++      personalMcpUsed: true,
++      handlerProps: {
++        invocation: { workspace_id: workspace.id, user_id: a.id },
++      },
++      onAbort: jest.fn(),
++      onMessage: (fn) => handlers.push(fn),
++      registerChatId: jest.fn(),
++    };
++    chatHistory.plugin().setup(instance);
++    await handlers[0]({ from: "USER", content: "private-follow-up-aborted" });
++    expect(JSON.stringify(create.mock.calls)).not.toContain(
++      "private-follow-up-aborted"
++    );
++    create.mockRestore();
++  });
++  it("suppresses provider diagnostics once invocation contains private tool context", () => {
++    const Provider = require("../../../utils/agents/aibitat/providers/ai-provider");
++    const instance = new Provider();
++    instance.attachHandlerProps({ invocation: { personalMcpUsed: true } });
++    const log = jest.spyOn(console, "log").mockImplementation(() => {});
++    instance.providerLog("private-result", { text: "private-result" });
++    expect(log).not.toHaveBeenCalled();
++    log.mockRestore();
++  });
++  it("only the invocation owner can get a personal caller from a signed session subprotocol", async () => {
++    const invocation = { workspace, user_id: a.id };
++    const request = (user) => ({
++      headers: {
++        "sec-websocket-protocol":
++          "anythingllm-agent, anythingllm-session." +
++          JWT.sign({ id: user.id }, process.env.JWT_SECRET, {
++            expiresIn: "1h",
++          }),
++      },
++    });
++    expect(
++      await caller.assert(
++        await caller.fromSocket(request(a), invocation),
++        workspace
++      )
++    ).toBe(a.id);
++    await expect(caller.fromSocket(request(b), invocation)).rejects.toThrow(
++      "personal_auth_required"
++    );
++    await expect(
++      caller.fromSocket({ headers: {}, query: { userId: a.id } }, invocation)
++    ).rejects.toThrow("personal_auth_required");
++  });
++  it.each(["_store", "_storeSpecial"])(
++    "redacts private results and derived response from %s, excludes retrieval",
++    async (method) => {
++      const save = jest.spyOn(WorkspaceChats, "upsert").mockResolvedValue({});
++      const plugin = chatHistory.plugin();
++      const instance = {
++        personalMcpUsed: true,
++        trackedChatId: 123,
++        handlerProps: {
++          invocation: { workspace_id: workspace.id, user_id: a.id },
++        },
++        _pendingCitations: [{ text: "private-citation" }],
++        _pendingOutputs: [{ content: "private-output" }],
++        clearTrackedChatId: jest.fn(),
++        clearCitations: jest.fn(),
++        clearClarifyingQuestionSurveys: jest.fn(),
++      };
++      await plugin[method](instance, {
++        prompt: "private-follow-up-input",
++        response: "private-derived-result",
++        options: { storedResponse: () => "private-special-result" },
++      });
++      const saved = save.mock.calls[0][1];
++      expect(JSON.stringify(saved)).not.toMatch(
++        /private-derived|private-citation|private-output|private-special|private-follow-up/
++      );
++      expect(saved.include).toBe(false);
++      expect(saved.response.text).toBe(
++        "Personal MCP response is not stored in shared history."
++      );
++      save.mockRestore();
++    }
++  );
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalRevocation.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalRevocation.test.js
+new file mode 100644
+index 0000000..35c6552
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalRevocation.test.js
+@@ -0,0 +1,57 @@
++/* global jest */
++const { it, expect, afterEach } = require("@jest/globals");
++require("../../utils/lark/_polyfill");
++const oauth = require("../../../utils/MCP/oauth");
++const { SystemSettings } = require("../../../models/systemSettings");
++afterEach(() => jest.restoreAllMocks());
++it("uses configurable issuer revocation with client_id + token and accepts empty RFC7009 success", async () => {
++  const resource = "https://resource.example/mcp";
++  jest
++    .spyOn(SystemSettings, "get")
++    .mockResolvedValue({
++      value: JSON.stringify({ [resource]: { client_id: "public-client" } }),
++    });
++  const fetch = jest.spyOn(global, "fetch").mockImplementation(async (url) => {
++    if (String(url).includes("oauth-protected-resource"))
++      return {
++        ok: true,
++        json: async () => ({
++          resource,
++          authorization_servers: ["https://store.teamredball.com"],
++        }),
++      };
++    if (String(url).includes("oauth-authorization-server"))
++      return {
++        ok: true,
++        json: async () => ({
++          issuer: "https://store.teamredball.com",
++          code_challenge_methods_supported: ["S256"],
++          authorization_endpoint:
++            "https://store.teamredball.com/mcp-auth/authorize",
++          token_endpoint: "https://store.teamredball.com/mcp-auth/token",
++          registration_endpoint:
++            "https://store.teamredball.com/mcp-auth/register",
++          revocation_endpoint: "https://store.teamredball.com/mcp-auth/revoke",
++        }),
++      };
++    return { ok: true, status: 200 };
++  });
++  expect(
++    await oauth.revokeTokens(
++      { access_token: "private-access", refresh_token: "private-refresh" },
++      resource
++    )
++  ).toBe(true);
++  const revokes = fetch.mock.calls.filter((call) =>
++    String(call[0]).includes("/mcp-auth/revoke")
++  );
++  expect(revokes).toHaveLength(2);
++  expect(new URLSearchParams(revokes[0][1].body).get("client_id")).toBe(
++    "public-client"
++  );
++  expect(new URLSearchParams(revokes[0][1].body).get("token")).toBe(
++    "private-refresh"
++  );
++  expect(revokes[0][1].redirect).toBe("error");
++  expect(revokes[0][1].headers.Authorization).toBeUndefined();
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalRuntime.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalRuntime.test.js
+new file mode 100644
+index 0000000..efa3fec
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalRuntime.test.js
+@@ -0,0 +1,301 @@
++/* global jest */
++const {
++  describe,
++  it,
++  expect,
++  beforeAll,
++  afterAll,
++  beforeEach,
++  afterEach,
++} = require("@jest/globals");
++require("../../utils/lark/_polyfill");
++jest.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
++  Client: jest.fn(() => ({
++    connect: jest.fn().mockResolvedValue(),
++    close: jest.fn().mockResolvedValue(),
++    listTools: jest.fn().mockResolvedValue({
++      tools: [
++        { name: "read", inputSchema: {} },
++        { name: "write", inputSchema: {} },
++      ],
++    }),
++    callTool: jest
++      .fn()
++      .mockResolvedValue({ content: [{ text: "private-result" }] }),
++  })),
++}));
++for (const [file, name] of [
++  ["stdio", "StdioClientTransport"],
++  ["sse", "SSEClientTransport"],
++  ["streamableHttp", "StreamableHTTPClientTransport"],
++])
++  jest.doMock(`@modelcontextprotocol/sdk/client/${file}.js`, () => ({
++    [name]: jest.fn(() => ({})),
++  }));
++const fs = require("fs");
++const crypto = require("crypto");
++const prisma = require("../../../utils/prisma");
++const { PersonalMcpGrant: Grant } = require("../../../models/personalMcpGrant");
++const caller = require("../../../utils/MCP/personalCaller");
++const oauth = require("../../../utils/MCP/oauth");
++const Hypervisor = require("../../../utils/MCP/hypervisor");
++const Layer = require("../../../utils/MCP");
++const { WorkspaceMcpServer } = require("../../../models/workspaceMcpServer");
++const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
++const {
++  StreamableHTTPClientTransport: Transport,
++} = require("@modelcontextprotocol/sdk/client/streamableHttp.js");
++let workspace, a, b, ca, cb, layer, config, logs;
++beforeAll(async () => {
++  process.env.SIG_KEY ||= "personal-test-key";
++  process.env.SIG_SALT ||= "personal-test-salt";
++  workspace = await prisma.workspaces.create({
++    data: { name: "Personal runtime", slug: crypto.randomUUID() },
++  });
++  for (const name of ["a", "b"]) {
++    const user = await prisma.users.create({
++      data: { username: name + crypto.randomUUID(), password: "unused" },
++    });
++    await prisma.workspace_users.create({
++      data: { workspace_id: workspace.id, user_id: user.id },
++    });
++    if (name === "a") a = user;
++    else b = user;
++  }
++  ca = await caller.fromOAuthState(a.id, workspace);
++  cb = await caller.fromOAuthState(b.id, workspace);
++});
++beforeEach(async () => {
++  jest.clearAllMocks();
++  logs = jest.spyOn(console, "log").mockImplementation(() => {});
++  const existsSync = fs.existsSync;
++  jest
++    .spyOn(fs, "existsSync")
++    .mockImplementation((file) =>
++      String(file).endsWith("anythingllm_mcp_servers.json")
++        ? true
++        : existsSync(file)
++    );
++  Hypervisor._instance = undefined;
++  Layer._instance = undefined;
++  layer = new Layer();
++  config = {
++    url: "https://medusa.example/mcp",
++    type: "http",
++    anythingllm: { perUserAuth: true, suppressedTools: ["write"] },
++  };
++  Object.defineProperty(layer, "mcpServerConfigs", {
++    get: () => [{ name: "medusa", server: config }],
++  });
++  jest.spyOn(layer, "workspaceServerConfigs").mockResolvedValue([]);
++  jest.spyOn(layer, "findServerConfig").mockImplementation(async () => ({
++    name: "medusa",
++    server: config,
++    owner: "global",
++  }));
++  await prisma.personal_mcp_grants.deleteMany({
++    where: { workspace_id: workspace.id },
++  });
++  for (const user of [a, b]) {
++    const grant = await Grant.begin(workspace.id, user.id, "medusa", config);
++    await Grant.save(workspace.id, user.id, "medusa", grant.version, config, {
++      access_token: `private-${user.id}`,
++      refresh_token: "private-refresh",
++      expires_at: new Date(Date.now() + 3600000),
++    });
++  }
++});
++afterEach(async () => {
++  expect(JSON.stringify(logs.mock.calls)).not.toMatch(/private-/);
++  if (layer.personalRuntime) await layer.personalRuntime.stopAll();
++  jest.restoreAllMocks();
++});
++afterAll(async () => {
++  await prisma.workspaces.delete({ where: { id: workspace.id } });
++  for (const user of [a, b])
++    await prisma.users.delete({ where: { id: user.id } });
++  await prisma.$disconnect();
++});
++describe("personal runtime boundary", () => {
++  it("global deletion preserves same-name workspace-owned grants and clients", async () => {
++    const shadow = await prisma.workspaces.create({
++      data: { name: "Shadow", slug: crypto.randomUUID() },
++    });
++    try {
++      await prisma.workspace_users.create({
++        data: { workspace_id: shadow.id, user_id: a.id },
++      });
++      await WorkspaceMcpServer.create(shadow.id, "medusa", config);
++      const shadowCaller = await caller.fromOAuthState(a.id, shadow);
++      const grant = await Grant.begin(shadow.id, a.id, "medusa", config);
++      await Grant.save(shadow.id, a.id, "medusa", grant.version, config, {
++        access_token: "private-shadow",
++      });
++      const client = await layer.bootPersonalServer(
++        shadow,
++        "medusa",
++        shadowCaller
++      );
++      const invalidate = await layer.invalidateGlobalPersonalServer("medusa");
++      expect(invalidate).toBeUndefined();
++      expect(
++        (await Grant.find(shadow.id, a.id, "medusa", config)).enabled
++      ).toBe(true);
++      expect(client.close).not.toHaveBeenCalled();
++      expect(
++        (await Grant.find(workspace.id, a.id, "medusa", config)).enabled
++      ).toBe(false);
++    } finally {
++      await layer.personalRuntime.stop(shadow.id, "medusa");
++      await prisma.workspaces.delete({ where: { id: shadow.id } });
++    }
++  });
++  it("never boots personal servers globally or for anonymous jobs", async () => {
++    await layer.bootMCPServers();
++    expect(Client).not.toHaveBeenCalled();
++    expect(await layer.activeMCPServers(workspace)).toEqual([]);
++    await expect(
++      layer.callServerTool(workspace, "medusa", { name: "read" })
++    ).rejects.toThrow("personal_auth_required");
++  });
++  it("isolates A/B boot locks, bearer headers, clients and discovery", async () => {
++    expect(await layer.activeMCPServers(workspace, ca)).toEqual([
++      "@@mcp_medusa",
++    ]);
++    expect(await layer.activeMCPServers(workspace, cb)).toEqual([
++      "@@mcp_medusa",
++    ]);
++    const first = await layer.bootPersonalServer(workspace, "medusa", ca);
++    const second = await layer.bootPersonalServer(workspace, "medusa", cb);
++    expect(first).not.toBe(second);
++    expect(
++      Transport.mock.calls.map(
++        (call) => call[1].requestInit.headers.authorization
++      )
++    ).toEqual([`Bearer private-${a.id}`, `Bearer private-${b.id}`]);
++    expect(await layer.personalRuntime.tools(workspace, "medusa", ca)).toEqual([
++      { name: "read", inputSchema: {} },
++    ]);
++  });
++  it("does not replay mutations after a tool 401 and clears only caller grant", async () => {
++    const client = await layer.bootPersonalServer(workspace, "medusa", ca);
++    client.callTool.mockRejectedValueOnce({ status: 401 });
++    const refresh = jest.spyOn(oauth, "refreshTokens");
++    await expect(
++      layer.callServerTool(
++        workspace,
++        "medusa",
++        { name: "read", arguments: {} },
++        ca
++      )
++    ).rejects.toThrow("MCP authentication required");
++    expect(client.callTool).toHaveBeenCalledTimes(1);
++    expect(refresh).not.toHaveBeenCalled();
++    expect(
++      (await Grant.find(workspace.id, a.id, "medusa", config)).enabled
++    ).toBe(false);
++    expect(
++      (await Grant.find(workspace.id, b.id, "medusa", config)).enabled
++    ).toBe(true);
++  });
++  it("deduplicates refresh and rejects a refresh racing disconnect/reconnect", async () => {
++    const old = await Grant.find(workspace.id, a.id, "medusa", config);
++    await Grant.save(workspace.id, a.id, "medusa", old.version, config, {
++      access_token: "private-old",
++      refresh_token: "private-refresh",
++      expires_at: new Date(0),
++    });
++    const refresh = jest
++      .spyOn(oauth, "refreshTokens")
++      .mockImplementation(async () => {
++        await Grant.clear(workspace.id, a.id, "medusa");
++        const newer = await Grant.begin(workspace.id, a.id, "medusa", config);
++        await Grant.save(workspace.id, a.id, "medusa", newer.version, config, {
++          access_token: "private-reconnected",
++          refresh_token: "private-fresh",
++        });
++        return {
++          access_token: "private-stale",
++          refresh_token: "private-stale",
++        };
++      });
++    const result = await Promise.allSettled([
++      layer.bootPersonalServer(workspace, "medusa", ca),
++      layer.bootPersonalServer(workspace, "medusa", ca),
++    ]);
++    expect(result.every((item) => item.status === "rejected")).toBe(true);
++    expect(refresh).toHaveBeenCalledTimes(1);
++    expect(Client).not.toHaveBeenCalled();
++    expect(
++      (await Grant.find(workspace.id, a.id, "medusa", config)).access_token
++    ).toBe("private-reconnected");
++  });
++  it("rechecks config and grant after an in-flight connect before publishing", async () => {
++    Client.mockImplementationOnce(() => ({
++      close: jest.fn().mockResolvedValue(),
++      connect: jest.fn(async () => {
++        await Grant.clear(workspace.id, a.id, "medusa");
++      }),
++    }));
++    await expect(
++      layer.bootPersonalServer(workspace, "medusa", ca)
++    ).rejects.toThrow();
++    expect(layer.personalRuntime.clients.size).toBe(0);
++  });
++  it("does not log private plugin args/results and marks chat history private", async () => {
++    await layer.activeMCPServers(workspace, ca);
++    const aibitat = {
++      handlerProps: {
++        invocation: { workspace, mcpCaller: ca },
++        log: jest.fn(),
++      },
++      function: jest.fn(),
++      introspect: jest.fn(),
++    };
++    const plugins = await layer.convertServerToolsToPlugins("medusa", aibitat);
++    expect(plugins).toHaveLength(1);
++    plugins[0].plugin().setup(aibitat);
++    const result = await aibitat.function.mock.calls[0][0].handler({
++      secret: "private-args",
++    });
++    expect(result).toContain("private-result");
++    expect(aibitat.personalMcpUsed).toBe(true);
++    expect(aibitat.function.mock.calls[0][0].privateMcp).toBe(true);
++    expect(aibitat.handlerProps.invocation.personalMcpUsed).toBe(true);
++    expect(
++      JSON.stringify([
++        aibitat.handlerProps.log.mock.calls,
++        aibitat.introspect.mock.calls,
++      ])
++    ).not.toMatch(/private-args|private-result/);
++  });
++  it("rejects unadvertised and suppressed tools before remote call", async () => {
++    const client = await layer.bootPersonalServer(workspace, "medusa", ca);
++    await expect(
++      layer.callServerTool(
++        workspace,
++        "medusa",
++        { name: "write", arguments: {} },
++        ca
++      )
++    ).rejects.toThrow("personal_tool_not_allowed");
++    await expect(
++      layer.callServerTool(
++        workspace,
++        "medusa",
++        { name: "unknown", arguments: {} },
++        ca
++      )
++    ).rejects.toThrow("personal_tool_not_allowed");
++    expect(client.callTool).not.toHaveBeenCalled();
++  });
++  it("global reload invalidates grants when a personal definition is swapped or deleted", async () => {
++    await layer.bootMCPServers();
++    config = { ...config, url: "https://replacement.example/mcp" };
++    await layer.reloadMCPServers();
++    config = { ...config, url: "https://medusa.example/mcp" };
++    expect(
++      (await Grant.find(workspace.id, a.id, "medusa", config)).enabled
++    ).toBe(false);
++  });
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/models/personalMcpGrant.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/models/personalMcpGrant.js
+new file mode 100644
+index 0000000..e91b2f4
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/models/personalMcpGrant.js
+@@ -0,0 +1,209 @@
++const prisma = require("../utils/prisma");
++const crypto = require("crypto");
++
++function fingerprint(config) {
++  return crypto
++    .createHash("sha256")
++    .update(JSON.stringify(config))
++    .digest("hex");
++}
++
++// Authenticated encryption with binding to owner + definition. Fail closed without
++// persistent keys; unlike legacy EncryptionManager this never writes environment files.
++function key() {
++  if (!process.env.SIG_KEY || !process.env.SIG_SALT)
++    throw new Error("personal_encryption_unconfigured");
++  return crypto.scryptSync(process.env.SIG_KEY, process.env.SIG_SALT, 32);
++}
++function aad(row) {
++  return Buffer.from(
++    JSON.stringify([
++      row.workspace_id,
++      row.user_id,
++      row.server_name,
++      row.fingerprint,
++    ])
++  );
++}
++function encrypt(tokens, row) {
++  const iv = crypto.randomBytes(12);
++  const cipher = crypto.createCipheriv("aes-256-gcm", key(), iv);
++  cipher.setAAD(aad(row));
++  const encrypted = Buffer.concat([
++    cipher.update(JSON.stringify(tokens)),
++    cipher.final(),
++  ]);
++  return [iv, cipher.getAuthTag(), encrypted]
++    .map((part) => part.toString("base64url"))
++    .join(".");
++}
++function decrypt(row) {
++  try {
++    const [iv, tag, value] = row.tokens
++      .split(".")
++      .map((part) => Buffer.from(part, "base64url"));
++    const cipher = crypto.createDecipheriv("aes-256-gcm", key(), iv);
++    cipher.setAAD(aad(row));
++    cipher.setAuthTag(tag);
++    return JSON.parse(
++      Buffer.concat([cipher.update(value), cipher.final()]).toString()
++    );
++  } catch {
++    throw new Error("personal_grant_unavailable");
++  }
++}
++function scope(workspaceId, userId, serverName) {
++  if (
++    !Number.isInteger(workspaceId) ||
++    workspaceId <= 0 ||
++    !Number.isInteger(userId) ||
++    userId <= 0 ||
++    typeof serverName !== "string" ||
++    !serverName
++  )
++    throw new Error("invalid_personal_scope");
++  return {
++    workspace_id: workspaceId,
++    user_id: userId,
++    server_name: serverName,
++  };
++}
++const PersonalMcpGrant = {
++  fingerprint,
++  publicLabel(value) {
++    if (typeof value !== "string") return null;
++    // Public labels must not carry controls into logs/UI.
++    return (
++      value
++        // eslint-disable-next-line no-control-regex
++        .replace(/[\x00-\x1f\x7f<>]/g, " ")
++        .replace(/\s+/g, " ")
++        .trim()
++        .slice(0, 120) || null
++    );
++  },
++  async begin(workspaceId, userId, serverName, config) {
++    const owner = scope(workspaceId, userId, serverName);
++    return prisma.personal_mcp_grants.upsert({
++      where: { workspace_id_user_id_server_name: owner },
++      create: { ...owner, fingerprint: fingerprint(config) },
++      update: {
++        fingerprint: fingerprint(config),
++        version: { increment: 1 },
++        generation: { increment: 1 },
++        refresh_until: null,
++        enabled: false,
++        tokens: null,
++        expires_at: null,
++        lastUpdatedAt: new Date(),
++      },
++    });
++  },
++  async find(workspaceId, userId, serverName, config) {
++    const owner = scope(workspaceId, userId, serverName);
++    const row = await prisma.personal_mcp_grants.findUnique({
++      where: { workspace_id_user_id_server_name: owner },
++    });
++    if (!row || row.fingerprint !== fingerprint(config)) return null;
++    return { ...row, ...(row.tokens ? decrypt(row) : {}) };
++  },
++  async save(workspaceId, userId, serverName, version, config, tokens) {
++    if (typeof tokens.access_token !== "string" || !tokens.access_token)
++      throw new Error("invalid_personal_tokens");
++    tokens = {
++      access_token: tokens.access_token,
++      refresh_token:
++        typeof tokens.refresh_token === "string" ? tokens.refresh_token : null,
++      expires_at: tokens.expires_at ?? null,
++      account_label: this.publicLabel(tokens.account_label),
++    };
++    const owner = {
++      ...scope(workspaceId, userId, serverName),
++      fingerprint: fingerprint(config),
++    };
++    const result = await prisma.personal_mcp_grants.updateMany({
++      where: { ...owner, version },
++      data: {
++        tokens: encrypt(tokens, owner),
++        enabled: true,
++        refresh_until: null,
++        version: { increment: 1 },
++        expires_at: tokens.expires_at ?? null,
++        lastUpdatedAt: new Date(),
++      },
++    });
++    return result.count === 1;
++  },
++  async clear(workspaceId, userId, serverName, version) {
++    return prisma.personal_mcp_grants.updateMany({
++      where: {
++        ...scope(workspaceId, userId, serverName),
++        ...(version === undefined ? {} : { version }),
++      },
++      data: {
++        tokens: null,
++        enabled: false,
++        expires_at: null,
++        refresh_until: null,
++        version: { increment: 1 },
++        generation: { increment: 1 },
++        lastUpdatedAt: new Date(),
++      },
++    });
++  },
++  async clearGeneration(workspaceId, userId, serverName, generation) {
++    return prisma.personal_mcp_grants.updateMany({
++      where: { ...scope(workspaceId, userId, serverName), generation },
++      data: {
++        tokens: null,
++        enabled: false,
++        expires_at: null,
++        refresh_until: null,
++        version: { increment: 1 },
++        generation: { increment: 1 },
++        lastUpdatedAt: new Date(),
++      },
++    });
++  },
++  async acquireRefresh(workspaceId, userId, serverName, version, config) {
++    const result = await prisma.personal_mcp_grants.updateMany({
++      where: {
++        ...scope(workspaceId, userId, serverName),
++        version,
++        fingerprint: fingerprint(config),
++        enabled: true,
++        OR: [{ refresh_until: null }, { refresh_until: { lt: new Date() } }],
++      },
++      data: {
++        version: { increment: 1 },
++        refresh_until: new Date(Date.now() + 30000),
++        lastUpdatedAt: new Date(),
++      },
++    });
++    return result.count === 1 ? version + 1 : null;
++  },
++  async releaseRefresh(workspaceId, userId, serverName, version) {
++    await prisma.personal_mcp_grants.updateMany({
++      where: { ...scope(workspaceId, userId, serverName), version },
++      data: { refresh_until: null },
++    });
++  },
++  async invalidate(workspaceId, serverName) {
++    return prisma.personal_mcp_grants.updateMany({
++      where: {
++        ...(workspaceId == null ? {} : { workspace_id: workspaceId }),
++        server_name: serverName,
++      },
++      data: {
++        tokens: null,
++        enabled: false,
++        expires_at: null,
++        refresh_until: null,
++        version: { increment: 1 },
++        generation: { increment: 1 },
++        lastUpdatedAt: new Date(),
++      },
++    });
++  },
++};
++module.exports = { PersonalMcpGrant };
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/prisma/migrations/20261008000000_personal_mcp_grants/migration.sql b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/prisma/migrations/20261008000000_personal_mcp_grants/migration.sql
+new file mode 100644
+index 0000000..cfa96f0
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/prisma/migrations/20261008000000_personal_mcp_grants/migration.sql
+@@ -0,0 +1,19 @@
++-- New empty table only. Never import workspace/global credentials.
++CREATE TABLE "personal_mcp_grants" (
++  "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
++  "workspace_id" INTEGER NOT NULL,
++  "user_id" INTEGER NOT NULL,
++  "server_name" TEXT NOT NULL,
++  "fingerprint" TEXT NOT NULL,
++  "version" INTEGER NOT NULL DEFAULT 1,
++  "generation" INTEGER NOT NULL DEFAULT 1,
++  "refresh_until" DATETIME,
++  "enabled" BOOLEAN NOT NULL DEFAULT false,
++  "tokens" TEXT,
++  "expires_at" DATETIME,
++  "lastUpdatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  FOREIGN KEY ("workspace_id") REFERENCES "workspaces" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
++  FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
++);
++CREATE UNIQUE INDEX "personal_mcp_grants_workspace_id_user_id_server_name_key" ON "personal_mcp_grants"("workspace_id", "user_id", "server_name");
++CREATE INDEX "personal_mcp_grants_workspace_id_server_name_idx" ON "personal_mcp_grants"("workspace_id", "server_name");
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/prisma/postgresql/personal-mcp-grants.sql b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/prisma/postgresql/personal-mcp-grants.sql
+new file mode 100644
+index 0000000..10bafd7
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/prisma/postgresql/personal-mcp-grants.sql
+@@ -0,0 +1,20 @@
++-- Standalone additive PostgreSQL migration. Do NOT replay SQLite migrations.
++-- Apply through the production operator's existing PG migration process after backup.
++BEGIN;
++CREATE TABLE "personal_mcp_grants" (
++  "id" SERIAL PRIMARY KEY,
++  "workspace_id" INTEGER NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE ON UPDATE CASCADE,
++  "user_id" INTEGER NOT NULL REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE,
++  "server_name" TEXT NOT NULL,
++  "fingerprint" TEXT NOT NULL,
++  "version" INTEGER NOT NULL DEFAULT 1,
++  "generation" INTEGER NOT NULL DEFAULT 1,
++  "refresh_until" TIMESTAMP(3),
++  "enabled" BOOLEAN NOT NULL DEFAULT false,
++  "tokens" TEXT,
++  "expires_at" TIMESTAMP(3),
++  "lastUpdatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
++);
++CREATE UNIQUE INDEX "personal_mcp_grants_workspace_id_user_id_server_name_key" ON "personal_mcp_grants"("workspace_id", "user_id", "server_name");
++CREATE INDEX "personal_mcp_grants_workspace_id_server_name_idx" ON "personal_mcp_grants"("workspace_id", "server_name");
++COMMIT;
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/personalCaller.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/personalCaller.js
+new file mode 100644
+index 0000000..96bbc2f
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/personalCaller.js
+@@ -0,0 +1,58 @@
++const prisma = require("../prisma");
++const { decodeJWT } = require("../http");
++const verified = new WeakSet();
++
++async function activeMember(userId, workspace) {
++  if (
++    !Number.isInteger(userId) ||
++    userId <= 0 ||
++    !Number.isInteger(workspace?.id)
++  )
++    throw new Error("personal_auth_required");
++  const user = await prisma.users.findUnique({ where: { id: userId } });
++  if (!user || user.suspended) throw new Error("personal_auth_required");
++  const member = await prisma.workspace_users.findFirst({
++    where: { user_id: userId, workspace_id: workspace.id },
++  });
++  if (!member) throw new Error("personal_auth_required");
++  return userId;
++}
++function issue(userId, workspace) {
++  const caller = Object.freeze({ userId, workspaceId: workspace.id });
++  verified.add(caller);
++  return caller;
++}
++async function fromResponse(response, workspace) {
++  const id = response.locals?.browserSessionUserId;
++  if (!id || response.locals?.user?.id !== id)
++    throw new Error("personal_auth_required");
++  await activeMember(id, workspace);
++  return issue(id, workspace);
++}
++async function assert(caller, workspace) {
++  if (!caller || !verified.has(caller) || caller.workspaceId !== workspace?.id)
++    throw new Error("personal_auth_required");
++  return activeMember(caller.userId, workspace);
++}
++// Used only after consuming a signed, single-use OAuth state from the database.
++async function fromOAuthState(userId, workspace) {
++  await activeMember(userId, workspace);
++  return issue(userId, workspace);
++}
++async function fromSocket(request, invocation) {
++  const auth = request.headers?.authorization;
++  const protocols = String(request.headers?.["sec-websocket-protocol"] || "")
++    .split(",")
++    .map((part) => part.trim());
++  const token = auth?.startsWith("Bearer ")
++    ? auth.slice(7)
++    : protocols
++        .find((part) => part.startsWith("anythingllm-session."))
++        ?.slice(20);
++  const payload = token ? decodeJWT(token) : null;
++  if (!payload?.id || payload.id !== invocation.user_id)
++    throw new Error("personal_auth_required");
++  await activeMember(payload.id, invocation.workspace);
++  return issue(payload.id, invocation.workspace);
++}
++module.exports = { fromResponse, assert, fromOAuthState, fromSocket };
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/personalRuntime.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/personalRuntime.js
+new file mode 100644
+index 0000000..ca28ac8
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/personalRuntime.js
+@@ -0,0 +1,216 @@
++const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
++const { PersonalMcpGrant: Grant } = require("../../models/personalMcpGrant");
++const caller = require("./personalCaller");
++const oauth = require("./oauth");
++const { validateWorkspaceServerConfig } = require("./serverConfig");
++
++class PersonalMcpRuntime {
++  clients = new Map();
++  boots = new Map();
++  epochs = new Map();
++  constructor(hypervisor) {
++    this.hypervisor = hypervisor;
++  }
++  key(workspace, userId, name) {
++    return JSON.stringify([workspace.id, userId, name]);
++  }
++  async target(workspace, name, identity) {
++    const userId = await caller.assert(identity, workspace);
++    await this.hypervisor.syncPersonalDefinitions();
++    const config = (await this.hypervisor.findServerConfig(name, workspace))
++      ?.server;
++    if (config?.anythingllm?.perUserAuth !== true)
++      throw new Error("invalid_personal_target");
++    validateWorkspaceServerConfig(config);
++    const grant = await Grant.find(workspace.id, userId, name, config);
++    if (!grant?.enabled || !grant.access_token)
++      throw new Error("MCP authentication required");
++    return { userId, config, grant };
++  }
++  async boot(workspace, name, identity) {
++    const userId = await caller.assert(identity, workspace);
++    const key = this.key(workspace, userId, name);
++    if (this.boots.has(key)) return this.boots.get(key);
++    const epoch = this.epochs.get(key) || 0;
++    const pending = this.connect(workspace, name, identity, key, epoch);
++    this.boots.set(key, pending);
++    try {
++      return await pending;
++    } finally {
++      if (this.boots.get(key) === pending) this.boots.delete(key);
++    }
++  }
++  async connect(workspace, name, identity, key, epoch) {
++    let { userId, config, grant } = await this.target(
++      workspace,
++      name,
++      identity
++    );
++    if (
++      grant.expires_at &&
++      new Date(grant.expires_at).getTime() < Date.now() + 60000
++    ) {
++      if (!grant.refresh_token) throw new Error("MCP authentication required");
++      const lease = await Grant.acquireRefresh(
++        workspace.id,
++        userId,
++        name,
++        grant.version,
++        config
++      );
++      if (lease === null) throw new Error("MCP token refresh busy");
++      grant = { ...grant, version: lease };
++      let tokens;
++      try {
++        tokens = await oauth.refreshTokens(grant.refresh_token, config.url);
++        tokens.account_label ??= grant.account_label;
++      } catch (error) {
++        if (
++          error.status === 401 ||
++          (error.status === 400 && error.code === "invalid_grant")
++        ) {
++          await Grant.clear(workspace.id, userId, name, grant.version);
++          await this.closeClient(key);
++          throw new Error("MCP authentication required");
++        }
++        await Grant.releaseRefresh(workspace.id, userId, name, lease);
++        throw new Error("MCP token refresh unavailable");
++      }
++      const current = await this.target(workspace, name, identity);
++      if (
++        Grant.fingerprint(current.config) !== Grant.fingerprint(config) ||
++        current.grant.version !== grant.version ||
++        !(await Grant.save(
++          workspace.id,
++          userId,
++          name,
++          grant.version,
++          config,
++          tokens
++        ))
++      )
++        throw new Error("MCP connection changed during refresh");
++      ({ config, grant } = await this.target(workspace, name, identity));
++    }
++    const existing = this.clients.get(key);
++    if (
++      existing?.version === grant.version &&
++      existing.fingerprint === Grant.fingerprint(config)
++    )
++      return existing.client;
++    await this.closeClient(key);
++    const client = new Client({ name, version: "1.0.0" });
++    let timer,
++      expired = false;
++    try {
++      const headers = new Headers(config.headers);
++      headers.set("Authorization", `Bearer ${grant.access_token}`);
++      const transport = this.hypervisor.createHttpTransport({
++        ...config,
++        headers: Object.fromEntries(headers),
++      });
++      const connecting = client.connect(transport);
++      // Close again if an SDK connect resolves after the deadline.
++      connecting.then(
++        () => {
++          if (expired) client.close().catch(() => {});
++        },
++        () => {}
++      );
++      await Promise.race([
++        connecting,
++        new Promise((_, reject) => {
++          timer = setTimeout(() => {
++            expired = true;
++            reject(new Error("MCP connection timeout"));
++          }, 30000);
++        }),
++      ]);
++      const current = await this.target(workspace, name, identity);
++      if (
++        (this.epochs.get(key) || 0) !== epoch ||
++        current.grant.version !== grant.version ||
++        Grant.fingerprint(current.config) !== Grant.fingerprint(config)
++      )
++        throw new Error("MCP connection changed during connect");
++      this.clients.set(key, {
++        client,
++        version: grant.version,
++        fingerprint: Grant.fingerprint(config),
++      });
++      return client;
++    } catch {
++      await client.close().catch(() => {});
++      throw new Error("MCP connection unavailable");
++    } finally {
++      clearTimeout(timer);
++    }
++  }
++  async tools(workspace, name, identity) {
++    const client = await this.boot(workspace, name, identity);
++    let tools;
++    try {
++      ({ tools } = await client.listTools());
++    } catch {
++      throw new Error("MCP tool discovery failed");
++    }
++    const { config, grant, userId } = await this.target(
++      workspace,
++      name,
++      identity
++    );
++    const cached = this.clients.get(this.key(workspace, userId, name));
++    if (cached?.client !== client || cached.version !== grant.version)
++      throw new Error("MCP connection changed");
++    return (tools || []).filter(
++      (tool) => !(config.anythingllm.suppressedTools || []).includes(tool.name)
++    );
++  }
++  async call(workspace, name, request, identity) {
++    const tools = await this.tools(workspace, name, identity);
++    if (!tools.some((tool) => tool.name === request?.name))
++      throw new Error("personal_tool_not_allowed");
++    const { userId, grant } = await this.target(workspace, name, identity);
++    const entry = this.clients.get(this.key(workspace, userId, name));
++    if (!entry || entry.version !== grant.version)
++      throw new Error("MCP connection changed");
++    try {
++      const result = await entry.client.callTool(request);
++      const current = await this.target(workspace, name, identity);
++      if (current.grant.version !== grant.version)
++        throw new Error("MCP connection changed");
++      return result;
++    } catch (error) {
++      if (error.status === 401 || error.code === 401) {
++        await Grant.clear(workspace.id, userId, name, grant.version);
++        await this.stop(workspace.id, name, userId);
++        throw new Error("MCP authentication required");
++      }
++      // A tool may mutate before failing: never replay a tool request.
++      throw new Error("MCP tool call failed");
++    }
++  }
++  async closeClient(key) {
++    const entry = this.clients.get(key);
++    this.clients.delete(key);
++    if (entry) await entry.client.close().catch(() => {});
++  }
++  async stop(workspaceId, name, userId) {
++    const keys = new Set([...this.clients.keys(), ...this.boots.keys()]);
++    for (const key of keys) {
++      const [ws, user, server] = JSON.parse(key);
++      if (
++        (workspaceId == null || ws === workspaceId) &&
++        (name == null || server === name) &&
++        (userId == null || user === userId)
++      ) {
++        this.epochs.set(key, (this.epochs.get(key) || 0) + 1);
++        await this.closeClient(key);
++      }
++    }
++  }
++  async stopAll() {
++    await this.stop(null, null);
++  }
++}
++module.exports = { PersonalMcpRuntime };

@@ -63,7 +63,8 @@ const WORKSPACE_AGENT = {
     _provider = null,
     workspace = null,
     user = null,
-    prompt = ""
+    prompt = "",
+    mcpCaller = null
   ) => {
     let [role, clarifyingQuestionsSkills] = await Promise.all([
       Provider.systemPrompt({
@@ -86,7 +87,10 @@ const WORKSPACE_AGENT = {
         ...clarifyingQuestionsSkills,
         ...ImportedPlugin.activeImportedPlugins(),
         ...AgentFlows.activeFlowPlugins(),
-        ...(await new MCPCompatibilityLayer().activeMCPServers(workspace)),
+        ...(await new MCPCompatibilityLayer().activeMCPServers(
+          workspace,
+          mcpCaller
+        )),
       ],
     };
   },

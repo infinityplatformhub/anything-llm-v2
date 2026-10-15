@@ -1,0 +1,6 @@
+{
+  "version": "3.3.1",
+  "source": "https://github.com/Genymobile/scrcpy/releases/download/v3.3.1/scrcpy-server-v3.3.1",
+  "sha256": "a0f70b20aa4998fbf658c94118cd6c8dab6abbb0647a3bdab344d70bc1ebcbb8",
+  "license": "Apache-2.0"
+}

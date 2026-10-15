@@ -1,4 +1,4 @@
-const { Prisma } = require("@prisma/client");
+const { Prisma } = require("../utils/prisma/client");
 const prisma = require("../utils/prisma");
 const { ModelRouterRule } = require("./modelRouterRule");
 

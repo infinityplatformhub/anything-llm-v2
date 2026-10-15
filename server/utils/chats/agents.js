@@ -4,6 +4,7 @@ const {
 } = require("../../models/workspaceAgentInvocation");
 const { writeResponseChunk } = require("../helpers/chat/responses");
 const { Workspace } = require("../../models/workspace");
+const { cacheInvocationHistory } = require("./invocationHistory");
 
 /**
  * In-memory cache for attachments associated with agent invocations.
@@ -43,6 +44,8 @@ async function grepAgents({
   user = null,
   thread = null,
   attachments = [],
+  conversationHistory = [],
+  androidBridge = null,
 }) {
   let nativeToolingEnabled = false;
 
@@ -52,12 +55,13 @@ async function grepAgents({
     nativeToolingEnabled = await Workspace.supportsNativeToolCalling(workspace);
 
   const agentHandles = WorkspaceAgentInvocation.parseAgents(message);
-  if (agentHandles.length > 0 || nativeToolingEnabled) {
+  if (agentHandles.length > 0 || nativeToolingEnabled || androidBridge) {
     const { invocation: newInvocation } = await WorkspaceAgentInvocation.new({
       prompt: message,
       workspace: workspace,
       user: user,
       thread: thread,
+      browserDevice: !!androidBridge,
     });
 
     if (!newInvocation) {
@@ -79,7 +83,12 @@ async function grepAgents({
     }
 
     // Cache attachments for the websocket handler to retrieve later
+    if (androidBridge) {
+      newInvocation.browserDeviceUsed = true;
+      require("../agents/androidBridge").cache(newInvocation, androidBridge);
+    }
     cacheInvocationAttachments(newInvocation.uuid, attachments);
+    cacheInvocationHistory(newInvocation, conversationHistory);
 
     writeResponseChunk(response, {
       id: uuid,

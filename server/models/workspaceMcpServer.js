@@ -53,6 +53,27 @@ const WorkspaceMcpServer = {
     return row ? decryptRow(row, encryptionManager()) : null;
   },
 
+  // Classification-only read: an existing but unreadable shadow must never
+  // become absence. Use the original persistent signature, without key creation.
+  findStrict: async function (workspaceId, name) {
+    try {
+      const row = await prisma.workspace_mcp_servers.findUnique({
+        where: { workspace_id_name: { workspace_id: workspaceId, name } },
+      });
+      if (!row) return null;
+      const key = process.env.SIG_KEY,
+        salt = process.env.SIG_SALT;
+      if (!key || !salt) throw new Error();
+      const manager = new EncryptionManager({ key, salt });
+      manager.log = () => {};
+      const config = JSON.parse(manager.decrypt(row.config));
+      validateWorkspaceServerConfig(config);
+      return { ...row, config };
+    } catch {
+      throw new Error("personal_config_unavailable");
+    }
+  },
+
   listDecrypted: async function (workspaceId) {
     const rows = await prisma.workspace_mcp_servers.findMany({
       where: { workspace_id: workspaceId },

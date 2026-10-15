@@ -24,7 +24,9 @@ async function streamChatWithWorkspace(
   chatMode = "automatic",
   user = null,
   thread = null,
-  attachments = []
+  attachments = [],
+  conversationHistory = [],
+  androidBridge = null
 ) {
   const uuid = uuidv4();
   const updatedMessage = await grepCommand(message, user);
@@ -52,6 +54,8 @@ async function streamChatWithWorkspace(
     workspace,
     thread,
     attachments,
+    conversationHistory,
+    androidBridge,
   });
   if (isAgentChat) return;
 

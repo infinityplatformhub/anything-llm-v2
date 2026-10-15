@@ -146,7 +146,8 @@ class DeepSeekProvider extends InheritMultiple([Provider, UnTooled]) {
         this.#tooledOptions
       );
     } catch (error) {
-      console.error(error.message, error);
+      if (!this.invocation?.personalMcpUsed)
+        console.error(error.message, error);
       if (error instanceof OpenAI.AuthenticationError) throw error;
       if (
         error instanceof OpenAI.RateLimitError ||

@@ -32,11 +32,14 @@ class AgentHandler {
   model = null;
   attachments = [];
 
-  constructor({ uuid }) {
+  constructor({ uuid, mcpCaller = null, androidContext = null }) {
     this.#invocationUUID = uuid;
+    this.mcpCaller = mcpCaller;
+    this.androidContext = androidContext;
   }
 
   log(text, ...args) {
+    if (this.invocation?.browserDeviceUsed) return;
     console.log(`\x1b[36m[AgentHandler]\x1b[0m ${text}`, ...args);
   }
 
@@ -80,6 +83,19 @@ class AgentHandler {
   }
 
   async #chatHistory(limit = 10) {
+    await this.#assertPrivateContext();
+    const {
+      getAndClearInvocationHistory,
+    } = require("../chats/invocationHistory");
+    const replay = getAndClearInvocationHistory(this.invocation);
+    if (replay.length > 0) {
+      return replay.map(({ role, content }) => ({
+        from: role === "user" ? USER_AGENT.name : WORKSPACE_AGENT.name,
+        to: role === "user" ? WORKSPACE_AGENT.name : USER_AGENT.name,
+        content,
+        state: "success",
+      }));
+    }
     try {
       const rawHistory = (
         await WorkspaceChats.where(
@@ -650,7 +666,8 @@ class AgentHandler {
     // safely assume that the MCP server is running and the tools are available/loaded.
     if (name.startsWith("@@mcp_")) {
       const activeServers = await new MCPCompatibilityLayer().activeMCPServers(
-        this.invocation?.workspace ?? null
+        this.invocation?.workspace ?? null,
+        this.invocation?.mcpCaller
       );
       if (!activeServers.includes(name)) return;
       const mcpPluginName = name.replace("@@mcp_", "");
@@ -740,7 +757,8 @@ class AgentHandler {
         if (entry.startsWith("@@mcp_")) {
           const activeServers =
             await new MCPCompatibilityLayer().activeMCPServers(
-              this.invocation?.workspace ?? null
+              this.invocation?.workspace ?? null,
+              this.invocation?.mcpCaller
             );
           if (!activeServers.includes(entry)) continue;
         }
@@ -769,7 +787,8 @@ class AgentHandler {
       this.provider,
       this.invocation.workspace,
       user,
-      this.invocation.prompt
+      this.invocation.prompt,
+      this.invocation.mcpCaller
     );
 
     this.aibitat.agent(USER_AGENT.name, userAgentDef);
@@ -782,9 +801,46 @@ class AgentHandler {
 
   async init() {
     await this.#validInvocation();
+    if (this.invocation) {
+      this.invocation.mcpCaller = this.mcpCaller;
+      if (this.androidContext) {
+        await this.androidContext.assert(this.invocation);
+        this.invocation.browserDeviceUsed = true;
+      }
+      const { PersonalMcpContext } = require("../../models/personalMcpContext");
+      await PersonalMcpContext.prepare(this.invocation);
+      if (await PersonalMcpContext.has(this.invocation)) {
+        await require("../MCP/personalCaller").assert(
+          this.mcpCaller,
+          this.invocation.workspace
+        );
+        this.invocation.personalMcpUsed = true;
+        if (this.invocation.prompt.startsWith("personal-mcp-encrypted:")) {
+          this.invocation.prompt =
+            new (require("../EncryptionManager").EncryptionManager)().decrypt(
+              this.invocation.prompt.slice(23)
+            );
+          if (!this.invocation.prompt)
+            throw new Error("personal_context_unavailable");
+        }
+      }
+    }
+    await this.#assertPrivateContext();
+    if (
+      this.androidContext &&
+      this.invocation.prompt.startsWith("android-browser-encrypted:")
+    ) {
+      this.invocation.prompt =
+        new (require("../EncryptionManager").EncryptionManager)().decrypt(
+          this.invocation.prompt.slice("android-browser-encrypted:".length)
+        );
+      if (!this.invocation.prompt)
+        throw new Error("android_context_unavailable");
+    }
     await this.#providerSetupAndCheck();
 
     // Retrieve cached attachments (images, etc.) from the HTTP request
+    await this.#assertPrivateContext();
     this.attachments = getAndClearInvocationAttachments(this.#invocationUUID);
 
     return this;
@@ -796,6 +852,7 @@ class AgentHandler {
    * @returns {Promise<string>} Formatted context string to append to user message
    */
   async #fetchParsedFileContext() {
+    await this.#assertPrivateContext();
     const user = this.invocation.user_id
       ? { id: this.invocation.user_id }
       : null;
@@ -862,6 +919,7 @@ class AgentHandler {
       socket: null,
     }
   ) {
+    await this.#assertPrivateContext();
     this.#args = args;
     this.aibitat = new AIbitat({
       provider: this.provider ?? "openai",
@@ -869,10 +927,14 @@ class AgentHandler {
       chats: await this.#chatHistory(20),
       handlerProps: {
         invocation: this.invocation,
-        log: this.log,
+        log: (...values) => {
+          if (!this.invocation?.personalMcpUsed) this.log(...values);
+        },
         routingMetadata: this.routingMetadata || null,
       },
     });
+    this.aibitat.personalMcpUsed = this.invocation.personalMcpUsed === true;
+    this.aibitat.browserDeviceUsed = this.invocation.browserDeviceUsed === true;
 
     // Register callback to fetch fresh parsed file context on each chat turn
     // This injects parsed files into user messages instead of system prompt
@@ -939,6 +1001,18 @@ class AgentHandler {
 
     // Attach all required plugins for functions to operate.
     await this.#attachPlugins(args);
+    if (this.androidContext?.connected) {
+      const { createRpc } = require("./androidBridge");
+      const {
+        androidPlugin,
+        TOOL_NAMES,
+      } = require("./aibitat/plugins/android");
+      const rpc = createRpc(args.socket, this.androidContext, this.invocation);
+      this.aibitat.use(androidPlugin(rpc));
+      this.aibitat.agents
+        .get(WORKSPACE_AGENT.name)
+        .functions.push(...TOOL_NAMES);
+    }
   }
 
   /**
@@ -957,7 +1031,24 @@ class AgentHandler {
     return stripped;
   }
 
-  startAgentCluster() {
+  async #assertPrivateContext() {
+    if (!this.invocation) return;
+    if (this.androidContext) await this.androidContext.assert(this.invocation);
+    const { PersonalMcpContext } = require("../../models/personalMcpContext");
+    if (
+      this.invocation.personalMcpUsed ||
+      (await PersonalMcpContext.has(this.invocation))
+    ) {
+      await require("../MCP/personalCaller").assert(
+        this.invocation.mcpCaller,
+        this.invocation.workspace
+      );
+      this.invocation.personalMcpUsed = true;
+    }
+  }
+
+  async startAgentCluster() {
+    await this.#assertPrivateContext();
     return this.aibitat.start({
       from: USER_AGENT.name,
       to: this.channel ?? WORKSPACE_AGENT.name,

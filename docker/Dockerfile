@@ -155,9 +155,17 @@ WORKDIR /app
 # Install server layer
 # Also pull and build collector deps (chromium issues prevent bad bindings)
 FROM build AS backend-build
+ARG DATABASE_PROVIDER=sqlite
 COPY --chown=anythingllm:anythingllm ./server /app/server/
+COPY --chown=anythingllm:anythingllm ./scripts/database/provider-artifact.cjs /app/scripts/database/provider-artifact.cjs
 WORKDIR /app/server
 RUN yarn install --production --network-timeout 100000 && yarn cache clean
+RUN case "$DATABASE_PROVIDER" in \
+      postgresql) ANYTHINGLLM_DATABASE_URL=postgresql://build:build@127.0.0.1:1/build \
+        ./node_modules/.bin/prisma generate --schema=./prisma/postgresql/schema.prisma ;; \
+      sqlite) ./node_modules/.bin/prisma generate --schema=./prisma/schema.prisma ;; \
+      *) exit 1 ;; \
+    esac && node /app/scripts/database/provider-artifact.cjs "$DATABASE_PROVIDER"
 WORKDIR /app
 
 # Install collector dependencies

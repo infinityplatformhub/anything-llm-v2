@@ -98,7 +98,8 @@ class OMLXProvider extends InheritMultiple([Provider, UnTooled]) {
         { provider: this }
       );
     } catch (error) {
-      console.error(error.message, error);
+      if (!this.invocation?.personalMcpUsed)
+        console.error(error.message, error);
       if (error instanceof OpenAI.AuthenticationError) throw error;
       if (
         error instanceof OpenAI.RateLimitError ||

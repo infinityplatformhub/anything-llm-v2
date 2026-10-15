@@ -25,7 +25,13 @@ import showToast from "@/utils/toast";
 export const fieldClass =
   "w-full min-w-0 rounded-lg border border-theme-modal-border bg-theme-bg-primary px-3 py-2 text-sm text-theme-text-primary focus-visible:outline focus-visible:outline-2 disabled:opacity-50";
 
-export default function ServerModal({ slug, server, onClose, onSaved }) {
+export default function ServerModal({
+  slug,
+  server,
+  onClose,
+  onSaved,
+  onOpenPersonalConnections,
+}) {
   const { t } = useTranslation();
   const initial = server?.config || {};
   const [name, setName] = useState(server?.name || "");
@@ -43,6 +49,15 @@ export default function ServerModal({ slug, server, onClose, onSaved }) {
   );
   const [oauth, setOauth] = useState(
     initial.anythingllm?.perWorkspaceAuth === true
+  );
+  const [personal, setPersonal] = useState(
+    initial.anythingllm?.perUserAuth === true
+  );
+  const [personalAuth, setPersonalAuth] = useState(
+    initial.anythingllm?.personalAuth
+  );
+  const [categoryLoading, setCategoryLoading] = useState(
+    initial.anythingllm?.categoryLoading
   );
   const [suppressed, setSuppressed] = useState(
     initial.anythingllm?.suppressedTools || []
@@ -66,7 +81,14 @@ export default function ServerModal({ slug, server, onClose, onSaved }) {
         .filter((row) => row.key.trim())
         .map((row) => [row.key.trim(), row.value])
     ),
-    anythingllm: { perWorkspaceAuth: oauth, suppressedTools: suppressed },
+    anythingllm: {
+      perWorkspaceAuth: oauth && !personal,
+      perUserAuth: personal,
+      ...(personal && personalAuth && { personalAuth }),
+      ...(categoryLoading !== undefined &&
+        (!categoryLoading || personal) && { categoryLoading }),
+      suppressedTools: suppressed,
+    },
   };
   const duplicateHeader =
     new Set(headers.map((row) => row.key.trim().toLowerCase())).size !==
@@ -140,6 +162,9 @@ export default function ServerModal({ slug, server, onClose, onSaved }) {
       }))
     );
     setOauth(definition.anythingllm?.perWorkspaceAuth === true);
+    setPersonal(definition.anythingllm?.perUserAuth === true);
+    setPersonalAuth(definition.anythingllm?.personalAuth);
+    setCategoryLoading(definition.anythingllm?.categoryLoading);
     setSuppressed(definition.anythingllm?.suppressedTools || []);
     setExtraEntries(extra);
     setTab("form");
@@ -413,8 +438,58 @@ export default function ServerModal({ slug, server, onClose, onSaved }) {
                   size="md"
                   variant="horizontal"
                   enabled={oauth}
-                  onChange={(enabled) => change(setOauth, enabled)}
+                  onChange={(enabled) => {
+                    change(setOauth, enabled);
+                    if (enabled) setPersonal(false);
+                  }}
                 />
+                <Toggle
+                  label="Personal connection (per member)"
+                  description="Each member connects their own account or enters their own key in My MCP connections."
+                  size="md"
+                  variant="horizontal"
+                  enabled={personal}
+                  onChange={(enabled) => {
+                    change(setPersonal, enabled);
+                    if (enabled) setOauth(false);
+                  }}
+                />
+                {personal && (
+                  <div className="space-y-2">
+                    <ModalLabel htmlFor="mcp-personal-auth-type">
+                      Personal authentication type
+                    </ModalLabel>
+                    <select
+                      id="mcp-personal-auth-type"
+                      className={fieldClass}
+                      value={personalAuth?.type || "oauth"}
+                      onChange={(event) =>
+                        change(
+                          setPersonalAuth,
+                          event.target.value === "apiKey"
+                            ? { type: "apiKey", header: "X-API-Key" }
+                            : { type: "oauth" }
+                        )
+                      }
+                    >
+                      <option value="oauth">OAuth</option>
+                      <option value="apiKey">API key (X-API-Key)</option>
+                    </select>
+                    <p className="text-xs text-theme-text-secondary">
+                      {personalAuth?.type === "apiKey"
+                        ? "Each user enters their own API key in My MCP connections from the user menu. Keys belong to that user only."
+                        : "Each user connects their own account in My MCP connections from the user menu."}
+                    </p>
+                    {server && onOpenPersonalConnections && (
+                      <ModalSecondaryButton
+                        type="button"
+                        onClick={onOpenPersonalConnections}
+                      >
+                        My MCP connections
+                      </ModalSecondaryButton>
+                    )}
+                  </div>
+                )}
                 {test.state === "ok" && (
                   <fieldset>
                     <legend className="mb-2 text-sm font-semibold">

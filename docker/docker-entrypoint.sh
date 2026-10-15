@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Check if STORAGE_DIR is set
 if [ -z "$STORAGE_DIR" ]; then
@@ -16,12 +17,22 @@ if [ -z "$STORAGE_DIR" ]; then
     echo "================================================================"
 fi
 
+# Gate both processes before any application/collector effects. Provider identity
+# comes from the built artifact, not a runtime variable that could select SQLite.
+cd /app/server/
+node /app/server/utils/prisma/ready.js
+provider=$(node -e 'process.stdout.write(require("/app/server/utils/prisma/artifact.json").provider)')
+
 {
   cd /app/server/ &&
     # Disable Prisma CLI telemetry (https://www.prisma.io/docs/orm/tools/prisma-cli#how-to-opt-out-of-data-collection)
     export CHECKPOINT_DISABLE=1 &&
-    npx prisma generate --schema=./prisma/schema.prisma &&
-    npx prisma migrate deploy --schema=./prisma/schema.prisma &&
+    if [ "$provider" = "sqlite" ]; then
+      npx prisma generate --schema=./prisma/schema.prisma &&
+      npx prisma migrate deploy --schema=./prisma/schema.prisma
+    elif [ "$provider" != "postgresql" ]; then
+      exit 1
+    fi &&
     node /app/server/index.js
 } &
 { node /app/collector/index.js; } &

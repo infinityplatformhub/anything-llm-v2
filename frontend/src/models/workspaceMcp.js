@@ -57,13 +57,57 @@ export function validateMcpConfig(config) {
   if (config.anythingllm !== undefined) {
     if (!isObject(config.anythingllm)) return "invalid_anythingllm";
     for (const key of Object.keys(config.anythingllm))
-      if (!["perWorkspaceAuth", "suppressedTools"].includes(key))
+      if (
+        ![
+          "perWorkspaceAuth",
+          "perUserAuth",
+          "personalAuth",
+          "suppressedTools",
+          "categoryLoading",
+        ].includes(key)
+      )
         return `unknown_field:anythingllm.${key}`;
     if (
       config.anythingllm.perWorkspaceAuth !== undefined &&
       typeof config.anythingllm.perWorkspaceAuth !== "boolean"
     )
       return "invalid_per_workspace_auth";
+    if (
+      (config.anythingllm.perUserAuth !== undefined &&
+        typeof config.anythingllm.perUserAuth !== "boolean") ||
+      (config.anythingllm.perUserAuth === true &&
+        config.anythingllm.perWorkspaceAuth === true)
+    )
+      return "invalid_anythingllm";
+    const descriptor = config.anythingllm.personalAuth;
+    if (descriptor !== undefined) {
+      if (
+        config.anythingllm.perUserAuth !== true ||
+        !isObject(descriptor) ||
+        !["oauth", "apiKey"].includes(descriptor.type) ||
+        Object.keys(descriptor).some(
+          (key) =>
+            ![
+              "type",
+              ...(descriptor.type === "apiKey" ? ["header"] : []),
+            ].includes(key)
+        ) ||
+        (descriptor.type === "apiKey" &&
+          (typeof descriptor.header !== "string" ||
+            descriptor.header.toLowerCase() !== "x-api-key" ||
+            Object.keys(config.headers || {}).some((key) =>
+              MCP_SECRET_KEY.test(key)
+            )))
+      )
+        return "invalid_personal_auth";
+    }
+    if (
+      config.anythingllm.categoryLoading !== undefined &&
+      (typeof config.anythingllm.categoryLoading !== "boolean" ||
+        (config.anythingllm.categoryLoading === true &&
+          config.anythingllm.perUserAuth !== true))
+    )
+      return "invalid_anythingllm";
     if (
       config.anythingllm.suppressedTools !== undefined &&
       (!Array.isArray(config.anythingllm.suppressedTools) ||
@@ -138,6 +182,22 @@ async function request(
 const serverPath = (slug, name) =>
   `/workspace/${encodeURIComponent(slug)}/mcp-servers${name ? `/${encodeURIComponent(name)}` : ""}`;
 const WorkspaceMcp = {
+  personal: async (slug) => {
+    const data = await request(
+      `/workspace/${encodeURIComponent(slug)}/mcp-personal`
+    );
+    if (!Array.isArray(data.servers)) throw new Error("request_failed");
+    return data.servers;
+  },
+  apiKey: (slug, name, apiKey) =>
+    request(
+      `/workspace/${encodeURIComponent(slug)}/mcp-personal/${encodeURIComponent(name)}/api-key`,
+      { apiKey }
+    ),
+  personalTools: (slug, name) =>
+    request(
+      `/workspace/${encodeURIComponent(slug)}/mcp-personal/${encodeURIComponent(name)}/tools`
+    ),
   list: async (slug) => {
     const data = await request(`/workspace/${encodeURIComponent(slug)}/mcp`);
     if (!Array.isArray(data.connections)) throw new Error("request_failed");

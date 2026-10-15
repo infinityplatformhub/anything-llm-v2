@@ -104,6 +104,11 @@ async function discover(serverUrl) {
   ])
     if (httpUrl(metadata[key]).origin !== issuerUrl.origin)
       throw new Error("invalid_oauth_metadata");
+  if (
+    metadata.revocation_endpoint &&
+    httpUrl(metadata.revocation_endpoint).origin !== issuerUrl.origin
+  )
+    throw new Error("invalid_oauth_metadata");
   discoveryCache.set(serverUrl, { metadata, exp: Date.now() + 5 * 60 * 1000 });
   return metadata;
 }
@@ -248,6 +253,26 @@ async function requestTokens(serverUrl, params) {
   return {
     access_token: data.access_token,
     refresh_token: data.refresh_token,
+    ...(data.account &&
+    typeof data.account === "object" &&
+    !Array.isArray(data.account) &&
+    typeof data.account.actor_id === "string" &&
+    data.account.actor_id &&
+    typeof data.account.label === "string"
+      ? {
+          account_label:
+            require("../../models/personalMcpGrant").PersonalMcpGrant.publicLabel(
+              data.account.label
+            ),
+        }
+      : typeof data.account_label === "string"
+        ? {
+            account_label:
+              require("../../models/personalMcpGrant").PersonalMcpGrant.publicLabel(
+                data.account_label
+              ),
+          }
+        : {}),
     expires_at:
       Number.isFinite(expiresIn) && expiresIn > 0 && expiresIn <= 34560000
         ? new Date(Date.now() + expiresIn * 1000)
@@ -279,6 +304,34 @@ async function refreshTokens(refreshToken, serverUrl) {
   return { ...tokens, refresh_token: tokens.refresh_token ?? refreshToken };
 }
 
+async function revokeTokens(tokens, serverUrl) {
+  const metadata = await discover(serverUrl);
+  if (!metadata.revocation_endpoint) return false;
+  const setting = await SystemSettings.get({ label: "mcp_oauth_clients" });
+  const client = JSON.parse(setting?.value || "{}")[serverUrl];
+  if (!client?.client_id) throw new Error("invalid_oauth_client");
+  // Refresh first to revoke the grant, then access. RFC 7009 success may be empty.
+  for (const [token, hint] of [
+    [tokens.refresh_token, "refresh_token"],
+    [tokens.access_token, "access_token"],
+  ]) {
+    if (!token) continue;
+    const response = await fetch(httpUrl(metadata.revocation_endpoint), {
+      method: "POST",
+      redirect: "error",
+      signal: AbortSignal.timeout(15000),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: client.client_id,
+        token,
+        token_type_hint: hint,
+      }).toString(),
+    });
+    if (!response.ok) throw new Error("oauth_revocation_failed");
+  }
+  return true;
+}
+
 module.exports = {
   httpUrl,
   discover,
@@ -287,4 +340,5 @@ module.exports = {
   verifyState,
   exchangeCode,
   refreshTokens,
+  revokeTokens,
 };

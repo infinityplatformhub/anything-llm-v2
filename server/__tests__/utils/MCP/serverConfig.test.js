@@ -225,3 +225,30 @@ describe("paste JSON parsing", () => {
     expect(() => parseMcpServersBlock(body)).toThrow("invalid_mcp_servers");
   });
 });
+
+describe("personal API key definition", () => {
+  const personal = {
+    url: "https://mcp.example/mcp",
+    anythingllm: { perUserAuth: true, personalAuth: { type: "apiKey", header: "X-API-Key" } },
+  };
+  it("accepts API key descriptor case-insensitively and preserves OAuth defaults", () => {
+    expect(validate(personal)).toEqual(personal);
+    expect(validate({ ...personal, anythingllm: { perUserAuth: true, personalAuth: { type: "apiKey", header: "x-api-key" } } })).toBeTruthy();
+    expect(validate({ ...personal, anythingllm: { perUserAuth: true, personalAuth: { type: "oauth" } } })).toBeTruthy();
+    expect(validate({ ...personal, anythingllm: { perUserAuth: true } })).toBeTruthy();
+  });
+  it.each([null, [], "apiKey", {}, { type: "unknown" }, { type: "apiKey" }, { type: "apiKey", header: "Authorization" }, { type: "apiKey", header: "X-Other" }, { type: "oauth", header: "X-API-Key" }, { type: "apiKey", header: "X-API-Key", apiKey: "private-shared" }])(
+    "rejects malformed descriptor %j", (personalAuth) => {
+      expect(() => validate({ ...personal, anythingllm: { perUserAuth: true, personalAuth } })).toThrow("invalid_personal_auth");
+    }
+  );
+  it.each(["X-API-Key", "x-api-key", "Authorization", "X-Token", "Cookie"])(
+    "rejects shared credential header %s", (header) => {
+      expect(() => validate({ ...personal, headers: { [header]: "private-shared" } })).toThrow("invalid_personal_auth");
+    }
+  );
+  it("requires perUserAuth and allows noncredential headers", () => {
+    expect(() => validate({ ...personal, anythingllm: { personalAuth: personal.anythingllm.personalAuth } })).toThrow("invalid_personal_auth");
+    expect(validate({ ...personal, headers: { Accept: "application/json" } })).toBeTruthy();
+  });
+});

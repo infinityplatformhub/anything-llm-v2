@@ -27,9 +27,37 @@ const WorkspaceAgentInvocation = {
     }
   },
 
-  new: async function ({ prompt, workspace, user = null, thread = null }) {
+  new: async function ({
+    prompt,
+    workspace,
+    user = null,
+    thread = null,
+    browserDevice = false,
+  }) {
     try {
-      const invocation = await prisma.workspace_agent_invocations.create({
+      const { PersonalMcpContext } = require("./personalMcpContext");
+      if (browserDevice) {
+        const encrypted =
+          new (require("../utils/EncryptionManager").EncryptionManager)().encrypt(
+            String(prompt)
+          );
+        if (!encrypted) throw new Error("android_context_unavailable");
+        prompt = `android-browser-encrypted:${encrypted}`;
+      } else if (
+        await PersonalMcpContext.has({
+          workspace_id: workspace.id,
+          user_id: user?.id,
+          thread_id: thread?.id,
+        })
+      ) {
+        const encrypted =
+          new (require("../utils/EncryptionManager").EncryptionManager)().encrypt(
+            String(prompt)
+          );
+        if (!encrypted) throw new Error("personal_context_unavailable");
+        prompt = `personal-mcp-encrypted:${encrypted}`;
+      }
+      let invocation = await prisma.workspace_agent_invocations.create({
         data: {
           uuid: uuidv4(),
           workspace_id: workspace.id,
@@ -38,6 +66,9 @@ const WorkspaceAgentInvocation = {
           thread_id: thread?.id,
         },
       });
+      // A first private transition may have committed during the awaited insert.
+      // Serialize with mark(), recheck and encrypt before exposing this UUID.
+      invocation = await PersonalMcpContext.protectCreated(invocation);
 
       return { invocation, message: null };
     } catch (error) {

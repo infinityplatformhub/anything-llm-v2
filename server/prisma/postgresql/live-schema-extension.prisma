@@ -1,0 +1,33 @@
+// Existing live schema, observed read-only on 2026-10-08. Preservation only:
+// do not deploy personal-MCP feature code or alter the default SQLite schema.
+model personal_mcp_grants {
+  id            Int        @id @default(autoincrement())
+  workspace_id  Int
+  user_id       Int
+  server_name   String
+  fingerprint   String
+  version       Int        @default(1)
+  generation    Int        @default(1)
+  refresh_until DateTime?
+  enabled       Boolean    @default(false)
+  tokens        String?
+  expires_at    DateTime?
+  lastUpdatedAt DateTime   @default(now())
+  workspace     workspaces @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  user          users      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([workspace_id, user_id, server_name])
+  @@index([workspace_id, server_name])
+}
+
+model personal_mcp_contexts {
+  id           Int        @id @default(autoincrement())
+  workspace_id Int
+  user_id      Int
+  thread_key   Int        @default(0)
+  createdAt    DateTime   @default(now())
+  workspace    workspaces @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  user         users      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([workspace_id, user_id, thread_key])
+}

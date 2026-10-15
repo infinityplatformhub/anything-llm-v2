@@ -37,6 +37,7 @@ class MockMcp {
       refresh_token,
       expires_in: 3600,
       token_type: "Bearer",
+      account: { actor_id: `fixture-${label}`, label },
     };
     this.issued.push(pair);
     return pair;

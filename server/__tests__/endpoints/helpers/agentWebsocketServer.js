@@ -70,6 +70,8 @@ function main() {
   });
   stubModule("models/workspaceAgentInvocation", {
     WorkspaceAgentInvocation: {
+      getWithWorkspace: async ({ uuid: invocationUuid }) =>
+        invocationUuid === uuid ? { uuid } : null,
       close: async (closedUuid) =>
         report("invocationClose", { uuid: String(closedUuid) }),
     },

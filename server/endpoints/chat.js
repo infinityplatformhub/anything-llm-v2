@@ -26,7 +26,18 @@ function chatEndpoints(app) {
     async (request, response) => {
       try {
         const user = await userFromSession(request, response);
-        const { message, attachments = [] } = reqBody(request);
+        const {
+          message,
+          attachments = [],
+          conversationHistory = [],
+          androidBridge = null,
+        } = reqBody(request);
+        const androidContext =
+          require("../utils/agents/androidBridge").fromResponse(
+            request,
+            response,
+            androidBridge
+          );
         const workspace = response.locals.workspace;
 
         if (typeof message !== "string" || message.trim().length === 0) {
@@ -66,7 +77,9 @@ function chatEndpoints(app) {
           workspace?.chatMode,
           user,
           null,
-          attachments
+          attachments,
+          conversationHistory,
+          androidContext
         );
         await Telemetry.sendTelemetry("sent_chat", {
           multiUserMode: multiUserMode(response),
@@ -112,7 +125,18 @@ function chatEndpoints(app) {
     async (request, response) => {
       try {
         const user = await userFromSession(request, response);
-        const { message, attachments = [] } = reqBody(request);
+        const {
+          message,
+          attachments = [],
+          conversationHistory = [],
+          androidBridge = null,
+        } = reqBody(request);
+        const androidContext =
+          require("../utils/agents/androidBridge").fromResponse(
+            request,
+            response,
+            androidBridge
+          );
         const workspace = response.locals.workspace;
         const thread = response.locals.thread;
 
@@ -153,25 +177,28 @@ function chatEndpoints(app) {
           workspace?.chatMode,
           user,
           thread,
-          attachments
+          attachments,
+          conversationHistory,
+          androidContext
         );
 
         // If thread was renamed emit event to frontend via special `action` response.
-        await WorkspaceThread.autoRenameThread({
-          thread,
-          workspace,
-          user,
-          prompt: message,
-          onRename: (thread) => {
-            writeResponseChunk(response, {
-              action: "rename_thread",
-              thread: {
-                slug: thread.slug,
-                name: thread.name,
-              },
-            });
-          },
-        });
+        if (!androidContext)
+          await WorkspaceThread.autoRenameThread({
+            thread,
+            workspace,
+            user,
+            prompt: message,
+            onRename: (thread) => {
+              writeResponseChunk(response, {
+                action: "rename_thread",
+                thread: {
+                  slug: thread.slug,
+                  name: thread.name,
+                },
+              });
+            },
+          });
 
         await Telemetry.sendTelemetry("sent_chat", {
           multiUserMode: multiUserMode(response),

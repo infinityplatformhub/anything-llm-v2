@@ -146,6 +146,8 @@ class Provider {
   }
 
   providerLog(text, ...args) {
+    if (this.invocation?.personalMcpUsed || this.invocation?.browserDeviceUsed)
+      return;
     console.log(
       `\x1b[36m[AgentLLM${this?.model ? ` - ${this.model}` : ""}]\x1b[0m ${text}`,
       ...args

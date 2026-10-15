@@ -60,6 +60,13 @@ off-cluster backups, perform independent restore, resolve policy limitations,
 audit SQLite-specific SQL and prepare a reversible migration/cutover plan.
 pgvector is a separate vector-search decision, not the application DB migration.
 
+For the subsequently approved 2026-10-08 SQLite→PG/R2 task, the user narrowed
+backup scope to **one preserved DB + application-storage recovery set**, not a
+recurring schedule or retention project. See
+`docs/runbooks/2026-10-08-sqlite-postgresql-r2-migration.md`. That supersedes the
+scheduled-backup requirement for this task only; independent recovery, actual
+isolation and cutover gates remain. It does not provide ongoing PG backup coverage.
+
 ### Initial VKE verification (2026-10-08)
 
 PostgreSQL 17.11 prepared successfully. TLS/hostname validation, SCRAM wrong-

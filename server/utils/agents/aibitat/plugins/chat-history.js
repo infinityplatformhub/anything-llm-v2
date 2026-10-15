@@ -52,10 +52,43 @@ const chatHistory = {
               user: { id: aibitat.handlerProps.invocation.user_id || null },
               threadId: aibitat.handlerProps.invocation.thread_id || null,
               include: false,
-              prompt: userMessage,
+              prompt:
+                aibitat.personalMcpUsed || aibitat.browserDeviceUsed
+                  ? aibitat.browserDeviceUsed
+                    ? "Android conversation is not stored in shared history."
+                    : "Personal MCP conversation is not stored in shared history."
+                  : userMessage,
               response: {},
             });
-            if (chat) aibitat.registerChatId(chat.id);
+            if (chat) {
+              // EventEmitter does not await this listener. Privacy can flip while
+              // the insert is pending, even if execution subsequently aborts.
+              if (
+                aibitat.personalMcpUsed ||
+                aibitat.browserDeviceUsed ||
+                aibitat.handlerProps.invocation.personalMcpUsed
+              ) {
+                await WorkspaceChats.upsert(chat.id, {
+                  workspaceId: Number(
+                    aibitat.handlerProps.invocation.workspace_id
+                  ),
+                  prompt: aibitat.browserDeviceUsed
+                    ? "Android conversation is not stored in shared history."
+                    : "Personal MCP conversation is not stored in shared history.",
+                  response: {
+                    text: aibitat.browserDeviceUsed
+                      ? "Android response is not stored in shared history."
+                      : "Personal MCP response is not stored in shared history.",
+                    sources: [],
+                    type: "chat",
+                  },
+                  user: { id: aibitat.handlerProps.invocation.user_id },
+                  threadId: aibitat.handlerProps.invocation.thread_id || null,
+                  include: false,
+                });
+              }
+              aibitat.registerChatId(chat.id);
+            }
           }
         });
 
@@ -98,6 +131,8 @@ const chatHistory = {
         aibitat,
         { prompt, response, attachments = [] } = {}
       ) {
+        if (aibitat.personalMcpUsed || aibitat.browserDeviceUsed)
+          return this._storePersonal(aibitat, prompt);
         const invocation = aibitat.handlerProps.invocation;
         const metrics = aibitat.providerInstance?.getCumulativeUsage?.() ?? {};
         const citations = aibitat._pendingCitations ?? [];
@@ -133,6 +168,8 @@ const chatHistory = {
         aibitat,
         { prompt, response, attachments = [], options = {} } = {}
       ) {
+        if (aibitat.personalMcpUsed || aibitat.browserDeviceUsed)
+          return this._storePersonal(aibitat, prompt);
         const invocation = aibitat.handlerProps.invocation;
         const metrics = aibitat.providerInstance?.getCumulativeUsage?.() ?? {};
         const citations = aibitat._pendingCitations ?? [];
@@ -168,6 +205,29 @@ const chatHistory = {
           );
         }
         options?.postSave();
+        this._cleanup(aibitat);
+      },
+
+      _storePersonal: async function (aibitat) {
+        const invocation = aibitat.handlerProps.invocation;
+        await WorkspaceChats.upsert(aibitat.trackedChatId, {
+          workspaceId: Number(invocation.workspace_id),
+          prompt: aibitat.browserDeviceUsed
+            ? "Android conversation is not stored in shared history."
+            : "Personal MCP conversation is not stored in shared history.",
+          response: {
+            text: aibitat.browserDeviceUsed
+              ? "Android response is not stored in shared history."
+              : "Personal MCP response is not stored in shared history.",
+            sources: [],
+            type: "chat",
+          },
+          user: { id: invocation.user_id },
+          threadId: invocation.thread_id || null,
+          include: false,
+        });
+        // Keep personalMcpUsed sticky for the entire invocation: later replies
+        // can still derive from a private tool result in in-memory context.
         this._cleanup(aibitat);
       },
 

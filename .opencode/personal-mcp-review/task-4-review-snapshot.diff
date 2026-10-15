@@ -1,0 +1,1660 @@
+diff --git a/frontend/src/components/WorkspaceChat/ChatContainer/index.jsx b/frontend/src/components/WorkspaceChat/ChatContainer/index.jsx
+index c62ef6a2..a20a398d 100644
+--- a/frontend/src/components/WorkspaceChat/ChatContainer/index.jsx
++++ b/frontend/src/components/WorkspaceChat/ChatContainer/index.jsx
+@@ -39,6 +39,8 @@ import { ChatSidebarProvider } from "./ChatSidebar";
+ import SourcesSidebar from "./SourcesSidebar";
+ import MemoriesSidebar from "./MemoriesSidebar";
+ import ActiveGenerationGuard from "./ActiveGenerationGuard";
++import PersonalMcpConnections from "./PersonalMcpConnections";
++import { baseHeaders } from "@/utils/request";
+ 
+ export default function ChatContainer({
+   workspace,
+@@ -372,7 +374,8 @@ export default function ChatContainer({
+       try {
+         if (!socketId || !!websocket) return;
+         socket = new WebSocket(
+-          `${websocketURI()}/api/agent-invocation/${socketId}`
++          `${websocketURI()}/api/agent-invocation/${socketId}`,
++          baseHeaders().Authorization ? ["anythingllm-agent", `anythingllm-session.${baseHeaders().Authorization.slice(7)}`] : ["anythingllm-agent"]
+         );
+         socket.supportsAgentStreaming = false;
+ 
+@@ -488,6 +491,7 @@ export default function ChatContainer({
+           <div className="flex-1 min-w-0 relative md:rounded-[16px] bg-zinc-900 light:bg-white w-full h-full overflow-hidden border-none light:border-solid light:border light:border-theme-modal-border">
+             {isMobile && <SidebarMobileHeader />}
+             <WorkspaceModelPicker workspaceSlug={workspace.slug} />
++            <PersonalMcpConnections workspaceSlug={workspace.slug} />
+             <DnDFileUploaderWrapper>
+               <div className="flex flex-col h-full w-full items-center justify-center">
+                 <div className="flex flex-col items-center w-full max-w-[750px]">
+@@ -546,6 +550,7 @@ export default function ChatContainer({
+         <div className="flex-1 min-w-0 relative md:rounded-[16px] bg-zinc-900 light:bg-white text-white light:text-slate-900 h-full overflow-hidden border-none light:border-solid light:border light:border-theme-modal-border">
+           {isMobile && <SidebarMobileHeader />}
+           <WorkspaceModelPicker workspaceSlug={workspace.slug} />
++          <PersonalMcpConnections workspaceSlug={workspace.slug} />
+           <DnDFileUploaderWrapper>
+             <div className="flex flex-col h-full w-full pb-20 md:pb-0">
+               <div className="contents">
+diff --git a/frontend/src/models/workspaceMcp.js b/frontend/src/models/workspaceMcp.js
+index e20461ad..147b35d9 100644
+--- a/frontend/src/models/workspaceMcp.js
++++ b/frontend/src/models/workspaceMcp.js
+@@ -57,13 +57,15 @@ export function validateMcpConfig(config) {
+   if (config.anythingllm !== undefined) {
+     if (!isObject(config.anythingllm)) return "invalid_anythingllm";
+     for (const key of Object.keys(config.anythingllm))
+-      if (!["perWorkspaceAuth", "suppressedTools"].includes(key))
++      if (!["perWorkspaceAuth", "perUserAuth", "suppressedTools"].includes(key))
+         return `unknown_field:anythingllm.${key}`;
+     if (
+       config.anythingllm.perWorkspaceAuth !== undefined &&
+       typeof config.anythingllm.perWorkspaceAuth !== "boolean"
+     )
+       return "invalid_per_workspace_auth";
++    if ((config.anythingllm.perUserAuth !== undefined && typeof config.anythingllm.perUserAuth !== "boolean") ||
++        (config.anythingllm.perUserAuth === true && config.anythingllm.perWorkspaceAuth === true)) return "invalid_anythingllm";
+     if (
+       config.anythingllm.suppressedTools !== undefined &&
+       (!Array.isArray(config.anythingllm.suppressedTools) ||
+@@ -138,6 +140,12 @@ async function request(
+ const serverPath = (slug, name) =>
+   `/workspace/${encodeURIComponent(slug)}/mcp-servers${name ? `/${encodeURIComponent(name)}` : ""}`;
+ const WorkspaceMcp = {
++  personal: async (slug) => {
++    const data = await request(`/workspace/${encodeURIComponent(slug)}/mcp-personal`);
++    if (!Array.isArray(data.servers)) throw new Error("request_failed");
++    return data.servers;
++  },
++  personalTools: (slug, name) => request(`/workspace/${encodeURIComponent(slug)}/mcp-personal/${encodeURIComponent(name)}/tools`),
+   list: async (slug) => {
+     const data = await request(`/workspace/${encodeURIComponent(slug)}/mcp`);
+     if (!Array.isArray(data.connections)) throw new Error("request_failed");
+diff --git a/frontend/src/pages/WorkspaceSettings/AgentConfig/McpConnectors/ServerModal.jsx b/frontend/src/pages/WorkspaceSettings/AgentConfig/McpConnectors/ServerModal.jsx
+index 3ac2d37b..6ae489e6 100644
+--- a/frontend/src/pages/WorkspaceSettings/AgentConfig/McpConnectors/ServerModal.jsx
++++ b/frontend/src/pages/WorkspaceSettings/AgentConfig/McpConnectors/ServerModal.jsx
+@@ -44,6 +44,7 @@ export default function ServerModal({ slug, server, onClose, onSaved }) {
+   const [oauth, setOauth] = useState(
+     initial.anythingllm?.perWorkspaceAuth === true
+   );
++  const [personal, setPersonal] = useState(initial.anythingllm?.perUserAuth === true);
+   const [suppressed, setSuppressed] = useState(
+     initial.anythingllm?.suppressedTools || []
+   );
+@@ -66,7 +67,7 @@ export default function ServerModal({ slug, server, onClose, onSaved }) {
+         .filter((row) => row.key.trim())
+         .map((row) => [row.key.trim(), row.value])
+     ),
+-    anythingllm: { perWorkspaceAuth: oauth, suppressedTools: suppressed },
++    anythingllm: { perWorkspaceAuth: oauth && !personal, perUserAuth: personal, suppressedTools: suppressed },
+   };
+   const duplicateHeader =
+     new Set(headers.map((row) => row.key.trim().toLowerCase())).size !==
+@@ -140,6 +141,7 @@ export default function ServerModal({ slug, server, onClose, onSaved }) {
+       }))
+     );
+     setOauth(definition.anythingllm?.perWorkspaceAuth === true);
++    setPersonal(definition.anythingllm?.perUserAuth === true);
+     setSuppressed(definition.anythingllm?.suppressedTools || []);
+     setExtraEntries(extra);
+     setTab("form");
+@@ -413,7 +415,15 @@ export default function ServerModal({ slug, server, onClose, onSaved }) {
+                   size="md"
+                   variant="horizontal"
+                   enabled={oauth}
+-                  onChange={(enabled) => change(setOauth, enabled)}
++                  onChange={(enabled) => { change(setOauth, enabled); if (enabled) setPersonal(false); }}
++                />
++                <Toggle
++                  label="Personal OAuth (per member)"
++                  description="Members connect their own account from workspace chat. No workspace tokens are copied."
++                  size="md"
++                  variant="horizontal"
++                  enabled={personal}
++                  onChange={(enabled) => { change(setPersonal, enabled); if (enabled) setOauth(false); }}
+                 />
+                 {test.state === "ok" && (
+                   <fieldset>
+diff --git a/server/endpoints/agentWebsocket.js b/server/endpoints/agentWebsocket.js
+index 2b25c9e1..3e5cac05 100644
+--- a/server/endpoints/agentWebsocket.js
++++ b/server/endpoints/agentWebsocket.js
+@@ -80,6 +80,21 @@ function agentWebsocket(app) {
+         return;
+       }
+ 
++      // The existing invocation UUID remains compatible for legacy tools. Personal
++      // tools additionally require a signed browser session belonging to its creator.
++      if (Number.isInteger(agentHandler.invocation.workspace?.id)) {
++        const mcp = new (require("../utils/MCP"))();
++        const owned = await mcp.workspaceServerConfigs(agentHandler.invocation.workspace.id);
++        const ownedNames = new Set(owned.map(entry => entry.name));
++        const personal = [...owned, ...mcp.mcpServerConfigs.filter(entry => !ownedNames.has(entry.name))]
++          .some(entry => entry.server.anythingllm?.perUserAuth === true);
++        if (personal) {
++          try {
++            agentHandler.invocation.mcpCaller = await require("../utils/MCP/personalCaller").fromSocket(request, agentHandler.invocation);
++          } catch { socket.close(); return; }
++        }
++      }
++
+       // Installed before the "message" listener: a frame that arrives in
+       // between would otherwise reach relayToSocket with no bail handler set.
+       socket.checkBailCommand = (data) => {
+diff --git a/server/endpoints/mcpOAuth.js b/server/endpoints/mcpOAuth.js
+index de02152a..b0a47758 100644
+--- a/server/endpoints/mcpOAuth.js
++++ b/server/endpoints/mcpOAuth.js
+@@ -5,6 +5,8 @@ const MCPCompatibilityLayer = require("../utils/MCP");
+ const oauth = require("../utils/MCP/oauth");
+ const prisma = require("../utils/prisma");
+ const { EncryptionManager } = require("../utils/EncryptionManager");
++const { PersonalMcpGrant: Grant } = require("../models/personalMcpGrant");
++const personalCaller = require("../utils/MCP/personalCaller");
+ const { validatedRequest } = require("../utils/middleware/validatedRequest");
+ const {
+   flexUserRoleValid,
+@@ -14,7 +16,7 @@ const {
+ function mcpOAuthEndpoints(app) {
+   if (!app) return;
+   const encryption = new EncryptionManager();
+-  const middleware = [validatedRequest, flexUserRoleValid([ROLES.admin])];
++  const middleware = [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager, ROLES.default])];
+   const userId = (response) => response.locals.user?.id ?? null;
+ 
+   async function target(workspaceSlug, serverName) {
+@@ -31,12 +33,21 @@ function mcpOAuthEndpoints(app) {
+       ?.server;
+     if (
+       !workspace ||
+-      config?.anythingllm?.perWorkspaceAuth !== true ||
++      !(config?.anythingllm?.perWorkspaceAuth === true || config?.anythingllm?.perUserAuth === true) ||
+       typeof config.url !== "string" ||
+       config.command
+     )
+       throw new Error("invalid_target");
+-    return { workspace, serverUrl: config.url, hypervisor };
++    if (config.anythingllm?.perUserAuth) {
++      require("../utils/MCP/serverConfig").validateWorkspaceServerConfig(config);
++    }
++    return { workspace, serverUrl: config.url, hypervisor, config, personal: config.anythingllm?.perUserAuth === true };
++  }
++
++  async function authorize(response, destination) {
++    if (destination.personal) return personalCaller.fromResponse(response, destination.workspace);
++    if (response.locals?.multiUserMode && response.locals?.user?.role !== ROLES.admin) throw new Error("personal_auth_required");
++    return null;
+   }
+ 
+   app.get(
+@@ -45,10 +56,12 @@ function mcpOAuthEndpoints(app) {
+     async (request, response) => {
+       try {
+         const { workspaceSlug, serverName } = request.params;
+-        const { workspace, serverUrl } = await target(
++        const destination = await target(
+           workspaceSlug,
+           serverName
+         );
++        const { workspace, serverUrl, config, personal, hypervisor } = destination;
++        const identity = await authorize(response, destination);
+         if (!process.env.SERVER_URL || !process.env.JWT_SECRET)
+           return response.status(500).json({ error: "oauth_misconfigured" });
+         const origin = new URL(process.env.SERVER_URL);
+@@ -69,14 +82,19 @@ function mcpOAuthEndpoints(app) {
+           redirectUri,
+           wsSlug: workspaceSlug,
+           serverName,
+-          userId: userId(response),
++          userId: personal ? identity.userId : userId(response),
+         });
++        const grant = personal ? await Grant.begin(workspace.id, identity.userId, serverName, config) : null;
++        if (personal) await hypervisor.personalRuntime.stop(workspace.id, serverName, identity.userId);
+         const encrypted = encryption.encrypt(
+           JSON.stringify({
+             codeVerifier: flow.codeVerifier,
+             workspaceId: workspace.id,
+             serverUrl,
+             redirectUri,
++            personal,
++            fingerprint: personal ? Grant.fingerprint(config) : null,
++            grantVersion: grant?.version,
+           })
+         );
+         if (!encrypted) throw new Error("oauth_state_failed");
+@@ -90,7 +108,8 @@ function mcpOAuthEndpoints(app) {
+           },
+         });
+         return response.status(200).json({ url: flow.url });
+-      } catch {
++      } catch (error) {
++        if (error.message === "personal_auth_required") return response.status(401).json({ error: "personal_auth_required" });
+         return response.status(400).json({ error: "oauth_start_failed" });
+       }
+     }
+@@ -126,14 +145,21 @@ function mcpOAuthEndpoints(app) {
+     } catch {
+       return response.status(400).json({ error: "invalid_state" });
+     }
+-    const destination = `/workspace/${encodeURIComponent(state.wsSlug)}/settings/agent-config?mcp=${encodeURIComponent(state.serverName)}`;
++    const destination = `/workspace/${encodeURIComponent(state.wsSlug)}${flow.personal ? "" : "/settings/agent-config"}?mcp=${encodeURIComponent(state.serverName)}`;
+     try {
+-      const { workspace, serverUrl } = await target(
++      const current = await target(
+         state.wsSlug,
+         state.serverName
+       );
++      const { workspace, serverUrl, config, personal, hypervisor } = current;
+       if (workspace.id !== flow.workspaceId || serverUrl !== flow.serverUrl)
+         throw new Error("invalid_target");
++      if (personal !== (flow.personal === true)) throw new Error("invalid_target");
++      if (personal) {
++        await personalCaller.fromOAuthState(state.userId, workspace);
++        const grant = await Grant.find(workspace.id, state.userId, state.serverName, config);
++        if (Grant.fingerprint(config) !== flow.fingerprint || grant?.version !== flow.grantVersion) throw new Error("invalid_target");
++      }
+       if (request.query.error) {
+         const error =
+           request.query.error === "access_denied"
+@@ -153,6 +179,18 @@ function mcpOAuthEndpoints(app) {
+         code: request.query.code,
+         codeVerifier: flow.codeVerifier,
+       });
++      if (personal) {
++        // Exchange can take time: recheck active membership + destination again.
++        const latest = await target(state.wsSlug, state.serverName);
++        await personalCaller.fromOAuthState(state.userId, latest.workspace);
++        if (latest.workspace.id !== workspace.id || !latest.personal || Grant.fingerprint(latest.config) !== flow.fingerprint ||
++          !(await Grant.save(workspace.id, state.userId, state.serverName, flow.grantVersion, config, tokens))) {
++          await oauth.revokeTokens(tokens, serverUrl).catch(() => {});
++          throw new Error("invalid_target");
++        }
++        await hypervisor.personalRuntime.stop(workspace.id, state.serverName, state.userId);
++        return response.redirect(`${destination}&connected=1`);
++      }
+       await WorkspaceMcpConnection.saveTokens(
+         workspace.id,
+         state.serverName,
+@@ -181,7 +219,9 @@ function mcpOAuthEndpoints(app) {
+   app.post("/mcp/oauth/disconnect", middleware, async (request, response) => {
+     try {
+       const { workspaceSlug, serverName } = reqBody(request);
+-      const { workspace, hypervisor } = await target(workspaceSlug, serverName);
++      const destination = await target(workspaceSlug, serverName);
++      const { workspace, hypervisor, personal, config, serverUrl } = destination;
++      const identity = await authorize(response, destination);
+       const states = await prisma.lark_oauth_states.findMany({
+         where: { mode: "mcp" },
+         select: { state: true },
+@@ -192,7 +232,8 @@ function mcpOAuthEndpoints(app) {
+             const payload = oauth.verifyState(state);
+             return (
+               payload.wsSlug === workspaceSlug &&
+-              payload.serverName === serverName
++              payload.serverName === serverName &&
++              (!personal || payload.userId === identity.userId)
+             );
+           } catch {
+             return false;
+@@ -202,15 +243,51 @@ function mcpOAuthEndpoints(app) {
+       await prisma.lark_oauth_states.deleteMany({
+         where: { mode: "mcp", state: { in: matching } },
+       });
++      if (personal) {
++        const grant = await Grant.find(workspace.id, identity.userId, serverName, config);
++        let remoteRevoked = false;
++        try { if (grant?.access_token || grant?.refresh_token) remoteRevoked = await oauth.revokeTokens(grant, serverUrl); }
++        catch { /* Clear locally even when provider is unavailable. */ }
++        // CAS prevents a slow revoke from disconnecting a newer authorization.
++        if (grant) await Grant.clearGeneration(workspace.id, identity.userId, serverName, grant.generation);
++        await hypervisor.personalRuntime.stop(workspace.id, serverName, identity.userId);
++        return response.status(200).json({ success: true, remoteRevoked });
++      }
+       await WorkspaceMcpConnection.setEnabled(workspace.id, serverName, false);
+       await WorkspaceMcpConnection.clearTokens(workspace.id, serverName);
+       if (typeof hypervisor.stopWorkspaceServer === "function")
+         await hypervisor.stopWorkspaceServer(workspace.id, serverName);
+       return response.status(200).json({ success: true, remoteRevoked: false });
+-    } catch {
++    } catch (error) {
++      if (error.message === "personal_auth_required") return response.status(401).json({ error: "personal_auth_required" });
+       return response.status(400).json({ error: "oauth_disconnect_failed" });
+     }
+   });
++
++  app.get("/workspace/:slug/mcp-personal", [validatedRequest], async (request, response) => {
++    try {
++      const workspace = await Workspace.get({ slug: request.params.slug });
++      const identity = await personalCaller.fromResponse(response, workspace);
++      const mcp = new MCPCompatibilityLayer();
++      const owned = await mcp.workspaceServerConfigs(workspace.id);
++      const names = new Set(owned.map(entry => entry.name));
++      const catalog = [...owned, ...mcp.mcpServerConfigs.filter(entry => !names.has(entry.name))];
++      const servers = await Promise.all(catalog.filter(entry => entry.server.anythingllm?.perUserAuth === true).map(async ({ name, server }) => {
++        const grant = await Grant.find(workspace.id, identity.userId, name, server);
++        return { name, connected: !!grant?.enabled && !!grant.access_token, needsReauth: !!grant && !grant.enabled, expiresAt: grant?.expires_at ?? null };
++      }));
++      return response.status(200).json({ servers });
++    } catch { return response.status(401).json({ error: "personal_auth_required" }); }
++  });
++
++  app.get("/workspace/:slug/mcp-personal/:name/tools", [validatedRequest], async (request, response) => {
++    try {
++      const workspace = await Workspace.get({ slug: request.params.slug });
++      const identity = await personalCaller.fromResponse(response, workspace);
++      const tools = await new MCPCompatibilityLayer().personalRuntime.tools(workspace, request.params.name, identity);
++      return response.status(200).json({ tools });
++    } catch { return response.status(401).json({ error: "personal_tools_unavailable" }); }
++  });
+ }
+ 
+ module.exports = { mcpOAuthEndpoints };
+diff --git a/server/endpoints/workspaceMcpServers.js b/server/endpoints/workspaceMcpServers.js
+index 541e34a6..a092ea63 100644
+--- a/server/endpoints/workspaceMcpServers.js
++++ b/server/endpoints/workspaceMcpServers.js
+@@ -107,6 +107,7 @@ function globalCatalogConfig(server) {
+     anythingllm: server.anythingllm
+       ? {
+           perWorkspaceAuth: server.anythingllm.perWorkspaceAuth === true,
++          ...(server.anythingllm.perUserAuth === true ? { perUserAuth: true } : {}),
+           suppressedTools: Array.isArray(server.anythingllm.suppressedTools)
+             ? server.anythingllm.suppressedTools.filter(
+                 (tool) => typeof tool === "string"
+@@ -251,6 +252,8 @@ function workspaceMcpServersEndpoints(app) {
+       );
+       validateWorkspaceServerConfig(config);
+       // Fail closed: never publish a new destination while old grants remain.
++      if (existing.config.anythingllm?.perUserAuth || config.anythingllm?.perUserAuth)
++        await mcp.invalidatePersonalServer(workspace.id, name);
+       if (serverEndpointChanged(existing.config, config))
+         await WorkspaceMcpConnection.clearTokens(workspace.id, name);
+       await WorkspaceMcpServer.update(workspace.id, name, config);
+@@ -267,8 +270,10 @@ function workspaceMcpServersEndpoints(app) {
+     [ROLES.admin],
+     async (request, response, workspace, mcp) => {
+       const { name } = request.params;
+-      if (!(await WorkspaceMcpServer.find(workspace.id, name)))
++      const existing = await WorkspaceMcpServer.find(workspace.id, name);
++      if (!existing)
+         return fail(response, 404, "server_not_found");
++      if (existing.config.anythingllm?.perUserAuth) await mcp.invalidatePersonalServer(workspace.id, name);
+       await mcp.stopWorkspaceServer(workspace.id, name);
+       await WorkspaceMcpServer.delete(workspace.id, name);
+       return response.status(200).json({ success: true });
+@@ -301,6 +306,7 @@ function workspaceMcpServersEndpoints(app) {
+             const saved = await mcp.findServerConfig(body.name, workspace);
+             if (!saved) return fail(response, 404, "server_not_found");
+             config = saved.server;
++            if (config.anythingllm?.perUserAuth) return fail(response, 409, "personal_auth_required");
+             if (config.anythingllm?.perWorkspaceAuth) {
+               const connection = await WorkspaceMcpConnection.find(
+                 workspace.id,
+@@ -311,6 +317,7 @@ function workspaceMcpServersEndpoints(app) {
+               options.accessToken = connection.access_token;
+             }
+           }
++          if (config?.anythingllm?.perUserAuth) return fail(response, 409, "personal_auth_required");
+           validateWorkspaceServerConfig(config);
+           try {
+             const { tools, latencyMs } = await mcp.probeServerConfig(
+diff --git a/server/prisma/schema.prisma b/server/prisma/schema.prisma
+index ab0b9839..8242a958 100644
+--- a/server/prisma/schema.prisma
++++ b/server/prisma/schema.prisma
+@@ -88,6 +88,7 @@ model users {
+   workspace_parsed_files       workspace_parsed_files[]
+   memories                     memories[]
+   lark_identity                lark_identities?
++  personal_mcp_grants           personal_mcp_grants[]
+ }
+ 
+ model recovery_codes {
+@@ -153,6 +154,27 @@ model workspaces {
+   agent_settings               workspace_agent_settings?
+   mcp_connections              workspace_mcp_connections[]
+   mcp_servers                  workspace_mcp_servers[]
++  personal_mcp_grants           personal_mcp_grants[]
++}
++
++model personal_mcp_grants {
++  id            Int        @id @default(autoincrement())
++  workspace_id  Int
++  user_id       Int
++  server_name   String
++  fingerprint   String
++  version       Int        @default(1)
++  generation    Int        @default(1)
++  refresh_until DateTime?
++  enabled       Boolean    @default(false)
++  tokens        String?
++  expires_at    DateTime?
++  lastUpdatedAt DateTime   @default(now())
++  workspace     workspaces @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
++  user          users      @relation(fields: [user_id], references: [id], onDelete: Cascade)
++
++  @@unique([workspace_id, user_id, server_name])
++  @@index([workspace_id, server_name])
+ }
+ 
+ model workspace_threads {
+diff --git a/server/utils/MCP/hypervisor/index.js b/server/utils/MCP/hypervisor/index.js
+index 5478ee5a..3b245f3a 100644
+--- a/server/utils/MCP/hypervisor/index.js
++++ b/server/utils/MCP/hypervisor/index.js
+@@ -78,6 +78,24 @@ class MCPHypervisor {
+   workspaceBoots = new Map();
+   workspaceShadowWarnings = new Set();
+ 
++  get personalRuntime() {
++    if (!this._personalRuntime) {
++      const { PersonalMcpRuntime } = require("../personalRuntime");
++      this._personalRuntime = new PersonalMcpRuntime(this);
++    }
++    return this._personalRuntime;
++  }
++
++  async bootPersonalServer(workspace, name, caller) {
++    return this.personalRuntime.boot(workspace, name, caller);
++  }
++
++  async invalidatePersonalServer(workspaceId, name) {
++    const { PersonalMcpGrant } = require("../../../models/personalMcpGrant");
++    await PersonalMcpGrant.invalidate(workspaceId, name);
++    await this.personalRuntime.stop(workspaceId, name);
++  }
++
+   async workspaceServerConfigs(workspaceId) {
+     const rows = await WorkspaceMcpServer.listDecrypted(workspaceId);
+     return rows.map(({ name, config }) => ({
+@@ -231,6 +249,7 @@ class MCPHypervisor {
+     if (!config)
+       throw new Error(`MCP server ${name} is not enabled for this workspace`);
+     const { server, owner } = config;
++    if (server?.anythingllm?.perUserAuth) throw new Error("personal_auth_required");
+     const perWorkspaceAuth = server?.anythingllm?.perWorkspaceAuth;
+     if (owner === "workspace") validateWorkspaceServerConfig(server);
+     if (!perWorkspaceAuth && owner !== "workspace")
+@@ -322,7 +341,10 @@ class MCPHypervisor {
+     }
+   }
+ 
+-  async callServerTool(workspace, name, request) {
++  async callServerTool(workspace, name, request, caller) {
++    const personal = await this.findServerConfig(name, workspace);
++    if (personal?.server?.anythingllm?.perUserAuth)
++      return this.personalRuntime.call(workspace, name, request, caller);
+     if (
+       !Number.isInteger(workspace?.id) ||
+       workspace.id <= 0 ||
+@@ -351,6 +373,7 @@ class MCPHypervisor {
+     if (!config)
+       throw new Error(`MCP server ${name} is not enabled for this workspace`);
+     const { server } = config;
++    if (server?.anythingllm?.perUserAuth) throw new Error("personal_auth_required");
+     let client = await this.bootWorkspaceServer(workspace, name);
+     try {
+       return await client.callTool(args);
+@@ -541,7 +564,7 @@ class MCPHypervisor {
+         error: `MCP server ${name} not found in config file`,
+       };
+ 
+-    if (config.server?.anythingllm?.perWorkspaceAuth)
++    if (config.server?.anythingllm?.perWorkspaceAuth || config.server?.anythingllm?.perUserAuth)
+       return {
+         success: false,
+         error: "MCP server requires workspace authentication",
+@@ -825,7 +848,7 @@ class MCPHypervisor {
+     if (
+       serverDefinitions.some(
+         ({ name, server }) =>
+-          !server.anythingllm?.perWorkspaceAuth && this.mcps[name]
++          !server.anythingllm?.perWorkspaceAuth && !server.anythingllm?.perUserAuth && this.mcps[name]
+       )
+     ) {
+       this.log("MCP Servers already running, skipping boot.");
+@@ -833,7 +856,7 @@ class MCPHypervisor {
+     }
+ 
+     for (const { name, server } of serverDefinitions) {
+-      if (server.anythingllm?.perWorkspaceAuth) continue;
++      if (server.anythingllm?.perWorkspaceAuth || server.anythingllm?.perUserAuth) continue;
+       if (
+         server.anythingllm?.hasOwnProperty("autoStart") &&
+         server.anythingllm.autoStart === false
+diff --git a/server/utils/MCP/index.js b/server/utils/MCP/index.js
+index c16f239e..2704f242 100644
+--- a/server/utils/MCP/index.js
++++ b/server/utils/MCP/index.js
+@@ -17,7 +17,7 @@ class MCPCompatibilityLayer extends MCPHypervisor {
+    * This will also boot all MCP servers if they have not been started yet.
+    * @returns {Promise<string[]>} Array of flow names in @@mcp_{name} format
+    */
+-  async activeMCPServers(workspace) {
++  async activeMCPServers(workspace, caller) {
+     if (workspace === undefined) {
+       await this.bootMCPServers();
+       return Object.keys(this.mcps)
+@@ -29,11 +29,22 @@ class MCPCompatibilityLayer extends MCPHypervisor {
+     const connections = await WorkspaceMcpConnection.list(workspace.id);
+     await this.bootMCPServers();
+     const active = [];
++    if (caller) {
++      const owned = await this.workspaceServerConfigs(workspace.id);
++      const ownedNames = new Set(owned.map(entry => entry.name));
++      const catalog = [...owned, ...this.mcpServerConfigs.filter(entry => !ownedNames.has(entry.name))];
++      for (const { name, server } of catalog) {
++        if (server.anythingllm?.perUserAuth !== true) continue;
++        try { await this.bootPersonalServer(workspace, name, caller); active.push(`@@mcp_${name}`); }
++        catch { /* No private error bodies or credentials in generic logs. */ }
++      }
++    }
+     for (const connection of connections) {
+       if (!connection.enabled) continue;
+       const name = connection.server_name;
+       const config = await this.findServerConfig(name, workspace);
+       if (!config) continue;
++      if (config.server?.anythingllm?.perUserAuth) continue;
+       const perWorkspaceAuth = config.server?.anythingllm?.perWorkspaceAuth;
+       if (perWorkspaceAuth && !connection.access_token) continue;
+       if (config.owner === "workspace" || perWorkspaceAuth) {
+@@ -58,6 +69,33 @@ class MCPCompatibilityLayer extends MCPHypervisor {
+     const workspace = _aibitat?.handlerProps?.invocation?.workspace;
+     const config = await this.findServerConfig(name, workspace);
+     if (!config) return null;
++    if (config.server?.anythingllm?.perUserAuth) {
++      const identity = _aibitat?.handlerProps?.invocation?.mcpCaller;
++      let tools;
++      try { tools = await this.personalRuntime.tools(workspace, name, identity); }
++      catch { return null; }
++      return tools.map(tool => ({
++        name: `${name}-${tool.name}`,
++        description: tool.description,
++        toolName: `${name}:${tool.name}`,
++        plugin: () => ({
++          name: `${name}-${tool.name}`,
++          setup: aibitat => aibitat.function({
++            name: `${name}-${tool.name}`, super: aibitat,
++            controller: new AbortController(), description: tool.description,
++            isMCPTool: true, privateMcp: true, examples: [],
++            parameters: { $schema: "http://json-schema.org/draft-07/schema#", ...tool.inputSchema },
++            handler: async (args = {}) => {
++              aibitat.personalMcpUsed = true;
++              try {
++                const result = await new MCPCompatibilityLayer().callServerTool(workspace, name, { name: tool.name, arguments: args }, identity);
++                return MCPCompatibilityLayer.returnMCPResult(result);
++              } catch { return "Personal MCP tool unavailable; reconnect your account if required."; }
++            },
++          }),
++        }),
++      }));
++    }
+     const scoped =
+       config.owner === "workspace" ||
+       config.server?.anythingllm?.perWorkspaceAuth;
+@@ -212,7 +250,7 @@ class MCPCompatibilityLayer extends MCPHypervisor {
+   async servers() {
+     await this.bootMCPServers();
+     const servers = this.mcpServerConfigs
+-      .filter(({ server }) => server.anythingllm?.perWorkspaceAuth)
++      .filter(({ server }) => server.anythingllm?.perWorkspaceAuth || server.anythingllm?.perUserAuth)
+       .map(({ name, server }) => ({
+         name,
+         config: server,
+@@ -317,6 +355,7 @@ class MCPCompatibilityLayer extends MCPHypervisor {
+         error: `MCP server ${name} not found in config file.`,
+       };
+ 
++    if (server.server?.anythingllm?.perUserAuth) await this.invalidatePersonalServer(null, name);
+     const mcp = this.mcps[name];
+     const online = !!mcp ? !!(await mcp.ping()) : false; // If the server is not in the mcps object, it is not running
+     if (online) this.pruneMCPServer(name);
+diff --git a/server/utils/MCP/oauth.js b/server/utils/MCP/oauth.js
+index f722aec8..5eb096d0 100644
+--- a/server/utils/MCP/oauth.js
++++ b/server/utils/MCP/oauth.js
+@@ -104,6 +104,8 @@ async function discover(serverUrl) {
+   ])
+     if (httpUrl(metadata[key]).origin !== issuerUrl.origin)
+       throw new Error("invalid_oauth_metadata");
++  if (metadata.revocation_endpoint && httpUrl(metadata.revocation_endpoint).origin !== issuerUrl.origin)
++    throw new Error("invalid_oauth_metadata");
+   discoveryCache.set(serverUrl, { metadata, exp: Date.now() + 5 * 60 * 1000 });
+   return metadata;
+ }
+@@ -279,6 +281,25 @@ async function refreshTokens(refreshToken, serverUrl) {
+   return { ...tokens, refresh_token: tokens.refresh_token ?? refreshToken };
+ }
+ 
++async function revokeTokens(tokens, serverUrl) {
++  const metadata = await discover(serverUrl);
++  if (!metadata.revocation_endpoint) return false;
++  const setting = await SystemSettings.get({ label: "mcp_oauth_clients" });
++  const client = JSON.parse(setting?.value || "{}")[serverUrl];
++  if (!client?.client_id) throw new Error("invalid_oauth_client");
++  // Refresh first to revoke the grant, then access. RFC 7009 success may be empty.
++  for (const [token, hint] of [[tokens.refresh_token, "refresh_token"], [tokens.access_token, "access_token"]]) {
++    if (!token) continue;
++    const response = await fetch(httpUrl(metadata.revocation_endpoint), {
++      method: "POST", redirect: "error", signal: AbortSignal.timeout(15000),
++      headers: { "Content-Type": "application/x-www-form-urlencoded" },
++      body: new URLSearchParams({ client_id: client.client_id, token, token_type_hint: hint }).toString(),
++    });
++    if (!response.ok) throw new Error("oauth_revocation_failed");
++  }
++  return true;
++}
++
+ module.exports = {
+   httpUrl,
+   discover,
+@@ -287,4 +308,5 @@ module.exports = {
+   verifyState,
+   exchangeCode,
+   refreshTokens,
++  revokeTokens,
+ };
+diff --git a/server/utils/MCP/serverConfig.js b/server/utils/MCP/serverConfig.js
+index 689d3e2a..84c13021 100644
+--- a/server/utils/MCP/serverConfig.js
++++ b/server/utils/MCP/serverConfig.js
+@@ -69,7 +69,7 @@ function validateWorkspaceServerConfig(config) {
+     if (!isObject(options)) throw new Error("invalid_anythingllm");
+     allowFields(
+       options,
+-      ["perWorkspaceAuth", "suppressedTools"],
++      ["perWorkspaceAuth", "perUserAuth", "suppressedTools"],
+       "anythingllm."
+     );
+     if (
+@@ -77,6 +77,10 @@ function validateWorkspaceServerConfig(config) {
+       typeof options.perWorkspaceAuth !== "boolean"
+     )
+       throw new Error("invalid_anythingllm");
++    if (
++      (Object.hasOwn(options, "perUserAuth") && typeof options.perUserAuth !== "boolean") ||
++      (options.perUserAuth === true && options.perWorkspaceAuth === true)
++    ) throw new Error("invalid_anythingllm");
+     if (
+       Object.hasOwn(options, "suppressedTools") &&
+       (!Array.isArray(options.suppressedTools) ||
+diff --git a/server/utils/agents/aibitat/index.js b/server/utils/agents/aibitat/index.js
+index bc269438..c4d48b2a 100644
+--- a/server/utils/agents/aibitat/index.js
++++ b/server/utils/agents/aibitat/index.js
+@@ -1075,19 +1075,19 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
+ 
+       fn.caller = byAgent || "agent";
+ 
+-      if (this.providerInstance?.verbose) {
++      if (this.providerInstance?.verbose && !fn.privateMcp) {
+         this?.introspect?.(
+           `${fn.caller} is executing \`${name}\` tool ${JSON.stringify(args, null, 2)}`
+         );
+       }
+ 
+-      this.handlerProps?.log?.(
++      if (!fn.privateMcp) this.handlerProps?.log?.(
+         `[debug]: ${fn.caller} is attempting to call \`${name}\` tool ${JSON.stringify(args, null, 2)}`
+       );
+ 
+       const result = await fn.handler(args);
+       Telemetry.sendTelemetry("agent_tool_call", { tool: name }, null, true);
+-      this.emitter.emit("toolCallResult", {
++      if (!fn.privateMcp) this.emitter.emit("toolCallResult", {
+         toolName: name,
+         arguments: args,
+         result,
+@@ -1254,7 +1254,7 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
+ 
+       const result = await fn.handler(args);
+       Telemetry.sendTelemetry("agent_tool_call", { tool: name }, null, true);
+-      this.emitter.emit("toolCallResult", {
++      if (!fn.privateMcp) this.emitter.emit("toolCallResult", {
+         toolName: name,
+         arguments: args,
+         result,
+diff --git a/server/utils/agents/aibitat/plugins/chat-history.js b/server/utils/agents/aibitat/plugins/chat-history.js
+index c5bbee49..b9da222e 100644
+--- a/server/utils/agents/aibitat/plugins/chat-history.js
++++ b/server/utils/agents/aibitat/plugins/chat-history.js
+@@ -98,6 +98,7 @@ const chatHistory = {
+         aibitat,
+         { prompt, response, attachments = [] } = {}
+       ) {
++        if (aibitat.personalMcpUsed) return this._storePersonal(aibitat, prompt);
+         const invocation = aibitat.handlerProps.invocation;
+         const metrics = aibitat.providerInstance?.getCumulativeUsage?.() ?? {};
+         const citations = aibitat._pendingCitations ?? [];
+@@ -133,6 +134,7 @@ const chatHistory = {
+         aibitat,
+         { prompt, response, attachments = [], options = {} } = {}
+       ) {
++        if (aibitat.personalMcpUsed) return this._storePersonal(aibitat, prompt);
+         const invocation = aibitat.handlerProps.invocation;
+         const metrics = aibitat.providerInstance?.getCumulativeUsage?.() ?? {};
+         const citations = aibitat._pendingCitations ?? [];
+@@ -171,6 +173,19 @@ const chatHistory = {
+         this._cleanup(aibitat);
+       },
+ 
++      _storePersonal: async function (aibitat, prompt) {
++        const invocation = aibitat.handlerProps.invocation;
++        await WorkspaceChats.upsert(aibitat.trackedChatId, {
++          workspaceId: Number(invocation.workspace_id), prompt,
++          response: { text: "Personal MCP response is not stored in shared history.", sources: [], type: "chat" },
++          user: { id: invocation.user_id }, threadId: invocation.thread_id || null,
++          include: false,
++        });
++        // Keep personalMcpUsed sticky for the entire invocation: later replies
++        // can still derive from a private tool result in in-memory context.
++        this._cleanup(aibitat);
++      },
++
+       _autoRenameThread: async function (aibitat, prompt) {
+         const invocation = aibitat.handlerProps.invocation;
+         if (!invocation?.thread_id) return true;
+diff --git a/server/utils/agents/defaults.js b/server/utils/agents/defaults.js
+index fc4c27f9..c46acaf6 100644
+--- a/server/utils/agents/defaults.js
++++ b/server/utils/agents/defaults.js
+@@ -63,7 +63,8 @@ const WORKSPACE_AGENT = {
+     _provider = null,
+     workspace = null,
+     user = null,
+-    prompt = ""
++    prompt = "",
++    mcpCaller = null
+   ) => {
+     let [role, clarifyingQuestionsSkills] = await Promise.all([
+       Provider.systemPrompt({
+@@ -86,7 +87,7 @@ const WORKSPACE_AGENT = {
+         ...clarifyingQuestionsSkills,
+         ...ImportedPlugin.activeImportedPlugins(),
+         ...AgentFlows.activeFlowPlugins(),
+-        ...(await new MCPCompatibilityLayer().activeMCPServers(workspace)),
++        ...(await new MCPCompatibilityLayer().activeMCPServers(workspace, mcpCaller)),
+       ],
+     };
+   },
+diff --git a/server/utils/agents/index.js b/server/utils/agents/index.js
+index 6703765e..c444fe90 100644
+--- a/server/utils/agents/index.js
++++ b/server/utils/agents/index.js
+@@ -650,7 +650,8 @@ class AgentHandler {
+     // safely assume that the MCP server is running and the tools are available/loaded.
+     if (name.startsWith("@@mcp_")) {
+       const activeServers = await new MCPCompatibilityLayer().activeMCPServers(
+-        this.invocation?.workspace ?? null
++        this.invocation?.workspace ?? null,
++        this.invocation?.mcpCaller
+       );
+       if (!activeServers.includes(name)) return;
+       const mcpPluginName = name.replace("@@mcp_", "");
+@@ -740,7 +741,8 @@ class AgentHandler {
+         if (entry.startsWith("@@mcp_")) {
+           const activeServers =
+             await new MCPCompatibilityLayer().activeMCPServers(
+-              this.invocation?.workspace ?? null
++              this.invocation?.workspace ?? null,
++              this.invocation?.mcpCaller
+             );
+           if (!activeServers.includes(entry)) continue;
+         }
+@@ -769,7 +771,8 @@ class AgentHandler {
+       this.provider,
+       this.invocation.workspace,
+       user,
+-      this.invocation.prompt
++      this.invocation.prompt,
++      this.invocation.mcpCaller
+     );
+ 
+     this.aibitat.agent(USER_AGENT.name, userAgentDef);
+diff --git a/server/utils/middleware/validatedRequest.js b/server/utils/middleware/validatedRequest.js
+index 1f4c65d2..54cbcea4 100644
+--- a/server/utils/middleware/validatedRequest.js
++++ b/server/utils/middleware/validatedRequest.js
+@@ -106,6 +106,7 @@ async function validateMultiUserRequest(request, response, next) {
+   }
+ 
+   response.locals.user = user;
++  response.locals.browserSessionUserId = user.id;
+   UserMetaCache.setFromRequest(request, user.id);
+   next();
+ }
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/frontend/src/components/WorkspaceChat/ChatContainer/PersonalMcpConnections.jsx b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/frontend/src/components/WorkspaceChat/ChatContainer/PersonalMcpConnections.jsx
+new file mode 100644
+index 0000000..eed4be2
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/frontend/src/components/WorkspaceChat/ChatContainer/PersonalMcpConnections.jsx
+@@ -0,0 +1,44 @@
++import { useEffect, useState } from "react";
++import WorkspaceMcp from "@/models/workspaceMcp";
++
++export default function PersonalMcpConnections({ workspaceSlug }) {
++  const [servers, setServers] = useState([]);
++  const [busy, setBusy] = useState(null);
++  const [message, setMessage] = useState("");
++  useEffect(() => {
++    let alive = true;
++    WorkspaceMcp.personal(workspaceSlug).then(rows => { if (alive) setServers(rows); }).catch(() => { if (alive) setServers([]); });
++    return () => { alive = false; };
++  }, [workspaceSlug]);
++  async function action(server, connect) {
++    if (busy) return;
++    setBusy(server.name); setMessage("");
++    try {
++      if (connect) {
++        const url = await WorkspaceMcp.start(workspaceSlug, server.name);
++        window.location.assign(url);
++      } else {
++        const result = await WorkspaceMcp.disconnect(workspaceSlug, server.name);
++        setServers(await WorkspaceMcp.personal(workspaceSlug));
++        if (!result.remoteRevoked) setMessage("Disconnected locally. Remote revocation could not be confirmed.");
++      }
++    } catch { setMessage("Connection unavailable. Try again or contact your workspace administrator."); }
++    finally { setBusy(null); }
++  }
++  if (!servers.length) return null;
++  return (
++    <details className="absolute right-4 top-14 z-20 rounded-lg bg-zinc-800 light:bg-white border border-theme-modal-border p-3 text-sm text-white light:text-slate-900 max-w-sm">
++      <summary className="cursor-pointer">My MCP connections</summary>
++      <p className="mt-2 text-xs">Only your account is connected. Personal tool replies are not saved in shared history.</p>
++      {servers.map(server => (
++        <div key={server.name} className="flex gap-3 items-center justify-between mt-3">
++          <span>{server.name}: {server.connected ? "Connected" : server.needsReauth ? "Reconnect required" : "Not connected"}</span>
++          <button type="button" disabled={!!busy} onClick={() => action(server, !server.connected)} className="rounded px-3 py-1 bg-blue-600 disabled:opacity-50">
++            {busy === server.name ? "Working…" : server.connected ? "Disconnect" : "Connect"}
++          </button>
++        </div>
++      ))}
++      {message && <p role="status" className="mt-3 text-xs">{message}</p>}
++    </details>
++  );
++}
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/endpoints/personalMcpOAuth.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/endpoints/personalMcpOAuth.test.js
+new file mode 100644
+index 0000000..d56c45e
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/endpoints/personalMcpOAuth.test.js
+@@ -0,0 +1,110 @@
++/* global jest */
++const { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } = require('@jest/globals');
++require('../utils/lark/_polyfill');
++jest.mock('../../utils/MCP', () => jest.fn());
++const crypto = require('crypto');
++const prisma = require('../../utils/prisma');
++const Layer = require('../../utils/MCP');
++const oauth = require('../../utils/MCP/oauth');
++const { PersonalMcpGrant: Grant } = require('../../models/personalMcpGrant');
++const { mcpOAuthEndpoints } = require('../../endpoints/mcpOAuth');
++let workspace, a, b, routes, config, stop;
++beforeAll(async () => {
++  process.env.JWT_SECRET = 'personal-state-test'; process.env.SERVER_URL = 'https://workspace.example';
++  process.env.SIG_KEY ||= 'test-key'; process.env.SIG_SALT ||= 'test-salt';
++  workspace = await prisma.workspaces.create({ data: { name: 'Personal endpoints', slug: crypto.randomUUID() } });
++  for (const name of ['a', 'b']) {
++    const user = await prisma.users.create({ data: { username: name + crypto.randomUUID(), password: 'unused' } });
++    await prisma.workspace_users.create({ data: { workspace_id: workspace.id, user_id: user.id } });
++    if (name === 'a') a = user; else b = user;
++  }
++});
++beforeEach(async () => {
++  config = { url: 'https://configurable.example/mcp', type: 'http', anythingllm: { perUserAuth: true } };
++  stop = jest.fn().mockResolvedValue();
++  Layer.mockImplementation(() => ({ findServerConfig: async () => ({ server: config }), mcpServerConfigs: [{ name: 'medusa', server: config }], workspaceServerConfigs: async () => [], personalRuntime: { stop, tools: async () => [{ name: 'read' }] } }));
++  jest.spyOn(oauth, 'authorizeUrl').mockImplementation(async args => {
++    const payload = { wsSlug: args.wsSlug, serverName: args.serverName, userId: args.userId, nonce: crypto.randomUUID(), exp: Date.now()+600000 };
++    const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
++    const state = encoded + '.' + crypto.createHmac('sha256', process.env.JWT_SECRET).update(encoded).digest('base64url');
++    return { ...payload, state, codeVerifier: 'verifier', url: `https://store.teamredball.com/mcp-auth/authorize?state=${state}` };
++  });
++  jest.spyOn(oauth, 'exchangeCode').mockResolvedValue({ access_token: 'private-access', refresh_token: 'private-refresh' });
++  jest.spyOn(oauth, 'revokeTokens').mockResolvedValue(true);
++  routes = {};
++  const register = (path, middleware, handler) => routes[path] = typeof middleware === 'function' ? { middleware: [], handler: middleware } : { middleware, handler };
++  mcpOAuthEndpoints({ get: register, post: register });
++  await prisma.personal_mcp_grants.deleteMany({ where: { workspace_id: workspace.id } });
++});
++afterEach(async () => { await prisma.lark_oauth_states.deleteMany({ where: { user_id: { in: [a.id,b.id] }, mode: 'mcp' } }); jest.restoreAllMocks(); });
++afterAll(async () => {
++  await prisma.workspaces.delete({ where: { id: workspace.id } });
++  for (const user of [a,b]) await prisma.users.delete({ where: { id: user.id } });
++  await prisma.$disconnect();
++});
++async function invoke(path, user = a, values = {}, verified = true) {
++  const route = routes[path];
++  expect(route).toBeDefined();
++  const req = { params: { workspaceSlug: workspace.slug, serverName: 'medusa', slug: workspace.slug, name: 'medusa' }, query: {}, body: {}, ...values };
++  const res = { locals: { user, multiUserMode: true, ...(verified && user ? { browserSessionUserId: user.id } : {}) }, statusCode: 200,
++    status(code) { this.statusCode = code; return this; }, json(value) { this.body = value; return this; }, sendStatus(code) { this.statusCode = code; return this; }, end() { return this; }, redirect(value) { this.location = value; this.statusCode = 302; return this; } };
++  let allowed = true;
++  // The browser validator is tested independently; execute real authorization guard.
++  for (const middleware of route.middleware.slice(1)) { allowed = false; await middleware(req, res, () => allowed = true); if (!allowed) break; }
++  if (allowed) await route.handler(req, res);
++  return res;
++}
++async function start(user = a) {
++  const res = await invoke('/mcp/oauth/start/:workspaceSlug/:serverName', user, { body: { userId: b.id } });
++  expect(res.statusCode).toBe(200); return new URL(res.body.url).searchParams.get('state');
++}
++async function callback(state) { return invoke('/mcp/oauth/callback', null, { query: { state, code: 'valid' } }); }
++describe('personal OAuth and member surface', () => {
++  it('ordinary members connect only own grant and callback returns to member chat', async () => {
++    const res = await callback(await start());
++    expect(res.location).toContain(`/workspace/${workspace.slug}?`); expect(res.location).toContain('connected=1');
++    expect(await Grant.find(workspace.id, b.id, 'medusa', config)).toBeNull();
++    expect((await Grant.find(workspace.id, a.id, 'medusa', config)).access_token).toBe('private-access');
++    const status = await invoke('/workspace/:slug/mcp-personal', b);
++    expect(status.body.servers[0].connected).toBe(false); expect(JSON.stringify(status.body)).not.toContain('private-access');
++  });
++  it('API-key/anonymous/unverified identities fail closed', async () => {
++    expect((await invoke('/mcp/oauth/start/:workspaceSlug/:serverName', a, {}, false)).statusCode).toBe(401);
++    expect((await invoke('/workspace/:slug/mcp-personal', null)).statusCode).toBe(401);
++  });
++  it.each(['membership', 'suspended', 'destination'])('callback rechecks %s before exchange', async mode => {
++    const state = await start();
++    if (mode === 'membership') await prisma.workspace_users.deleteMany({ where: { workspace_id: workspace.id, user_id: a.id } });
++    if (mode === 'suspended') await prisma.users.update({ where: { id: a.id }, data: { suspended: 1 } });
++    if (mode === 'destination') config = { ...config, url: 'https://changed.example/mcp' };
++    const res = await callback(state); expect(res.location).toContain('error=oauth_callback_failed'); expect(oauth.exchangeCode).not.toHaveBeenCalled();
++    if (mode === 'membership') await prisma.workspace_users.create({ data: { workspace_id: workspace.id, user_id: a.id } });
++    if (mode === 'suspended') await prisma.users.update({ where: { id: a.id }, data: { suspended: 0 } });
++  });
++  it('single-use callback cannot overwrite disconnect or newer reconnect', async () => {
++    const state = await start();
++    await invoke('/mcp/oauth/disconnect', a, { body: { workspaceSlug: workspace.slug, serverName: 'medusa', userId: b.id } });
++    expect((await callback(state)).statusCode).toBe(400);
++    const newer = await start(); expect((await callback(newer)).location).toContain('connected=1');
++    expect((await callback(newer)).statusCode).toBe(400);
++  });
++  it('revokes remotely before local clear; remote failure still clears only A', async () => {
++    await callback(await start(a)); await callback(await start(b));
++    let observed;
++    oauth.revokeTokens.mockImplementationOnce(async () => { observed = (await Grant.find(workspace.id, a.id, 'medusa', config)).enabled; throw new Error('private-provider-body'); });
++    const res = await invoke('/mcp/oauth/disconnect', a, { body: { workspaceSlug: workspace.slug, serverName: 'medusa' } });
++    expect(observed).toBe(true); expect(res.body).toEqual({ success: true, remoteRevoked: false });
++    expect((await Grant.find(workspace.id, a.id, 'medusa', config)).enabled).toBe(false);
++    expect((await Grant.find(workspace.id, b.id, 'medusa', config)).enabled).toBe(true);
++  });
++  it('disconnect cannot clear a grant reconnected during remote revocation', async () => {
++    await callback(await start());
++    oauth.revokeTokens.mockImplementationOnce(async () => { await callback(await start()); return true; });
++    await invoke('/mcp/oauth/disconnect', a, { body: { workspaceSlug: workspace.slug, serverName: 'medusa' } });
++    expect((await Grant.find(workspace.id, a.id, 'medusa', config)).enabled).toBe(true);
++  });
++  it('ordinary members cannot use the legacy workspace grant flow', async () => {
++    config.anythingllm = { perWorkspaceAuth: true };
++    expect((await invoke('/mcp/oauth/start/:workspaceSlug/:serverName')).statusCode).toBe(401);
++  });
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalClient.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalClient.test.js
+new file mode 100644
+index 0000000..3dca690
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalClient.test.js
+@@ -0,0 +1,86 @@
++/* global jest */
++const { describe, it, expect, beforeAll, afterAll, beforeEach } = require('@jest/globals');
++require('../../utils/lark/_polyfill');
++const crypto = require('crypto');
++const prisma = require('../../../utils/prisma');
++const { validateWorkspaceServerConfig } = require('../../../utils/MCP/serverConfig');
++let Grant, caller, workspace, a, b;
++const config = { url: 'https://medusa.example/mcp', type: 'http', anythingllm: { perUserAuth: true } };
++beforeAll(async () => {
++  process.env.SIG_KEY ||= 'personal-test-key';
++  process.env.SIG_SALT ||= 'personal-test-salt';
++  workspace = await prisma.workspaces.create({ data: { name: 'Personal MCP', slug: crypto.randomUUID() } });
++  a = await prisma.users.create({ data: { username: crypto.randomUUID(), password: 'unused' } });
++  b = await prisma.users.create({ data: { username: crypto.randomUUID(), password: 'unused' } });
++  for (const user of [a, b]) await prisma.workspace_users.create({ data: { workspace_id: workspace.id, user_id: user.id } });
++});
++beforeEach(async () => {
++  Grant = require('../../../models/personalMcpGrant').PersonalMcpGrant;
++  caller = require('../../../utils/MCP/personalCaller');
++  await prisma.personal_mcp_grants.deleteMany({ where: { workspace_id: workspace.id } });
++});
++afterAll(async () => {
++  if (workspace) await prisma.workspaces.delete({ where: { id: workspace.id } });
++  if (a) await prisma.users.delete({ where: { id: a.id } });
++  if (b) await prisma.users.delete({ where: { id: b.id } });
++  await prisma.$disconnect();
++});
++describe('personal MCP config and grants', () => {
++  it('accepts personal remote auth but rejects ambiguous auth modes', () => {
++    expect(validateWorkspaceServerConfig(config)).toEqual(config);
++    expect(() => validateWorkspaceServerConfig({ ...config, anythingllm: { perUserAuth: true, perWorkspaceAuth: true } })).toThrow('invalid_anythingllm');
++    expect(() => validateWorkspaceServerConfig({ ...config, anythingllm: { perUserAuth: 'yes' } })).toThrow('invalid_anythingllm');
++    expect(() => validateWorkspaceServerConfig({ command: 'node', anythingllm: { perUserAuth: true } })).toThrow('stdio_not_supported');
++  });
++  it('encrypts tokens and isolates A/B in one workspace without copying legacy tokens', async () => {
++    const grant = await Grant.begin(workspace.id, a.id, 'medusa', config);
++    expect(await Grant.save(workspace.id, a.id, 'medusa', grant.version, config, { access_token: 'private-access', refresh_token: 'private-refresh' })).toBe(true);
++    expect(await Grant.find(workspace.id, b.id, 'medusa', config)).toBeNull();
++    const row = await prisma.personal_mcp_grants.findFirst({ where: { user_id: a.id } });
++    expect(JSON.stringify(row)).not.toMatch(/private-access|private-refresh/);
++    expect(await Grant.find(workspace.id, a.id, 'medusa', config)).toMatchObject({ enabled: true, access_token: 'private-access', refresh_token: 'private-refresh' });
++  });
++  it('disconnect tombstone prevents stale refresh and callback overwrite', async () => {
++    const first = await Grant.begin(workspace.id, a.id, 'medusa', config);
++    await Grant.clear(workspace.id, a.id, 'medusa');
++    expect(await Grant.save(workspace.id, a.id, 'medusa', first.version, config, { access_token: 'stale' })).toBe(false);
++    const second = await Grant.begin(workspace.id, a.id, 'medusa', config);
++    expect(await Grant.save(workspace.id, a.id, 'medusa', second.version, config, { access_token: 'fresh' })).toBe(true);
++    expect(await Grant.save(workspace.id, a.id, 'medusa', second.version, config, { access_token: 'stale-refresh' })).toBe(false);
++    expect((await Grant.find(workspace.id, a.id, 'medusa', config)).access_token).toBe('fresh');
++  });
++  it('definition changes invalidate all personal grants and old callback versions', async () => {
++    const first = await Grant.begin(workspace.id, a.id, 'medusa', config);
++    await Grant.invalidate(workspace.id, 'medusa');
++    expect(await Grant.save(workspace.id, a.id, 'medusa', first.version, config, { access_token: 'stale' })).toBe(false);
++    expect(await Grant.find(workspace.id, a.id, 'medusa', { ...config, url: 'https://other.example/mcp' })).toBeNull();
++  });
++  it('database refresh lease is owner scoped and disconnect clears refresh but not reconnect', async () => {
++    const first = await Grant.begin(workspace.id, a.id, 'medusa', config);
++    await Grant.save(workspace.id, a.id, 'medusa', first.version, config, { access_token: 'initial', refresh_token: 'refresh' });
++    const original = await Grant.find(workspace.id, a.id, 'medusa', config);
++    const lease = await Grant.acquireRefresh(workspace.id, a.id, 'medusa', original.version, config);
++    expect(lease).toBe(original.version + 1);
++    expect(await Grant.acquireRefresh(workspace.id, a.id, 'medusa', original.version, config)).toBeNull();
++    await Grant.save(workspace.id, a.id, 'medusa', lease, config, { access_token: 'refreshed', refresh_token: 'rotated' });
++    await Grant.clearGeneration(workspace.id, a.id, 'medusa', original.generation);
++    expect((await Grant.find(workspace.id, a.id, 'medusa', config)).enabled).toBe(false);
++    const newer = await Grant.begin(workspace.id, a.id, 'medusa', config);
++    await Grant.save(workspace.id, a.id, 'medusa', newer.version, config, { access_token: 'reconnected' });
++    await Grant.clearGeneration(workspace.id, a.id, 'medusa', original.generation);
++    expect((await Grant.find(workspace.id, a.id, 'medusa', config)).access_token).toBe('reconnected');
++  });
++  it('requires a verified caller, active user and current membership', async () => {
++    await expect(caller.fromResponse({ locals: { user: a } }, workspace)).rejects.toThrow('personal_auth_required');
++    const response = { locals: { user: a, browserSessionUserId: a.id } };
++    const verified = await caller.fromResponse(response, workspace);
++    expect(await caller.assert(verified, workspace)).toBe(a.id);
++    await expect(caller.assert({ userId: a.id }, workspace)).rejects.toThrow('personal_auth_required');
++    await prisma.users.update({ where: { id: a.id }, data: { suspended: 1 } });
++    await expect(caller.assert(verified, workspace)).rejects.toThrow('personal_auth_required');
++    await prisma.users.update({ where: { id: a.id }, data: { suspended: 0 } });
++    await prisma.workspace_users.deleteMany({ where: { workspace_id: workspace.id, user_id: a.id } });
++    await expect(caller.assert(verified, workspace)).rejects.toThrow('personal_auth_required');
++    await prisma.workspace_users.create({ data: { workspace_id: workspace.id, user_id: a.id } });
++  });
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalFrontend.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalFrontend.test.js
+new file mode 100644
+index 0000000..cde27f1
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalFrontend.test.js
+@@ -0,0 +1,22 @@
++const { describe, it, expect } = require('@jest/globals');
++const fs = require('fs');
++const path = require('path');
++const vm = require('vm');
++const frontend = path.resolve(__dirname, '../../../../frontend/src');
++describe('personal frontend contract', () => {
++  it('accepts personal opt-in but rejects mixed workspace/personal auth', () => {
++    const source = fs.readFileSync(path.join(frontend, 'models/workspaceMcp.js'), 'utf8')
++      .replace(/^import .*;$/gm, '').replace(/export default WorkspaceMcp;/, '').replace(/export /g, '');
++    const context = vm.createContext({ URL, TextEncoder }); vm.runInContext(source + ';globalThis.validate = validateMcpConfig;', context);
++    const config = { url: 'https://configurable.example/mcp', anythingllm: { perUserAuth: true } };
++    expect(context.validate(config)).toBeNull();
++    expect(context.validate({ ...config, anythingllm: { perUserAuth: true, perWorkspaceAuth: true } })).toBe('invalid_anythingllm');
++  });
++  it('member chat mounts personal controls without navigating to admin settings', () => {
++    const chat = fs.readFileSync(path.join(frontend, 'components/WorkspaceChat/ChatContainer/index.jsx'), 'utf8');
++    expect(chat).toContain('<PersonalMcpConnections');
++    const ui = fs.readFileSync(path.join(frontend, 'components/WorkspaceChat/ChatContainer/PersonalMcpConnections.jsx'), 'utf8');
++    expect(ui).toContain('WorkspaceMcp.personal'); expect(ui).toContain('WorkspaceMcp.start'); expect(ui).toContain('WorkspaceMcp.disconnect');
++    expect(ui).not.toContain('/settings/');
++  });
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalPostgresql.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalPostgresql.test.js
+new file mode 100644
+index 0000000..78be326
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalPostgresql.test.js
+@@ -0,0 +1,33 @@
++const { it, expect } = require('@jest/globals');
++const fs = require('fs');
++const path = require('path');
++const { Client } = require('pg');
++
++it('standalone new-table migration works on PostgreSQL without SQLite history', async () => {
++  const url = process.env.PERSONAL_MCP_TEST_PG_URL;
++  if (!url) throw new Error('Set PERSONAL_MCP_TEST_PG_URL to the dedicated disposable PG database');
++  const parsed = new URL(url);
++  if (parsed.hostname !== '127.0.0.1' || parsed.port !== '55471' || parsed.pathname !== '/anythingllm_mcp_oauth_test') throw new Error('Refusing non-fixture PG destination');
++  const client = new Client({ connectionString: url });
++  await client.connect();
++  try {
++    await client.query('BEGIN');
++    await client.query('CREATE SCHEMA personal_client_migration_verify');
++    await client.query('SET LOCAL search_path TO personal_client_migration_verify');
++    // Independent baseline fixture, not another worker\'s tables or migration history.
++    await client.query('CREATE TABLE users (id SERIAL PRIMARY KEY); CREATE TABLE workspaces (id SERIAL PRIMARY KEY);');
++    const sql = fs.readFileSync(path.resolve(__dirname, '../../../prisma/postgresql/personal-mcp-grants.sql'), 'utf8').replace(/^BEGIN;|^COMMIT;/gm, '');
++    expect(sql).not.toMatch(/AUTOINCREMENT|PRAGMA|INSERT.*SELECT/i);
++    await client.query(sql);
++    await client.query('INSERT INTO users DEFAULT VALUES; INSERT INTO users DEFAULT VALUES; INSERT INTO workspaces DEFAULT VALUES;');
++    await client.query("INSERT INTO personal_mcp_grants (workspace_id,user_id,server_name,fingerprint,tokens) VALUES (1,1,'medusa','fp','cipher-a'),(1,2,'medusa','fp','cipher-b')");
++    const first = await client.query("UPDATE personal_mcp_grants SET version=version+1, tokens=NULL WHERE workspace_id=1 AND user_id=1 AND server_name='medusa' AND version=1");
++    const stale = await client.query("UPDATE personal_mcp_grants SET tokens='stale' WHERE workspace_id=1 AND user_id=1 AND server_name='medusa' AND version=1");
++    expect(first.rowCount).toBe(1); expect(stale.rowCount).toBe(0);
++    expect((await client.query('SELECT tokens FROM personal_mcp_grants WHERE user_id=2')).rows[0].tokens).toBe('cipher-b');
++    await client.query('DELETE FROM users WHERE id=1');
++    expect((await client.query('SELECT count(*)::int AS count FROM personal_mcp_grants')).rows[0].count).toBe(1);
++    await client.query('DELETE FROM workspaces WHERE id=1');
++    expect((await client.query('SELECT count(*)::int AS count FROM personal_mcp_grants')).rows[0].count).toBe(0);
++  } finally { await client.query('ROLLBACK'); await client.end(); }
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalPrivacy.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalPrivacy.test.js
+new file mode 100644
+index 0000000..2194963
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalPrivacy.test.js
+@@ -0,0 +1,42 @@
++/* global jest */
++const { describe, it, expect, beforeAll, afterAll } = require('@jest/globals');
++require('../../utils/lark/_polyfill');
++const crypto = require('crypto');
++const JWT = require('jsonwebtoken');
++const prisma = require('../../../utils/prisma');
++const caller = require('../../../utils/MCP/personalCaller');
++const { chatHistory } = require('../../../utils/agents/aibitat/plugins/chat-history');
++const { WorkspaceChats } = require('../../../models/workspaceChats');
++let workspace, a, b;
++beforeAll(async () => {
++  process.env.JWT_SECRET = 'socket-personal-test';
++  workspace = await prisma.workspaces.create({ data: { name: 'Socket ownership', slug: crypto.randomUUID() } });
++  for (const name of ['a','b']) {
++    const user = await prisma.users.create({ data: { username: name + crypto.randomUUID(), password: 'unused' } });
++    await prisma.workspace_users.create({ data: { workspace_id: workspace.id, user_id: user.id } });
++    if (name === 'a') a = user; else b = user;
++  }
++});
++afterAll(async () => { await prisma.workspaces.delete({ where: { id: workspace.id } }); for (const user of [a,b]) await prisma.users.delete({ where: { id: user.id } }); await prisma.$disconnect(); });
++describe('personal websocket ownership and shared history', () => {
++  it('only the invocation owner can get a personal caller from a signed session subprotocol', async () => {
++    const invocation = { workspace, user_id: a.id };
++    const request = user => ({ headers: { 'sec-websocket-protocol': 'anythingllm-agent, anythingllm-session.' + JWT.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' }) } });
++    expect(await caller.assert(await caller.fromSocket(request(a), invocation), workspace)).toBe(a.id);
++    await expect(caller.fromSocket(request(b), invocation)).rejects.toThrow('personal_auth_required');
++    await expect(caller.fromSocket({ headers: {}, query: { userId: a.id } }, invocation)).rejects.toThrow('personal_auth_required');
++  });
++  it.each(['_store', '_storeSpecial'])('redacts private results and derived response from %s, excludes retrieval', async method => {
++    const save = jest.spyOn(WorkspaceChats, 'upsert').mockResolvedValue({});
++    const plugin = chatHistory.plugin();
++    const instance = { personalMcpUsed: true, trackedChatId: 123,
++      handlerProps: { invocation: { workspace_id: workspace.id, user_id: a.id } },
++      _pendingCitations: [{ text: 'private-citation' }], _pendingOutputs: [{ content: 'private-output' }],
++      clearTrackedChatId: jest.fn(), clearCitations: jest.fn(), clearClarifyingQuestionSurveys: jest.fn() };
++    await plugin[method](instance, { prompt: 'hello', response: 'private-derived-result', options: { storedResponse: () => 'private-special-result' } });
++    const saved = save.mock.calls[0][1];
++    expect(JSON.stringify(saved)).not.toMatch(/private-derived|private-citation|private-output|private-special/);
++    expect(saved.include).toBe(false); expect(saved.response.text).toBe('Personal MCP response is not stored in shared history.');
++    save.mockRestore();
++  });
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalRuntime.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalRuntime.test.js
+new file mode 100644
+index 0000000..28ff6de
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalRuntime.test.js
+@@ -0,0 +1,110 @@
++/* global jest */
++const { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } = require('@jest/globals');
++require('../../utils/lark/_polyfill');
++jest.mock('@modelcontextprotocol/sdk/client/index.js', () => ({ Client: jest.fn(() => ({ connect: jest.fn().mockResolvedValue(), close: jest.fn().mockResolvedValue(), listTools: jest.fn().mockResolvedValue({ tools: [{ name: 'read', inputSchema: {} }, { name: 'write', inputSchema: {} }] }), callTool: jest.fn().mockResolvedValue({ content: [{ text: 'private-result' }] }) })) }));
++for (const [file, name] of [['stdio','StdioClientTransport'], ['sse','SSEClientTransport'], ['streamableHttp','StreamableHTTPClientTransport']]) jest.doMock(`@modelcontextprotocol/sdk/client/${file}.js`, () => ({ [name]: jest.fn(() => ({})) }));
++const fs = require('fs');
++const crypto = require('crypto');
++const prisma = require('../../../utils/prisma');
++const { PersonalMcpGrant: Grant } = require('../../../models/personalMcpGrant');
++const caller = require('../../../utils/MCP/personalCaller');
++const oauth = require('../../../utils/MCP/oauth');
++const Hypervisor = require('../../../utils/MCP/hypervisor');
++const Layer = require('../../../utils/MCP');
++const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
++const { StreamableHTTPClientTransport: Transport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
++let workspace, a, b, ca, cb, layer, config, logs;
++beforeAll(async () => {
++  process.env.SIG_KEY ||= 'personal-test-key'; process.env.SIG_SALT ||= 'personal-test-salt';
++  workspace = await prisma.workspaces.create({ data: { name: 'Personal runtime', slug: crypto.randomUUID() } });
++  for (const name of ['a','b']) {
++    const user = await prisma.users.create({ data: { username: name + crypto.randomUUID(), password: 'unused' } });
++    await prisma.workspace_users.create({ data: { workspace_id: workspace.id, user_id: user.id } });
++    if (name === 'a') a = user; else b = user;
++  }
++  ca = await caller.fromOAuthState(a.id, workspace); cb = await caller.fromOAuthState(b.id, workspace);
++});
++beforeEach(async () => {
++  jest.clearAllMocks(); logs = jest.spyOn(console, 'log').mockImplementation(() => {});
++  jest.spyOn(fs, 'existsSync').mockReturnValue(true);
++  Hypervisor._instance = undefined; Layer._instance = undefined; layer = new Layer();
++  config = { url: 'https://medusa.example/mcp', type: 'http', anythingllm: { perUserAuth: true, suppressedTools: ['write'] } };
++  Object.defineProperty(layer, 'mcpServerConfigs', { get: () => [{ name: 'medusa', server: config }] });
++  jest.spyOn(layer, 'workspaceServerConfigs').mockResolvedValue([]);
++  jest.spyOn(layer, 'findServerConfig').mockImplementation(async () => ({ name: 'medusa', server: config, owner: 'global' }));
++  await prisma.personal_mcp_grants.deleteMany({ where: { workspace_id: workspace.id } });
++  for (const user of [a,b]) {
++    const grant = await Grant.begin(workspace.id, user.id, 'medusa', config);
++    await Grant.save(workspace.id, user.id, 'medusa', grant.version, config, { access_token: `private-${user.id}`, refresh_token: 'private-refresh', expires_at: new Date(Date.now()+3600000) });
++  }
++});
++afterEach(async () => {
++  expect(JSON.stringify(logs.mock.calls)).not.toMatch(/private-/);
++  if (layer.personalRuntime) await layer.personalRuntime.stopAll();
++  jest.restoreAllMocks();
++});
++afterAll(async () => {
++  await prisma.workspaces.delete({ where: { id: workspace.id } });
++  for (const user of [a,b]) await prisma.users.delete({ where: { id: user.id } });
++  await prisma.$disconnect();
++});
++describe('personal runtime boundary', () => {
++  it('never boots personal servers globally or for anonymous jobs', async () => {
++    await layer.bootMCPServers(); expect(Client).not.toHaveBeenCalled();
++    expect(await layer.activeMCPServers(workspace)).toEqual([]);
++    await expect(layer.callServerTool(workspace, 'medusa', { name: 'read' })).rejects.toThrow('personal_auth_required');
++  });
++  it('isolates A/B boot locks, bearer headers, clients and discovery', async () => {
++    expect(await layer.activeMCPServers(workspace, ca)).toEqual(['@@mcp_medusa']);
++    expect(await layer.activeMCPServers(workspace, cb)).toEqual(['@@mcp_medusa']);
++    const first = await layer.bootPersonalServer(workspace, 'medusa', ca);
++    const second = await layer.bootPersonalServer(workspace, 'medusa', cb);
++    expect(first).not.toBe(second);
++    expect(Transport.mock.calls.map(call => call[1].requestInit.headers.authorization)).toEqual([`Bearer private-${a.id}`, `Bearer private-${b.id}`]);
++    expect(await layer.personalRuntime.tools(workspace, 'medusa', ca)).toEqual([{ name: 'read', inputSchema: {} }]);
++  });
++  it('does not replay mutations after a tool 401 and clears only caller grant', async () => {
++    const client = await layer.bootPersonalServer(workspace, 'medusa', ca);
++    client.callTool.mockRejectedValueOnce({ status: 401 });
++    const refresh = jest.spyOn(oauth, 'refreshTokens');
++    await expect(layer.callServerTool(workspace, 'medusa', { name: 'read', arguments: {} }, ca)).rejects.toThrow('MCP authentication required');
++    expect(client.callTool).toHaveBeenCalledTimes(1); expect(refresh).not.toHaveBeenCalled();
++    expect((await Grant.find(workspace.id, a.id, 'medusa', config)).enabled).toBe(false);
++    expect((await Grant.find(workspace.id, b.id, 'medusa', config)).enabled).toBe(true);
++  });
++  it('deduplicates refresh and rejects a refresh racing disconnect/reconnect', async () => {
++    const old = await Grant.find(workspace.id, a.id, 'medusa', config);
++    await Grant.save(workspace.id, a.id, 'medusa', old.version, config, { access_token: 'private-old', refresh_token: 'private-refresh', expires_at: new Date(0) });
++    const refresh = jest.spyOn(oauth, 'refreshTokens').mockImplementation(async () => {
++      await Grant.clear(workspace.id, a.id, 'medusa');
++      const newer = await Grant.begin(workspace.id, a.id, 'medusa', config);
++      await Grant.save(workspace.id, a.id, 'medusa', newer.version, config, { access_token: 'private-reconnected', refresh_token: 'private-fresh' });
++      return { access_token: 'private-stale', refresh_token: 'private-stale' };
++    });
++    const result = await Promise.allSettled([layer.bootPersonalServer(workspace, 'medusa', ca), layer.bootPersonalServer(workspace, 'medusa', ca)]);
++    expect(result.every(item => item.status === 'rejected')).toBe(true);
++    expect(refresh).toHaveBeenCalledTimes(1); expect(Client).not.toHaveBeenCalled();
++    expect((await Grant.find(workspace.id, a.id, 'medusa', config)).access_token).toBe('private-reconnected');
++  });
++  it('rechecks config and grant after an in-flight connect before publishing', async () => {
++    Client.mockImplementationOnce(() => ({ close: jest.fn().mockResolvedValue(), connect: jest.fn(async () => { await Grant.clear(workspace.id, a.id, 'medusa'); }) }));
++    await expect(layer.bootPersonalServer(workspace, 'medusa', ca)).rejects.toThrow();
++    expect(layer.personalRuntime.clients.size).toBe(0);
++  });
++  it('does not log private plugin args/results and marks chat history private', async () => {
++    await layer.activeMCPServers(workspace, ca);
++    const aibitat = { handlerProps: { invocation: { workspace, mcpCaller: ca }, log: jest.fn() }, function: jest.fn(), introspect: jest.fn() };
++    const plugins = await layer.convertServerToolsToPlugins('medusa', aibitat);
++    expect(plugins).toHaveLength(1); plugins[0].plugin().setup(aibitat);
++    const result = await aibitat.function.mock.calls[0][0].handler({ secret: 'private-args' });
++    expect(result).toContain('private-result'); expect(aibitat.personalMcpUsed).toBe(true);
++    expect(aibitat.function.mock.calls[0][0].privateMcp).toBe(true);
++    expect(JSON.stringify([aibitat.handlerProps.log.mock.calls, aibitat.introspect.mock.calls])).not.toMatch(/private-args|private-result/);
++  });
++  it('rejects unadvertised and suppressed tools before remote call', async () => {
++    const client = await layer.bootPersonalServer(workspace, 'medusa', ca);
++    await expect(layer.callServerTool(workspace, 'medusa', { name: 'write', arguments: {} }, ca)).rejects.toThrow('personal_tool_not_allowed');
++    await expect(layer.callServerTool(workspace, 'medusa', { name: 'unknown', arguments: {} }, ca)).rejects.toThrow('personal_tool_not_allowed');
++    expect(client.callTool).not.toHaveBeenCalled();
++  });
++});
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/models/personalMcpGrant.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/models/personalMcpGrant.js
+new file mode 100644
+index 0000000..0097b9e
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/models/personalMcpGrant.js
+@@ -0,0 +1,94 @@
++const prisma = require("../utils/prisma");
++const crypto = require("crypto");
++
++function fingerprint(config) {
++  return crypto.createHash("sha256").update(JSON.stringify(config)).digest("hex");
++}
++
++// Authenticated encryption with binding to owner + definition. Fail closed without
++// persistent keys; unlike legacy EncryptionManager this never writes environment files.
++function key() {
++  if (!process.env.SIG_KEY || !process.env.SIG_SALT)
++    throw new Error("personal_encryption_unconfigured");
++  return crypto.scryptSync(process.env.SIG_KEY, process.env.SIG_SALT, 32);
++}
++function aad(row) {
++  return Buffer.from(JSON.stringify([row.workspace_id, row.user_id, row.server_name, row.fingerprint]));
++}
++function encrypt(tokens, row) {
++  const iv = crypto.randomBytes(12);
++  const cipher = crypto.createCipheriv("aes-256-gcm", key(), iv);
++  cipher.setAAD(aad(row));
++  const encrypted = Buffer.concat([cipher.update(JSON.stringify(tokens)), cipher.final()]);
++  return [iv, cipher.getAuthTag(), encrypted].map(part => part.toString("base64url")).join(".");
++}
++function decrypt(row) {
++  try {
++    const [iv, tag, value] = row.tokens.split(".").map(part => Buffer.from(part, "base64url"));
++    const cipher = crypto.createDecipheriv("aes-256-gcm", key(), iv);
++    cipher.setAAD(aad(row));
++    cipher.setAuthTag(tag);
++    return JSON.parse(Buffer.concat([cipher.update(value), cipher.final()]).toString());
++  } catch { throw new Error("personal_grant_unavailable"); }
++}
++function scope(workspaceId, userId, serverName) {
++  if (!Number.isInteger(workspaceId) || workspaceId <= 0 || !Number.isInteger(userId) || userId <= 0 || typeof serverName !== "string" || !serverName)
++    throw new Error("invalid_personal_scope");
++  return { workspace_id: workspaceId, user_id: userId, server_name: serverName };
++}
++const PersonalMcpGrant = {
++  fingerprint,
++  async begin(workspaceId, userId, serverName, config) {
++    const owner = scope(workspaceId, userId, serverName);
++    return prisma.personal_mcp_grants.upsert({
++      where: { workspace_id_user_id_server_name: owner },
++      create: { ...owner, fingerprint: fingerprint(config) },
++      update: { fingerprint: fingerprint(config), version: { increment: 1 }, generation: { increment: 1 }, refresh_until: null, enabled: false, tokens: null, expires_at: null, lastUpdatedAt: new Date() },
++    });
++  },
++  async find(workspaceId, userId, serverName, config) {
++    const owner = scope(workspaceId, userId, serverName);
++    const row = await prisma.personal_mcp_grants.findUnique({ where: { workspace_id_user_id_server_name: owner } });
++    if (!row || row.fingerprint !== fingerprint(config)) return null;
++    return { ...row, ...(row.tokens ? decrypt(row) : {}) };
++  },
++  async save(workspaceId, userId, serverName, version, config, tokens) {
++    if (typeof tokens.access_token !== "string" || !tokens.access_token) throw new Error("invalid_personal_tokens");
++    const owner = { ...scope(workspaceId, userId, serverName), fingerprint: fingerprint(config) };
++    const result = await prisma.personal_mcp_grants.updateMany({
++      where: { ...owner, version },
++      data: { tokens: encrypt(tokens, owner), enabled: true, refresh_until: null, version: { increment: 1 }, expires_at: tokens.expires_at ?? null, lastUpdatedAt: new Date() },
++    });
++    return result.count === 1;
++  },
++  async clear(workspaceId, userId, serverName, version) {
++    return prisma.personal_mcp_grants.updateMany({
++      where: { ...scope(workspaceId, userId, serverName), ...(version === undefined ? {} : { version }) },
++      data: { tokens: null, enabled: false, expires_at: null, refresh_until: null, version: { increment: 1 }, generation: { increment: 1 }, lastUpdatedAt: new Date() },
++    });
++  },
++  async clearGeneration(workspaceId, userId, serverName, generation) {
++    return prisma.personal_mcp_grants.updateMany({
++      where: { ...scope(workspaceId, userId, serverName), generation },
++      data: { tokens: null, enabled: false, expires_at: null, refresh_until: null, version: { increment: 1 }, generation: { increment: 1 }, lastUpdatedAt: new Date() },
++    });
++  },
++  async acquireRefresh(workspaceId, userId, serverName, version, config) {
++    const result = await prisma.personal_mcp_grants.updateMany({
++      where: { ...scope(workspaceId, userId, serverName), version, fingerprint: fingerprint(config), enabled: true,
++        OR: [{ refresh_until: null }, { refresh_until: { lt: new Date() } }] },
++      data: { version: { increment: 1 }, refresh_until: new Date(Date.now() + 30000), lastUpdatedAt: new Date() },
++    });
++    return result.count === 1 ? version + 1 : null;
++  },
++  async releaseRefresh(workspaceId, userId, serverName, version) {
++    await prisma.personal_mcp_grants.updateMany({ where: { ...scope(workspaceId, userId, serverName), version }, data: { refresh_until: null } });
++  },
++  async invalidate(workspaceId, serverName) {
++    return prisma.personal_mcp_grants.updateMany({
++      where: { ...(workspaceId == null ? {} : { workspace_id: workspaceId }), server_name: serverName },
++      data: { tokens: null, enabled: false, expires_at: null, refresh_until: null, version: { increment: 1 }, generation: { increment: 1 }, lastUpdatedAt: new Date() },
++    });
++  },
++};
++module.exports = { PersonalMcpGrant };
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/prisma/migrations/20261008000000_personal_mcp_grants/migration.sql b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/prisma/migrations/20261008000000_personal_mcp_grants/migration.sql
+new file mode 100644
+index 0000000..cfa96f0
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/prisma/migrations/20261008000000_personal_mcp_grants/migration.sql
+@@ -0,0 +1,19 @@
++-- New empty table only. Never import workspace/global credentials.
++CREATE TABLE "personal_mcp_grants" (
++  "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
++  "workspace_id" INTEGER NOT NULL,
++  "user_id" INTEGER NOT NULL,
++  "server_name" TEXT NOT NULL,
++  "fingerprint" TEXT NOT NULL,
++  "version" INTEGER NOT NULL DEFAULT 1,
++  "generation" INTEGER NOT NULL DEFAULT 1,
++  "refresh_until" DATETIME,
++  "enabled" BOOLEAN NOT NULL DEFAULT false,
++  "tokens" TEXT,
++  "expires_at" DATETIME,
++  "lastUpdatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  FOREIGN KEY ("workspace_id") REFERENCES "workspaces" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
++  FOREIGN KEY ("user_id") REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE CASCADE
++);
++CREATE UNIQUE INDEX "personal_mcp_grants_workspace_id_user_id_server_name_key" ON "personal_mcp_grants"("workspace_id", "user_id", "server_name");
++CREATE INDEX "personal_mcp_grants_workspace_id_server_name_idx" ON "personal_mcp_grants"("workspace_id", "server_name");
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/prisma/postgresql/personal-mcp-grants.sql b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/prisma/postgresql/personal-mcp-grants.sql
+new file mode 100644
+index 0000000..10bafd7
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/prisma/postgresql/personal-mcp-grants.sql
+@@ -0,0 +1,20 @@
++-- Standalone additive PostgreSQL migration. Do NOT replay SQLite migrations.
++-- Apply through the production operator's existing PG migration process after backup.
++BEGIN;
++CREATE TABLE "personal_mcp_grants" (
++  "id" SERIAL PRIMARY KEY,
++  "workspace_id" INTEGER NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE ON UPDATE CASCADE,
++  "user_id" INTEGER NOT NULL REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE,
++  "server_name" TEXT NOT NULL,
++  "fingerprint" TEXT NOT NULL,
++  "version" INTEGER NOT NULL DEFAULT 1,
++  "generation" INTEGER NOT NULL DEFAULT 1,
++  "refresh_until" TIMESTAMP(3),
++  "enabled" BOOLEAN NOT NULL DEFAULT false,
++  "tokens" TEXT,
++  "expires_at" TIMESTAMP(3),
++  "lastUpdatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
++);
++CREATE UNIQUE INDEX "personal_mcp_grants_workspace_id_user_id_server_name_key" ON "personal_mcp_grants"("workspace_id", "user_id", "server_name");
++CREATE INDEX "personal_mcp_grants_workspace_id_server_name_idx" ON "personal_mcp_grants"("workspace_id", "server_name");
++COMMIT;
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/personalCaller.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/personalCaller.js
+new file mode 100644
+index 0000000..bb36171
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/personalCaller.js
+@@ -0,0 +1,42 @@
++const prisma = require("../prisma");
++const { decodeJWT } = require("../http");
++const verified = new WeakSet();
++
++async function activeMember(userId, workspace) {
++  if (!Number.isInteger(userId) || userId <= 0 || !Number.isInteger(workspace?.id)) throw new Error("personal_auth_required");
++  const user = await prisma.users.findUnique({ where: { id: userId } });
++  if (!user || user.suspended) throw new Error("personal_auth_required");
++  const member = await prisma.workspace_users.findFirst({ where: { user_id: userId, workspace_id: workspace.id } });
++  if (!member) throw new Error("personal_auth_required");
++  return userId;
++}
++function issue(userId, workspace) {
++  const caller = Object.freeze({ userId, workspaceId: workspace.id });
++  verified.add(caller);
++  return caller;
++}
++async function fromResponse(response, workspace) {
++  const id = response.locals?.browserSessionUserId;
++  if (!id || response.locals?.user?.id !== id) throw new Error("personal_auth_required");
++  await activeMember(id, workspace);
++  return issue(id, workspace);
++}
++async function assert(caller, workspace) {
++  if (!caller || !verified.has(caller) || caller.workspaceId !== workspace?.id) throw new Error("personal_auth_required");
++  return activeMember(caller.userId, workspace);
++}
++// Used only after consuming a signed, single-use OAuth state from the database.
++async function fromOAuthState(userId, workspace) {
++  await activeMember(userId, workspace);
++  return issue(userId, workspace);
++}
++async function fromSocket(request, invocation) {
++  const auth = request.headers?.authorization;
++  const protocols = String(request.headers?.["sec-websocket-protocol"] || "").split(",").map(part => part.trim());
++  const token = auth?.startsWith("Bearer ") ? auth.slice(7) : protocols.find(part => part.startsWith("anythingllm-session."))?.slice(20);
++  const payload = token ? decodeJWT(token) : null;
++  if (!payload?.id || payload.id !== invocation.user_id) throw new Error("personal_auth_required");
++  await activeMember(payload.id, invocation.workspace);
++  return issue(payload.id, invocation.workspace);
++}
++module.exports = { fromResponse, assert, fromOAuthState, fromSocket };
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/personalRuntime.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/personalRuntime.js
+new file mode 100644
+index 0000000..68ad4d7
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/personalRuntime.js
+@@ -0,0 +1,127 @@
++const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
++const { PersonalMcpGrant: Grant } = require("../../models/personalMcpGrant");
++const caller = require("./personalCaller");
++const oauth = require("./oauth");
++const { validateWorkspaceServerConfig } = require("./serverConfig");
++
++class PersonalMcpRuntime {
++  clients = new Map();
++  boots = new Map();
++  epochs = new Map();
++  constructor(hypervisor) { this.hypervisor = hypervisor; }
++  key(workspace, userId, name) { return JSON.stringify([workspace.id, userId, name]); }
++  async target(workspace, name, identity) {
++    const userId = await caller.assert(identity, workspace);
++    const config = (await this.hypervisor.findServerConfig(name, workspace))?.server;
++    if (config?.anythingllm?.perUserAuth !== true) throw new Error("invalid_personal_target");
++    validateWorkspaceServerConfig(config);
++    const grant = await Grant.find(workspace.id, userId, name, config);
++    if (!grant?.enabled || !grant.access_token) throw new Error("MCP authentication required");
++    return { userId, config, grant };
++  }
++  async boot(workspace, name, identity) {
++    const userId = await caller.assert(identity, workspace);
++    const key = this.key(workspace, userId, name);
++    if (this.boots.has(key)) return this.boots.get(key);
++    const epoch = this.epochs.get(key) || 0;
++    const pending = this.connect(workspace, name, identity, key, epoch);
++    this.boots.set(key, pending);
++    try { return await pending; }
++    finally { if (this.boots.get(key) === pending) this.boots.delete(key); }
++  }
++  async connect(workspace, name, identity, key, epoch) {
++    let { userId, config, grant } = await this.target(workspace, name, identity);
++    if (grant.expires_at && new Date(grant.expires_at).getTime() < Date.now() + 60000) {
++      if (!grant.refresh_token) throw new Error("MCP authentication required");
++      const lease = await Grant.acquireRefresh(workspace.id, userId, name, grant.version, config);
++      if (lease === null) throw new Error("MCP token refresh busy");
++      grant = { ...grant, version: lease };
++      let tokens;
++      try { tokens = await oauth.refreshTokens(grant.refresh_token, config.url); }
++      catch (error) {
++        if (error.status === 401 || (error.status === 400 && error.code === "invalid_grant")) {
++          await Grant.clear(workspace.id, userId, name, grant.version);
++          await this.closeClient(key);
++          throw new Error("MCP authentication required");
++        }
++        await Grant.releaseRefresh(workspace.id, userId, name, lease);
++        throw new Error("MCP token refresh unavailable");
++      }
++      const current = await this.target(workspace, name, identity);
++      if (Grant.fingerprint(current.config) !== Grant.fingerprint(config) || current.grant.version !== grant.version ||
++          !(await Grant.save(workspace.id, userId, name, grant.version, config, tokens)))
++        throw new Error("MCP connection changed during refresh");
++      ({ config, grant } = await this.target(workspace, name, identity));
++    }
++    const existing = this.clients.get(key);
++    if (existing?.version === grant.version && existing.fingerprint === Grant.fingerprint(config)) return existing.client;
++    await this.closeClient(key);
++    const client = new Client({ name, version: "1.0.0" });
++    let timer, expired = false;
++    try {
++      const headers = new Headers(config.headers);
++      headers.set("Authorization", `Bearer ${grant.access_token}`);
++      const transport = this.hypervisor.createHttpTransport({ ...config, headers: Object.fromEntries(headers) });
++      const connecting = client.connect(transport);
++      // Close again if an SDK connect resolves after the deadline.
++      connecting.then(() => { if (expired) client.close().catch(() => {}); }, () => {});
++      await Promise.race([connecting, new Promise((_, reject) => {
++        timer = setTimeout(() => { expired = true; reject(new Error("MCP connection timeout")); }, 30000);
++      })]);
++      const current = await this.target(workspace, name, identity);
++      if ((this.epochs.get(key) || 0) !== epoch || current.grant.version !== grant.version || Grant.fingerprint(current.config) !== Grant.fingerprint(config))
++        throw new Error("MCP connection changed during connect");
++      this.clients.set(key, { client, version: grant.version, fingerprint: Grant.fingerprint(config) });
++      return client;
++    } catch { await client.close().catch(() => {}); throw new Error("MCP connection unavailable"); }
++    finally { clearTimeout(timer); }
++  }
++  async tools(workspace, name, identity) {
++    const client = await this.boot(workspace, name, identity);
++    let tools;
++    try { ({ tools } = await client.listTools()); }
++    catch { throw new Error("MCP tool discovery failed"); }
++    const { config, grant, userId } = await this.target(workspace, name, identity);
++    const cached = this.clients.get(this.key(workspace, userId, name));
++    if (cached?.client !== client || cached.version !== grant.version) throw new Error("MCP connection changed");
++    return (tools || []).filter(tool => !(config.anythingllm.suppressedTools || []).includes(tool.name));
++  }
++  async call(workspace, name, request, identity) {
++    const tools = await this.tools(workspace, name, identity);
++    if (!tools.some(tool => tool.name === request?.name)) throw new Error("personal_tool_not_allowed");
++    const { userId, grant } = await this.target(workspace, name, identity);
++    const entry = this.clients.get(this.key(workspace, userId, name));
++    if (!entry || entry.version !== grant.version) throw new Error("MCP connection changed");
++    try {
++      const result = await entry.client.callTool(request);
++      const current = await this.target(workspace, name, identity);
++      if (current.grant.version !== grant.version) throw new Error("MCP connection changed");
++      return result;
++    } catch (error) {
++      if (error.status === 401 || error.code === 401) {
++        await Grant.clear(workspace.id, userId, name, grant.version);
++        await this.stop(workspace.id, name, userId);
++        throw new Error("MCP authentication required");
++      }
++      // A tool may mutate before failing: never replay a tool request.
++      throw new Error("MCP tool call failed");
++    }
++  }
++  async closeClient(key) {
++    const entry = this.clients.get(key);
++    this.clients.delete(key);
++    if (entry) await entry.client.close().catch(() => {});
++  }
++  async stop(workspaceId, name, userId) {
++    const keys = new Set([...this.clients.keys(), ...this.boots.keys()]);
++    for (const key of keys) {
++      const [ws, user, server] = JSON.parse(key);
++      if ((workspaceId == null || ws === workspaceId) && (name == null || server === name) && (userId == null || user === userId)) {
++        this.epochs.set(key, (this.epochs.get(key) || 0) + 1);
++        await this.closeClient(key);
++      }
++    }
++  }
++  async stopAll() { await this.stop(null, null); }
++}
++module.exports = { PersonalMcpRuntime };

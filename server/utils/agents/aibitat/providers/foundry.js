@@ -180,7 +180,8 @@ class FoundryProvider extends InheritMultiple([Provider, UnTooled]) {
         { provider: this }
       );
     } catch (error) {
-      console.error(error.message, error);
+      if (!this.invocation?.personalMcpUsed)
+        console.error(error.message, error);
       if (error instanceof OpenAI.AuthenticationError) throw error;
       if (this.#isPrematureClose(error))
         throw new Error(FoundryLLM.explainStreamError(error, this.model));
@@ -231,7 +232,8 @@ class FoundryProvider extends InheritMultiple([Provider, UnTooled]) {
         result.result = ToolCallTextFilter.clean(result.result);
       return result;
     } catch (error) {
-      console.error(error.message, error);
+      if (!this.invocation?.personalMcpUsed)
+        console.error(error.message, error);
       if (error instanceof OpenAI.AuthenticationError) throw error;
       if (this.#isPrematureClose(error))
         throw new Error(FoundryLLM.explainStreamError(error, this.model));

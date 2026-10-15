@@ -143,7 +143,13 @@ const websocket = {
         aibitat.onError(async (error) => {
           let errorMessage =
             error?.message || "An error occurred while running the agent.";
-          console.error(chalk.red(`   error: ${errorMessage}`), error);
+          if (
+            aibitat.personalMcpUsed ||
+            aibitat.browserDeviceUsed ||
+            aibitat.handlerProps?.invocation?.personalMcpUsed
+          )
+            errorMessage = "The agent failed to respond.";
+          else console.error(chalk.red(`   error: ${errorMessage}`), error);
           aibitat.introspect(
             `Error encountered while running: ${errorMessage}`
           );
@@ -154,6 +160,12 @@ const websocket = {
         });
 
         aibitat.introspect = (messageText) => {
+          if (
+            aibitat.personalMcpUsed ||
+            aibitat.browserDeviceUsed ||
+            aibitat.handlerProps?.invocation?.personalMcpUsed
+          )
+            return;
           if (!introspection) return; // Dump thoughts when not wanted.
           socket.send(
             JSON.stringify({

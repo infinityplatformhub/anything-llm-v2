@@ -1,5 +1,9 @@
 /** @type {import('jest').Config} */
 module.exports = {
+  modulePathIgnorePatterns: [
+    "<rootDir>/.scratch/",
+    "<rootDir>/.claude/worktrees/",
+  ],
   testPathIgnorePatterns: [
     "/node_modules/",
     "/open-computer/",

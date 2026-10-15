@@ -88,6 +88,8 @@ model users {
   workspace_parsed_files       workspace_parsed_files[]
   memories                     memories[]
   lark_identity                lark_identities?
+  personal_mcp_grants           personal_mcp_grants[]
+  personal_mcp_contexts         personal_mcp_contexts[]
 }
 
 model recovery_codes {
@@ -153,6 +155,40 @@ model workspaces {
   agent_settings               workspace_agent_settings?
   mcp_connections              workspace_mcp_connections[]
   mcp_servers                  workspace_mcp_servers[]
+  personal_mcp_grants           personal_mcp_grants[]
+  personal_mcp_contexts         personal_mcp_contexts[]
+}
+
+model personal_mcp_grants {
+  id            Int        @id @default(autoincrement())
+  workspace_id  Int
+  user_id       Int
+  server_name   String
+  fingerprint   String
+  version       Int        @default(1)
+  generation    Int        @default(1)
+  refresh_until DateTime?
+  enabled       Boolean    @default(false)
+  tokens        String?
+  expires_at    DateTime?
+  lastUpdatedAt DateTime   @default(now())
+  workspace     workspaces @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  user          users      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([workspace_id, user_id, server_name])
+  @@index([workspace_id, server_name])
+}
+
+model personal_mcp_contexts {
+  id           Int        @id @default(autoincrement())
+  workspace_id Int
+  user_id      Int
+  thread_key   Int        @default(0) // stable sentinel for the null/default thread
+  createdAt    DateTime   @default(now())
+  workspace    workspaces @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  user         users      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([workspace_id, user_id, thread_key])
 }
 
 model workspace_threads {

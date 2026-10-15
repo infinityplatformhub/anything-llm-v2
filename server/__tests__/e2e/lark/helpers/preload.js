@@ -24,7 +24,7 @@ const client = require("@prisma/client");
 const OriginalPrismaClient = client.PrismaClient;
 class E2EPrismaClient extends OriginalPrismaClient {
   constructor(options = {}) {
-    const url = process.env.E2E_DATABASE_URL;
+    const url = options.datasources?.db?.url ?? process.env.E2E_DATABASE_URL;
     super(url ? { ...options, datasources: { db: { url } } } : options);
   }
 }

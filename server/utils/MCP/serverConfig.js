@@ -1,5 +1,6 @@
 const { validateHeaderName, validateHeaderValue } = require("http");
 const { httpUrl } = require("./oauth");
+const { validatePersonalAuth } = require("./personalAuth");
 
 // Bound workspace names because they become part of agent tool identifiers.
 const MAX_SERVER_NAME_LENGTH = 64;
@@ -69,12 +70,30 @@ function validateWorkspaceServerConfig(config) {
     if (!isObject(options)) throw new Error("invalid_anythingllm");
     allowFields(
       options,
-      ["perWorkspaceAuth", "suppressedTools"],
+      [
+        "perWorkspaceAuth",
+        "perUserAuth",
+        "personalAuth",
+        "suppressedTools",
+        "categoryLoading",
+      ],
       "anythingllm."
     );
     if (
       Object.hasOwn(options, "perWorkspaceAuth") &&
       typeof options.perWorkspaceAuth !== "boolean"
+    )
+      throw new Error("invalid_anythingllm");
+    if (
+      (Object.hasOwn(options, "perUserAuth") &&
+        typeof options.perUserAuth !== "boolean") ||
+      (options.perUserAuth === true && options.perWorkspaceAuth === true)
+    )
+      throw new Error("invalid_anythingllm");
+    if (
+      Object.hasOwn(options, "categoryLoading") &&
+      (typeof options.categoryLoading !== "boolean" ||
+        (options.categoryLoading === true && options.perUserAuth !== true))
     )
       throw new Error("invalid_anythingllm");
     if (
@@ -84,6 +103,7 @@ function validateWorkspaceServerConfig(config) {
     )
       throw new Error("invalid_anythingllm");
   }
+  validatePersonalAuth(config);
   return config;
 }
 

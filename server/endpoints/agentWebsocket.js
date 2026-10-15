@@ -42,6 +42,15 @@ function runMessageHandler(handler, name, message) {
 
 // Setup listener for incoming messages to relay to socket so it can be handled by agent plugin.
 function relayToSocket(message) {
+  if (
+    this.handleAndroidResponse &&
+    runMessageHandler(
+      this.handleAndroidResponse,
+      "handleAndroidResponse",
+      message
+    )
+  )
+    return;
   // Tool toggles can arrive while the agent is paused awaiting feedback/approval,
   // so handle them first. The handler ignores (returns false for) any other message.
   if (
@@ -70,15 +79,76 @@ function agentWebsocket(app) {
   if (!app) return;
 
   app.ws("/agent-invocation/:uuid", async function (socket, request) {
+    let privateContext = false,
+      classifyingContext = false,
+      androidRequired = false,
+      agentHandler;
     try {
-      const agentHandler = await new AgentHandler({
+      const invocation = await WorkspaceAgentInvocation.getWithWorkspace({
         uuid: String(request.params.uuid),
+      });
+      if (!invocation || invocation.closed) {
+        socket.close();
+        return;
+      }
+      androidRequired =
+        invocation.prompt?.startsWith("android-browser-encrypted:") === true;
+      const { PersonalMcpContext } = require("../models/personalMcpContext");
+      const identity = require("../utils/MCP/personalCaller");
+      classifyingContext = true;
+      await PersonalMcpContext.prepare(invocation);
+      privateContext = await PersonalMcpContext.has(invocation);
+      classifyingContext = false;
+      let mcpCaller = null;
+      try {
+        mcpCaller = await identity.fromSocket(request, invocation);
+      } catch {
+        if (privateContext) {
+          socket.close();
+          return;
+        }
+      }
+      const androidContext =
+        await require("../utils/agents/androidBridge").fromSocket(
+          request,
+          invocation
+        );
+      const authorized = async () => {
+        if (androidContext) await androidContext.assert(invocation);
+        privateContext ||=
+          invocation.personalMcpUsed ||
+          (await PersonalMcpContext.has(invocation));
+        if (privateContext)
+          await identity.assert(mcpCaller, invocation.workspace);
+      };
+      // Queue every emission, rechecking actual session expiry/current membership
+      // immediately before transmission. No raw payload is logged on denial.
+      const send = socket.send.bind(socket);
+      let emissions = Promise.resolve();
+      socket.send = (...args) => {
+        emissions = emissions
+          .then(async () => {
+            await authorized();
+            if (socket.readyState === socket.OPEN) send(...args);
+          })
+          .catch(() => {
+            agentHandler?.aibitat?.abort();
+            socket.close();
+          });
+      };
+      agentHandler = await new AgentHandler({
+        uuid: String(request.params.uuid),
+        mcpCaller,
+        androidContext,
       }).init();
 
       if (!agentHandler.invocation) {
         socket.close();
         return;
       }
+
+      agentHandler.invocation.mcpCaller = mcpCaller;
+      if (privateContext) agentHandler.invocation.personalMcpUsed = true;
 
       // Installed before the "message" listener: a frame that arrives in
       // between would otherwise reach relayToSocket with no bail handler set.
@@ -96,7 +166,11 @@ function agentWebsocket(app) {
         }
       };
 
-      socket.on("message", relayToSocket);
+      socket.on("message", (message) => {
+        authorized()
+          .then(() => relayToSocket.call(socket, message))
+          .catch(() => socket.close());
+      });
       socket.on("close", () => {
         // Abort the running agent loop (stop button, tab close, disconnect) so
         // in-flight LLM requests are cancelled and no further turns run.
@@ -129,11 +203,22 @@ function agentWebsocket(app) {
       });
 
       await Telemetry.sendTelemetry("agent_chat_started");
+      await authorized();
       await agentHandler.createAIbitat({ socket });
       // Socket can close while aibitat is being built - don't start a session nobody is listening to.
       if (socket.readyState !== socket.OPEN) return;
       await agentHandler.startAgentCluster();
     } catch (e) {
+      if (
+        privateContext ||
+        androidRequired ||
+        classifyingContext ||
+        e.message === "personal_context_unavailable"
+      ) {
+        agentHandler?.aibitat?.abort();
+        socket?.close();
+        return;
+      }
       console.error(e.message, e);
       socket?.send(JSON.stringify({ type: "wssFailure", content: e.message }));
       socket?.close();

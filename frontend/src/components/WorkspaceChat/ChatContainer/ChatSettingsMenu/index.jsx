@@ -5,6 +5,7 @@ import TextSizeRow from "./TextSize";
 import MemoriesRow from "./Memories";
 import CopyLinkToChatRow from "./CopyLinkToChat";
 import ExportRow from "./Export";
+import PersonalMcpConnections from "../PersonalMcpConnections";
 
 export default function ChatSettingsMenu({
   history = [],
@@ -13,6 +14,7 @@ export default function ChatSettingsMenu({
 }) {
   const mode = useLoginMode();
   const [showMenu, setShowMenu] = useState(false);
+  const [showMcpConnections, setShowMcpConnections] = useState(false);
   const menuRef = useRef(null);
   const buttonRef = useRef(null);
 
@@ -41,6 +43,8 @@ export default function ChatSettingsMenu({
       <button
         ref={buttonRef}
         type="button"
+        aria-label="Chat settings"
+        aria-expanded={showMenu}
         onClick={() => setShowMenu(!showMenu)}
         className={`group border-none cursor-pointer flex items-center justify-center w-[35px] h-[35px] rounded-full transition-all ${
           showMenu
@@ -65,6 +69,18 @@ export default function ChatSettingsMenu({
         >
           <TextSizeRow />
           <MemoriesRow onClose={() => setShowMenu(false)} />
+          {workspace?.slug && (
+            <button
+              type="button"
+              className="flex items-center px-2 py-1 rounded text-left text-sm font-normal text-white light:text-slate-800 hover:bg-zinc-700 light:hover:bg-slate-200"
+              onClick={() => {
+                setShowMenu(false);
+                setShowMcpConnections(true);
+              }}
+            >
+              My MCP connections
+            </button>
+          )}
           <ExportRow
             history={history}
             workspace={workspace}
@@ -73,6 +89,13 @@ export default function ChatSettingsMenu({
           />
           <CopyLinkToChatRow />
         </div>
+      )}
+      {showMcpConnections && workspace?.slug && (
+        <PersonalMcpConnections
+          key={workspace.slug}
+          workspaceSlug={workspace.slug}
+          onClose={() => setShowMcpConnections(false)}
+        />
       )}
     </div>
   );

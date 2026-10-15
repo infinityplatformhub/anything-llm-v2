@@ -16,6 +16,7 @@ const {
   ROLES,
 } = require("../utils/middleware/multiUserProtected");
 const { validatedRequest } = require("../utils/middleware/validatedRequest");
+const { validatePersonalAuth } = require("../utils/MCP/personalAuth");
 
 // Bound tool output shown in the browser; deployments may lower/raise this limit.
 const DEFAULT_MCP_CALL_RESULT_MAX_BYTES = 64 * 1024;
@@ -28,6 +29,7 @@ const VALIDATION_CODES = new Set([
   "invalid_type",
   "invalid_headers",
   "invalid_anythingllm",
+  "invalid_personal_auth",
   "invalid_masked_header",
   "invalid_mcp_servers",
   "invalid_probe_timeout",
@@ -98,6 +100,16 @@ function boundedResult(value) {
 
 // Global file entries bypass workspace validation. Expose only catalog metadata.
 function globalCatalogConfig(server) {
+  let authDescriptor;
+  try {
+    validatePersonalAuth(server);
+    const descriptor = server.anythingllm?.personalAuth;
+    if (descriptor)
+      authDescriptor =
+        descriptor.type === "apiKey"
+          ? { type: "apiKey", header: "X-API-Key" }
+          : { type: "oauth" };
+  } catch {}
   const config = {
     type: ["http", "streamable", "sse"].includes(server.type)
       ? server.type
@@ -107,6 +119,10 @@ function globalCatalogConfig(server) {
     anythingllm: server.anythingllm
       ? {
           perWorkspaceAuth: server.anythingllm.perWorkspaceAuth === true,
+          ...(server.anythingllm.perUserAuth === true
+            ? { perUserAuth: true }
+            : {}),
+          ...(authDescriptor ? { personalAuth: authDescriptor } : {}),
           suppressedTools: Array.isArray(server.anythingllm.suppressedTools)
             ? server.anythingllm.suppressedTools.filter(
                 (tool) => typeof tool === "string"
@@ -251,6 +267,11 @@ function workspaceMcpServersEndpoints(app) {
       );
       validateWorkspaceServerConfig(config);
       // Fail closed: never publish a new destination while old grants remain.
+      if (
+        existing.config.anythingllm?.perUserAuth ||
+        config.anythingllm?.perUserAuth
+      )
+        await mcp.invalidatePersonalServer(workspace.id, name);
       if (serverEndpointChanged(existing.config, config))
         await WorkspaceMcpConnection.clearTokens(workspace.id, name);
       await WorkspaceMcpServer.update(workspace.id, name, config);
@@ -267,8 +288,10 @@ function workspaceMcpServersEndpoints(app) {
     [ROLES.admin],
     async (request, response, workspace, mcp) => {
       const { name } = request.params;
-      if (!(await WorkspaceMcpServer.find(workspace.id, name)))
-        return fail(response, 404, "server_not_found");
+      const existing = await WorkspaceMcpServer.find(workspace.id, name);
+      if (!existing) return fail(response, 404, "server_not_found");
+      if (existing.config.anythingllm?.perUserAuth)
+        await mcp.invalidatePersonalServer(workspace.id, name);
       await mcp.stopWorkspaceServer(workspace.id, name);
       await WorkspaceMcpServer.delete(workspace.id, name);
       return response.status(200).json({ success: true });
@@ -301,6 +324,8 @@ function workspaceMcpServersEndpoints(app) {
             const saved = await mcp.findServerConfig(body.name, workspace);
             if (!saved) return fail(response, 404, "server_not_found");
             config = saved.server;
+            if (config.anythingllm?.perUserAuth)
+              return fail(response, 409, "personal_auth_required");
             if (config.anythingllm?.perWorkspaceAuth) {
               const connection = await WorkspaceMcpConnection.find(
                 workspace.id,
@@ -311,6 +336,8 @@ function workspaceMcpServersEndpoints(app) {
               options.accessToken = connection.access_token;
             }
           }
+          if (config?.anythingllm?.perUserAuth)
+            return fail(response, 409, "personal_auth_required");
           validateWorkspaceServerConfig(config);
           try {
             const { tools, latencyMs } = await mcp.probeServerConfig(
@@ -388,4 +415,4 @@ function workspaceMcpServersEndpoints(app) {
   );
 }
 
-module.exports = { workspaceMcpServersEndpoints };
+module.exports = { workspaceMcpServersEndpoints, boundedResult };

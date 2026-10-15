@@ -1,0 +1,2337 @@
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/models/personalMcpContext.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/models/personalMcpContext.js
+new file mode 100644
+index 00000000..0279669d
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/models/personalMcpContext.js
+@@ -0,0 +1,131 @@
++const prisma = require("../utils/prisma");
++async function lock(tx, workspaceId) {
++  // Portable SQLite/PG first-write lock. PG locks this workspace row; SQLite
++  // obtains its write lock before reading privacy state. No field is changed.
++  await tx.$executeRaw`UPDATE workspaces SET "lastUpdatedAt" = "lastUpdatedAt" WHERE id = ${workspaceId}`;
++}
++function encryptedPrompt(prompt) {
++  if (prompt.startsWith("personal-mcp-encrypted:")) return prompt;
++  const encrypted =
++    new (require("../utils/EncryptionManager").EncryptionManager)().encrypt(
++      prompt
++    );
++  if (!encrypted) throw new Error("personal_context_unavailable");
++  return `personal-mcp-encrypted:${encrypted}`;
++}
++function scope(invocation) {
++  if (
++    !Number.isInteger(invocation?.workspace_id) ||
++    !Number.isInteger(invocation?.user_id)
++  )
++    return null;
++  return {
++    workspace_id: invocation.workspace_id,
++    user_id: invocation.user_id,
++    thread_key: invocation.thread_id ?? 0,
++  };
++}
++const PersonalMcpContext = {
++  async prepare(invocation) {
++    try {
++      await this.prepareStrict(invocation);
++    } catch {
++      // Unknown is not evidence of deletion/disconnection. Do not expose lookup
++      // errors or private configuration, and never proceed to legacy init.
++      throw new Error("personal_context_unavailable");
++    }
++  },
++  async prepareStrict(invocation) {
++    if (!scope(invocation) || (await this.has(invocation))) return;
++    // Classify the persisted creator's current connected capability, never the
++    // socket viewer, request userId, catalog existence or a remote boot result.
++    const { PersonalMcpGrant: Grant } = require("./personalMcpGrant");
++    const rows = await prisma.personal_mcp_grants.findMany({
++      where: {
++        workspace_id: invocation.workspace_id,
++        user_id: invocation.user_id,
++        enabled: true,
++      },
++      select: { server_name: true },
++    });
++    if (!rows.length) return;
++    const MCP = require("../utils/MCP");
++    for (const { server_name: name } of rows) {
++      const config = (
++        await MCP.findServerConfigStrict(name, invocation.workspace_id)
++      )?.server;
++      if (config?.anythingllm?.perUserAuth !== true) continue;
++      require("../utils/MCP/serverConfig").validateWorkspaceServerConfig(
++        config
++      );
++      const grant = await Grant.find(
++        invocation.workspace_id,
++        invocation.user_id,
++        name,
++        config
++      );
++      if (!grant?.enabled) continue;
++      if (typeof grant.access_token !== "string" || !grant.access_token)
++        throw new Error("personal_grant_unavailable");
++      await this.mark(invocation);
++      return;
++    }
++  },
++  async protectCreated(invocation) {
++    const owner = scope(invocation);
++    if (!owner) return invocation;
++    return prisma.$transaction(async (tx) => {
++      await lock(tx, owner.workspace_id);
++      const marked = await tx.personal_mcp_contexts.findUnique({
++        where: { workspace_id_user_id_thread_key: owner },
++      });
++      if (!marked) return invocation;
++      const prompt = encryptedPrompt(invocation.prompt);
++      await tx.workspace_agent_invocations.updateMany({
++        where: {
++          uuid: invocation.uuid,
++          workspace_id: owner.workspace_id,
++          user_id: owner.user_id,
++        },
++        data: { prompt },
++      });
++      return { ...invocation, prompt };
++    });
++  },
++  async has(invocation) {
++    const owner = scope(invocation);
++    if (!owner) return false;
++    return !!(await prisma.personal_mcp_contexts.findUnique({
++      where: { workspace_id_user_id_thread_key: owner },
++    }));
++  },
++  async mark(invocation) {
++    const owner = scope(invocation);
++    if (!owner) throw new Error("personal_auth_required");
++    await prisma.$transaction(async (tx) => {
++      await lock(tx, owner.workspace_id);
++      await tx.personal_mcp_contexts.upsert({
++        where: { workspace_id_user_id_thread_key: owner },
++        create: owner,
++        update: {},
++      });
++      const rows = await tx.workspace_agent_invocations.findMany({
++        where: {
++          workspace_id: owner.workspace_id,
++          user_id: owner.user_id,
++          thread_id: invocation.thread_id ?? null,
++        },
++        select: { id: true, prompt: true },
++      });
++      for (const row of rows) {
++        if (row.prompt.startsWith("personal-mcp-encrypted:")) continue;
++        await tx.workspace_agent_invocations.update({
++          where: { id: row.id },
++          data: { prompt: encryptedPrompt(row.prompt) },
++        });
++      }
++    });
++    invocation.personalMcpUsed = true;
++  },
++};
++module.exports = { PersonalMcpContext };
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/models/workspaceMcpServer.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/models/workspaceMcpServer.js
+new file mode 100644
+index 00000000..d8149d38
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/models/workspaceMcpServer.js
+@@ -0,0 +1,105 @@
++const prisma = require("../utils/prisma");
++const { EncryptionManager } = require("../utils/EncryptionManager");
++const {
++  validateWorkspaceServerName,
++  validateWorkspaceServerConfig,
++} = require("../utils/MCP/serverConfig");
++
++function encryptionManager() {
++  const manager = new EncryptionManager();
++  // EncryptionManager logs raw crypto errors; callers below emit only safe codes/names.
++  manager.log = () => {};
++  return manager;
++}
++
++function encryptConfig(name, config) {
++  validateWorkspaceServerName(name);
++  validateWorkspaceServerConfig(config);
++  const encrypted = encryptionManager().encrypt(JSON.stringify(config));
++  if (!encrypted) throw new Error("config_encrypt_failed");
++  return encrypted;
++}
++
++function decryptRow(row, manager) {
++  if (!row) return null;
++  try {
++    const plaintext = manager.decrypt(row.config);
++    if (!plaintext) throw new Error("config_decrypt_failed");
++    const config = JSON.parse(plaintext);
++    if (!config || typeof config !== "object" || Array.isArray(config))
++      throw new Error("config_decrypt_failed");
++    return { ...row, config };
++  } catch {
++    console.warn("[WorkspaceMcpServer] Config decrypt failed:", row.name);
++    return null;
++  }
++}
++
++const WorkspaceMcpServer = {
++  create: async function (workspaceId, name, config) {
++    return prisma.workspace_mcp_servers.create({
++      data: {
++        workspace_id: workspaceId,
++        name,
++        config: encryptConfig(name, config),
++      },
++    });
++  },
++
++  find: async function (workspaceId, name) {
++    const row = await prisma.workspace_mcp_servers.findUnique({
++      where: { workspace_id_name: { workspace_id: workspaceId, name } },
++    });
++    return row ? decryptRow(row, encryptionManager()) : null;
++  },
++
++  // Classification-only read: an existing but unreadable shadow must never
++  // become absence. Use the original persistent signature, without key creation.
++  findStrict: async function (workspaceId, name) {
++    try {
++      const row = await prisma.workspace_mcp_servers.findUnique({
++        where: { workspace_id_name: { workspace_id: workspaceId, name } },
++      });
++      if (!row) return null;
++      const key = process.env.SIG_KEY,
++        salt = process.env.SIG_SALT;
++      if (!key || !salt) throw new Error();
++      const manager = new EncryptionManager({ key, salt });
++      manager.log = () => {};
++      const config = JSON.parse(manager.decrypt(row.config));
++      validateWorkspaceServerConfig(config);
++      return { ...row, config };
++    } catch {
++      throw new Error("personal_config_unavailable");
++    }
++  },
++
++  listDecrypted: async function (workspaceId) {
++    const rows = await prisma.workspace_mcp_servers.findMany({
++      where: { workspace_id: workspaceId },
++    });
++    if (!rows.length) return [];
++    const manager = encryptionManager();
++    return rows.map((row) => decryptRow(row, manager)).filter(Boolean);
++  },
++
++  update: async function (workspaceId, name, config) {
++    return prisma.workspace_mcp_servers.update({
++      where: { workspace_id_name: { workspace_id: workspaceId, name } },
++      data: { config: encryptConfig(name, config) },
++    });
++  },
++
++  delete: async function (workspaceId, name) {
++    return prisma.$transaction(async (tx) => {
++      await tx.workspace_mcp_connections.deleteMany({
++        where: { workspace_id: workspaceId, server_name: name },
++      });
++      return tx.workspace_mcp_servers.delete({
++        where: { workspace_id_name: { workspace_id: workspaceId, name } },
++      });
++    });
++  },
++};
++
++module.exports = { WorkspaceMcpServer };
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/hypervisor/index.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/hypervisor/index.js
+new file mode 100644
+index 00000000..e8655faa
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/utils/MCP/hypervisor/index.js
+@@ -0,0 +1,1028 @@
++const { safeJsonParse } = require("../../http");
++const path = require("path");
++const fs = require("fs");
++const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
++const {
++  StdioClientTransport,
++} = require("@modelcontextprotocol/sdk/client/stdio.js");
++const {
++  SSEClientTransport,
++} = require("@modelcontextprotocol/sdk/client/sse.js");
++const {
++  StreamableHTTPClientTransport,
++} = require("@modelcontextprotocol/sdk/client/streamableHttp.js");
++const { patchShellEnvironmentPath } = require("../../helpers/shell");
++const {
++  WorkspaceMcpConnection,
++} = require("../../../models/workspaceMcpConnection");
++const { refreshTokens } = require("../oauth");
++const { createHash } = require("crypto");
++const { WorkspaceMcpServer } = require("../../../models/workspaceMcpServer");
++const { validateWorkspaceServerConfig } = require("../serverConfig");
++
++// Keep workspace connects at the existing runtime deadline; probes are shorter.
++const WORKSPACE_CONNECT_TIMEOUT_MS = 30_000;
++const DEFAULT_MCP_PROBE_TIMEOUT_MS = 15_000;
++
++async function withTimeout(operation, timeoutMs, message) {
++  let timeout;
++  try {
++    return await Promise.race([
++      operation(),
++      new Promise((_, reject) => {
++        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
++      }),
++    ]);
++  } finally {
++    clearTimeout(timeout);
++  }
++}
++
++/**
++ * @typedef {'stdio' | 'http'} MCPServerTypes
++ */
++
++/**
++ * @class MCPHypervisor
++ * @description A class that manages MCP servers found in the storage/plugins/anythingllm_mcp_servers.json file.
++ * This class is responsible for booting, stopping, and reloading MCP servers - it is the user responsibility for the MCP server definitions
++ * to me correct and also functioning tools depending on their deployment (docker vs local) as well as the security of said tools
++ * since MCP is basically arbitrary code execution.
++ *
++ * @notice This class is a singleton.
++ * @notice Each MCP tool has dependencies specific to it and this call WILL NOT check for them.
++ * For example, if the tools requires `npx` then the context in which AnythingLLM mains process is running will need to access npx.
++ * This is typically not common in our pre-built image so may not function. But this is the case anywhere MCP is used.
++ *
++ * AnythingLLM will take care of porting MCP servers to agent-callable functions via @agent directive.
++ * @see MCPCompatibilityLayer.convertServerToolsToPlugins
++ */
++class MCPHypervisor {
++  static _instance;
++  /**
++   * The path to the JSON file containing the MCP server definitions.
++   * @type {string}
++   */
++  mcpServerJSONPath;
++
++  /**
++   * The MCP servers currently running.
++   * @type { { [key: string]: Client & {transport: {_process: import('child_process').ChildProcess}, aibitatToolIds: string[]} } }
++   */
++  mcps = {};
++  /**
++   * The results of the MCP server loading process.
++   * @type { { [key: string]: {status: 'success' | 'failed', message: string} } }
++   */
++  mcpLoadingResults = {};
++  workspaceBoots = new Map();
++  workspaceShadowWarnings = new Set();
++  personalDefinitions = new Map();
++
++  async syncPersonalDefinitions() {
++    const {
++      PersonalMcpGrant: Grant,
++    } = require("../../../models/personalMcpGrant");
++    const definitions = new Map(
++      this.mcpServerConfigs
++        .filter((entry) => entry.server.anythingllm?.perUserAuth === true)
++        .map((entry) => [entry.name, Grant.fingerprint(entry.server)])
++    );
++    for (const [name, fingerprint] of this.personalDefinitions) {
++      if (definitions.get(name) !== fingerprint)
++        await this.invalidateGlobalPersonalServer(name);
++    }
++    this.personalDefinitions = definitions;
++  }
++
++  get personalRuntime() {
++    if (!this._personalRuntime) {
++      const { PersonalMcpRuntime } = require("../personalRuntime");
++      this._personalRuntime = new PersonalMcpRuntime(this);
++    }
++    return this._personalRuntime;
++  }
++
++  async bootPersonalServer(workspace, name, caller) {
++    return this.personalRuntime.boot(workspace, name, caller);
++  }
++
++  async invalidatePersonalServer(workspaceId, name) {
++    const { PersonalMcpGrant } = require("../../../models/personalMcpGrant");
++    await PersonalMcpGrant.invalidate(workspaceId, name);
++    await this.personalRuntime.stop(workspaceId, name);
++  }
++
++  async invalidateGlobalPersonalServer(name) {
++    const prisma = require("../../prisma");
++    const {
++      PersonalMcpGrant: Grant,
++    } = require("../../../models/personalMcpGrant");
++    const shadows = await prisma.workspace_mcp_servers.findMany({
++      where: { name },
++      select: { workspace_id: true },
++    });
++    const shadowIds = new Set(shadows.map((row) => row.workspace_id));
++    const grants = await prisma.personal_mcp_grants.findMany({
++      where: { server_name: name },
++      select: { workspace_id: true },
++    });
++    const workspaces = new Set(grants.map((row) => row.workspace_id));
++    if (this._personalRuntime) {
++      for (const key of [
++        ...this._personalRuntime.clients.keys(),
++        ...this._personalRuntime.boots.keys(),
++      ]) {
++        const [workspaceId, , serverName] = JSON.parse(key);
++        if (serverName === name) workspaces.add(workspaceId);
++      }
++    }
++    for (const workspaceId of workspaces) {
++      if (shadowIds.has(workspaceId)) continue;
++      await Grant.invalidate(workspaceId, name);
++      if (this._personalRuntime)
++        await this._personalRuntime.stop(workspaceId, name);
++    }
++    // Pending callbacks carry definition fingerprint + grant generation; global
++    // rows are tombstoned above. Shadowed workspace rows are intentionally untouched.
++  }
++
++  async workspaceServerConfigs(workspaceId) {
++    const rows = await WorkspaceMcpServer.listDecrypted(workspaceId);
++    return rows.map(({ name, config }) => ({
++      name,
++      server: config,
++      owner: "workspace",
++    }));
++  }
++
++  async findServerConfig(name, workspace) {
++    const global = this.mcpServerConfigs.find((config) => config.name === name);
++    const owned =
++      Number.isInteger(workspace?.id) && workspace.id > 0
++        ? await WorkspaceMcpServer.find(workspace.id, name)
++        : null;
++    if (owned) {
++      const key = this.workspaceServerKey(workspace, name);
++      if (global && !this.workspaceShadowWarnings.has(key)) {
++        this.workspaceShadowWarnings.add(key);
++        console.warn(
++          `[MCPHypervisor] Workspace server ${key} shadows global server`
++        );
++      }
++      return { name, server: owned.config, owner: "workspace" };
++    }
++    return global ? { ...global, owner: "global" } : null;
++  }
++
++  // No constructor/setup, discovery, repair, or fallback on an unreadable
++  // override. Resolve only this persisted creator's enabled grant name.
++  static async findServerConfigStrict(name, workspaceId) {
++    try {
++      if (
++        !Number.isInteger(workspaceId) ||
++        workspaceId <= 0 ||
++        typeof name !== "string" ||
++        !name
++      )
++        throw new Error();
++      const owned = await WorkspaceMcpServer.findStrict(workspaceId, name);
++      if (owned) return { name, server: owned.config, owner: "workspace" };
++      const catalogPath =
++        process.env.NODE_ENV === "development"
++          ? path.resolve(
++              __dirname,
++              "../../../storage/plugins/anythingllm_mcp_servers.json"
++            )
++          : path.resolve(
++              process.env.STORAGE_DIR ??
++                path.resolve(__dirname, "../../../storage"),
++              "plugins/anythingllm_mcp_servers.json"
++            );
++      const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
++      const isObject = (value) =>
++        value !== null && typeof value === "object" && !Array.isArray(value);
++      if (
++        !isObject(catalog) ||
++        !Object.hasOwn(catalog, "mcpServers") ||
++        !isObject(catalog.mcpServers)
++      )
++        throw new Error();
++      if (!Object.hasOwn(catalog.mcpServers, name)) return null;
++      const server = catalog.mcpServers[name];
++      if (!isObject(server)) throw new Error();
++      if (Object.hasOwn(server, "anythingllm")) {
++        if (
++          !isObject(server.anythingllm) ||
++          (Object.hasOwn(server.anythingllm, "perUserAuth") &&
++            typeof server.anythingllm.perUserAuth !== "boolean")
++        )
++          throw new Error();
++      }
++      if (server.anythingllm?.perUserAuth === true)
++        validateWorkspaceServerConfig(server);
++      return { name, server, owner: "global" };
++    } catch {
++      throw new Error("personal_config_unavailable");
++    }
++  }
++
++  async probeServerConfig(config, { timeoutMs, accessToken } = {}) {
++    validateWorkspaceServerConfig(config);
++    const configuredTimeout = Number(process.env.MCP_PROBE_TIMEOUT_MS);
++    timeoutMs ??=
++      configuredTimeout > 0 && Number.isFinite(configuredTimeout)
++        ? configuredTimeout
++        : DEFAULT_MCP_PROBE_TIMEOUT_MS;
++    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
++      throw new Error("invalid_probe_timeout");
++    const client = new Client({
++      name: "workspace-mcp-probe",
++      version: "1.0.0",
++    });
++    const started = Date.now();
++    let timedOut = false;
++    let failed = false;
++    try {
++      const server = { ...config };
++      if (accessToken) {
++        const headers = new Headers(server.headers);
++        headers.set("Authorization", `Bearer ${accessToken}`);
++        server.headers = Object.fromEntries(headers);
++      }
++      const transport = this.createHttpTransport(server);
++      const { tools } = await withTimeout(
++        async () => {
++          await client.connect(transport);
++          // A late connection must not start new requests after timeout cleanup.
++          if (timedOut) return { tools: [] };
++          return client.listTools();
++        },
++        timeoutMs,
++        "MCP probe timeout"
++      );
++      return { tools, latencyMs: Date.now() - started };
++    } catch (error) {
++      failed = true;
++      timedOut = error.message === "MCP probe timeout";
++      throw new Error(timedOut ? "MCP probe timeout" : "MCP probe failed");
++    } finally {
++      await client.close().catch(() => {
++        console.warn("MCP_PROBE_CLEANUP_FAILED");
++        // Preserve the probe error; surface cleanup failure only after success.
++        if (!failed) throw new Error("MCP probe cleanup failed");
++      });
++    }
++  }
++
++  workspaceServerKey(workspace, name) {
++    if (!Number.isInteger(workspace?.id) || workspace.id <= 0)
++      throw new Error("MCP workspace is required");
++    return `${workspace.id}:${name}`;
++  }
++
++  async stopWorkspaceServer(workspaceId, serverName) {
++    const key = this.workspaceServerKey({ id: workspaceId }, serverName);
++    const pending = this.workspaceBoots.get(key);
++    this.workspaceBoots.delete(key);
++    if (pending) await pending.catch(() => {});
++    const client = this.mcps[key];
++    delete this.mcps[key];
++    if (client) await client.close();
++  }
++
++  async markWorkspaceReauth(workspace, name) {
++    await this.stopWorkspaceServer(workspace.id, name);
++    await WorkspaceMcpConnection.saveTokens(workspace.id, name, {
++      refresh_token: null,
++      expires_at: new Date(0),
++    });
++  }
++
++  async refreshWorkspaceTokens(workspace, name, server, connection) {
++    if (!connection.refresh_token)
++      throw new Error("MCP authentication required");
++    let tokens;
++    try {
++      tokens = await refreshTokens(connection.refresh_token, server.url);
++    } catch (error) {
++      if (
++        error.status === 401 ||
++        (error.status === 400 && error.code === "invalid_grant")
++      ) {
++        await WorkspaceMcpConnection.saveTokens(workspace.id, name, {
++          refresh_token: null,
++          expires_at: new Date(0),
++        });
++        throw new Error("MCP authentication required");
++      }
++      throw new Error("MCP token refresh unavailable");
++    }
++    const current = await WorkspaceMcpConnection.find(workspace.id, name);
++    if (
++      !current?.enabled ||
++      current.access_token !== connection.access_token ||
++      current.refresh_token !== connection.refresh_token
++    )
++      throw new Error("MCP connection changed during refresh");
++    await WorkspaceMcpConnection.saveTokens(workspace.id, name, tokens);
++    return { ...connection, ...tokens };
++  }
++
++  async bootWorkspaceServer(workspace, serverName, retryAuth = true) {
++    const key = this.workspaceServerKey(workspace, serverName);
++    if (this.workspaceBoots.has(key)) return this.workspaceBoots.get(key);
++    const pending = this.connectWorkspaceServer(
++      workspace,
++      serverName,
++      retryAuth
++    );
++    this.workspaceBoots.set(key, pending);
++    try {
++      return await pending;
++    } finally {
++      if (this.workspaceBoots.get(key) === pending)
++        this.workspaceBoots.delete(key);
++    }
++  }
++
++  async connectWorkspaceServer(workspace, name, retryAuth) {
++    const key = this.workspaceServerKey(workspace, name);
++    const config = await this.findServerConfig(name, workspace);
++    if (!config)
++      throw new Error(`MCP server ${name} is not enabled for this workspace`);
++    const { server, owner } = config;
++    if (server?.anythingllm?.perUserAuth)
++      throw new Error("personal_auth_required");
++    const perWorkspaceAuth = server?.anythingllm?.perWorkspaceAuth;
++    if (owner === "workspace") validateWorkspaceServerConfig(server);
++    if (!perWorkspaceAuth && owner !== "workspace")
++      throw new Error("MCP workspace authentication is not configured");
++    const transport = this.#parseServerType(server);
++    if (transport !== "http")
++      throw new Error(
++        "MCP perWorkspaceAuth requires a remote transport; stdio is not supported"
++      );
++    this.#validateServerDefinitionByType(name, server, "http");
++    let connection = await WorkspaceMcpConnection.find(workspace.id, name);
++    if (!connection?.enabled)
++      throw new Error(
++        perWorkspaceAuth
++          ? "MCP authentication required"
++          : `MCP server ${name} is not enabled for this workspace`
++      );
++    if (
++      perWorkspaceAuth &&
++      (!connection.access_token || !connection.refresh_token)
++    )
++      throw new Error("MCP authentication required");
++    const fingerprint = createHash("sha256")
++      .update(JSON.stringify(server))
++      .digest("hex");
++    const expiring =
++      perWorkspaceAuth &&
++      connection.expires_at &&
++      new Date(connection.expires_at).getTime() < Date.now() + 60000;
++    const existing = this.mcps[key];
++    if (
++      existing &&
++      !expiring &&
++      existing.workspaceConfigFingerprint === fingerprint &&
++      (!perWorkspaceAuth ||
++        existing.workspaceAccessToken === connection.access_token)
++    )
++      return existing;
++    if (existing) {
++      delete this.mcps[key];
++      await existing.close();
++    }
++    if (expiring)
++      connection = await this.refreshWorkspaceTokens(
++        workspace,
++        name,
++        server,
++        connection
++      );
++
++    for (let attempt = 0; attempt < 2; attempt++) {
++      const client = new Client({ name, version: "1.0.0" });
++      try {
++        let transportConfig = server;
++        if (perWorkspaceAuth) {
++          const headers = new Headers(server.headers);
++          headers.set("Authorization", `Bearer ${connection.access_token}`);
++          transportConfig = { ...server, headers: Object.fromEntries(headers) };
++        }
++        const transport = this.createHttpTransport(transportConfig);
++        await withTimeout(
++          () => client.connect(transport),
++          WORKSPACE_CONNECT_TIMEOUT_MS,
++          "MCP connection timeout"
++        );
++        if (perWorkspaceAuth)
++          client.workspaceAccessToken = connection.access_token;
++        client.workspaceConfigFingerprint = fingerprint;
++        this.mcps[key] = client;
++        return client;
++      } catch (error) {
++        await client.close().catch(() => {});
++        if (!perWorkspaceAuth || (error.status !== 401 && error.code !== 401))
++          throw new Error("MCP connection failed");
++        if (attempt === 1 || !retryAuth) {
++          await WorkspaceMcpConnection.saveTokens(workspace.id, name, {
++            refresh_token: null,
++            expires_at: new Date(0),
++          });
++          throw new Error("MCP authentication required");
++        }
++        connection = await this.refreshWorkspaceTokens(
++          workspace,
++          name,
++          server,
++          connection
++        );
++      }
++    }
++  }
++
++  async callServerTool(workspace, name, request, caller) {
++    const personal = await this.findServerConfig(name, workspace);
++    if (personal?.server?.anythingllm?.perUserAuth)
++      return this.personalRuntime.call(workspace, name, request, caller);
++    if (
++      !Number.isInteger(workspace?.id) ||
++      workspace.id <= 0 ||
++      !(await WorkspaceMcpConnection.isAllowed(workspace.id, name))
++    )
++      throw new Error(`MCP server ${name} is not enabled for this workspace`);
++    const config = await this.findServerConfig(name, workspace);
++    if (!config)
++      throw new Error(`MCP server ${name} is not enabled for this workspace`);
++    if (
++      config.owner === "workspace" ||
++      config.server?.anythingllm?.perWorkspaceAuth
++    )
++      return this.callWorkspaceTool(workspace, name, request);
++    try {
++      if (!this.mcps[name]) await this.bootMCPServers();
++      if (!this.mcps[name]) throw new Error("MCP server unavailable");
++      return await this.mcps[name].callTool(request);
++    } catch {
++      throw new Error("MCP tool call failed");
++    }
++  }
++
++  async callWorkspaceTool(workspace, name, args) {
++    const config = await this.findServerConfig(name, workspace);
++    if (!config)
++      throw new Error(`MCP server ${name} is not enabled for this workspace`);
++    const { server } = config;
++    if (server?.anythingllm?.perUserAuth)
++      throw new Error("personal_auth_required");
++    let client = await this.bootWorkspaceServer(workspace, name);
++    try {
++      return await client.callTool(args);
++    } catch (error) {
++      if (
++        !server.anythingllm?.perWorkspaceAuth ||
++        (error.status !== 401 && error.code !== 401)
++      )
++        throw new Error("MCP tool call failed");
++    }
++    await this.stopWorkspaceServer(workspace.id, name);
++    const connection = await WorkspaceMcpConnection.find(workspace.id, name);
++    if (!connection?.enabled || !connection.access_token)
++      throw new Error("MCP authentication required");
++    await this.refreshWorkspaceTokens(workspace, name, server, connection);
++    client = await this.bootWorkspaceServer(workspace, name, false);
++    try {
++      return await client.callTool(args);
++    } catch (error) {
++      if (error.status === 401 || error.code === 401) {
++        await this.markWorkspaceReauth(workspace, name);
++        throw new Error("MCP authentication required");
++      }
++      throw new Error("MCP tool call failed");
++    }
++  }
++
++  constructor() {
++    if (MCPHypervisor._instance) return MCPHypervisor._instance;
++    MCPHypervisor._instance = this;
++    this.className = "MCPHypervisor";
++    this.log("Initializing MCP Hypervisor - subsequent calls will boot faster");
++    this.#setupConfigFile();
++    return this;
++  }
++
++  /**
++   * Setup the MCP server definitions file.
++   * Will create the file/directory if it doesn't exist already in storage/plugins with blank options
++   */
++  #setupConfigFile() {
++    this.mcpServerJSONPath =
++      process.env.NODE_ENV === "development"
++        ? path.resolve(
++            __dirname,
++            `../../../storage/plugins/anythingllm_mcp_servers.json`
++          )
++        : path.resolve(
++            process.env.STORAGE_DIR ??
++              path.resolve(__dirname, `../../../storage`),
++            `plugins/anythingllm_mcp_servers.json`
++          );
++
++    if (!fs.existsSync(this.mcpServerJSONPath)) {
++      fs.mkdirSync(path.dirname(this.mcpServerJSONPath), { recursive: true });
++      fs.writeFileSync(
++        this.mcpServerJSONPath,
++        JSON.stringify({ mcpServers: {} }, null, 2),
++        { encoding: "utf8" }
++      );
++    }
++
++    this.log(`MCP Config File: ${this.mcpServerJSONPath}`);
++  }
++
++  log(text, ...args) {
++    console.log(`\x1b[36m[${this.className}]\x1b[0m ${text}`, ...args);
++  }
++
++  /**
++   * Get the MCP servers from the JSON file.
++   * @returns { { name: string, server: { command: string, args: string[], env: { [key: string]: string } } }[] } The MCP servers.
++   */
++  get mcpServerConfigs() {
++    const servers = safeJsonParse(
++      fs.readFileSync(this.mcpServerJSONPath, "utf8"),
++      { mcpServers: {} }
++    );
++    return Object.entries(servers.mcpServers).map(([name, server]) => ({
++      name,
++      server,
++    }));
++  }
++
++  /**
++   * Remove the MCP server from the config file
++   * @param {string} name - The name of the MCP server to remove
++   * @returns {boolean} - True if the MCP server was removed, false otherwise
++   */
++  removeMCPServerFromConfig(name) {
++    const servers = safeJsonParse(
++      fs.readFileSync(this.mcpServerJSONPath, "utf8"),
++      { mcpServers: {} }
++    );
++    if (!servers.mcpServers[name]) return false;
++
++    delete servers.mcpServers[name];
++    fs.writeFileSync(
++      this.mcpServerJSONPath,
++      JSON.stringify(servers, null, 2),
++      "utf8"
++    );
++    this.log(`MCP server ${name} removed from config file`);
++    return true;
++  }
++
++  /**
++   * Update the suppressed tools for an MCP server
++   * @param {string} serverName - The name of the MCP server
++   * @param {string} toolName - The name of the tool to toggle
++   * @param {boolean} enabled - Whether the tool should be enabled (true) or suppressed (false)
++   * @returns {{success: boolean, error: string | null, suppressedTools: string[]}}
++   */
++  updateSuppressedTools(serverName, toolName, enabled) {
++    const servers = safeJsonParse(
++      fs.readFileSync(this.mcpServerJSONPath, "utf8"),
++      { mcpServers: {} }
++    );
++
++    if (!servers.mcpServers[serverName]) {
++      return {
++        success: false,
++        error: `MCP server ${serverName} not found in config file.`,
++        suppressedTools: [],
++      };
++    }
++
++    const server = servers.mcpServers[serverName];
++    if (!server.anythingllm) server.anythingllm = {};
++    if (!Array.isArray(server.anythingllm.suppressedTools))
++      server.anythingllm.suppressedTools = [];
++
++    const suppressedTools = server.anythingllm.suppressedTools;
++
++    if (enabled) {
++      const index = suppressedTools.indexOf(toolName);
++      if (index > -1) suppressedTools.splice(index, 1);
++    } else {
++      if (!suppressedTools.includes(toolName)) suppressedTools.push(toolName);
++    }
++
++    server.anythingllm.suppressedTools = suppressedTools;
++    servers.mcpServers[serverName] = server;
++
++    fs.writeFileSync(
++      this.mcpServerJSONPath,
++      JSON.stringify(servers, null, 2),
++      "utf8"
++    );
++
++    this.log(
++      `MCP server ${serverName} tool ${toolName} ${enabled ? "enabled" : "suppressed"}`
++    );
++    return { success: true, error: null, suppressedTools };
++  }
++
++  /**
++   * Get the suppressed tools for an MCP server
++   * @param {string} serverName - The name of the MCP server
++   * @returns {string[]} - Array of suppressed tool names
++   */
++  getSuppressedTools(serverName) {
++    const config = this.mcpServerConfigs.find((s) => s.name === serverName);
++    return config?.server?.anythingllm?.suppressedTools || [];
++  }
++
++  /**
++   * Reload the MCP servers - can be used to reload the MCP servers without restarting the server or app
++   * and will also apply changes to the config file if any where made.
++   */
++  async reloadMCPServers() {
++    await this.syncPersonalDefinitions();
++    this.pruneMCPServers();
++    await this.bootMCPServers();
++  }
++
++  /**
++   * Start a single MCP server by its server name - public method
++   * @param {string} name - The name of the MCP server to start
++   * @returns {Promise<{success: boolean, error: string | null}>}
++   */
++  async startMCPServer(name) {
++    if (this.mcps[name])
++      return { success: false, error: `MCP server ${name} already running` };
++    const config = this.mcpServerConfigs.find((s) => s.name === name);
++    if (!config)
++      return {
++        success: false,
++        error: `MCP server ${name} not found in config file`,
++      };
++
++    if (
++      config.server?.anythingllm?.perWorkspaceAuth ||
++      config.server?.anythingllm?.perUserAuth
++    )
++      return {
++        success: false,
++        error: "MCP server requires workspace authentication",
++      };
++
++    try {
++      await this.#startMCPServer(config);
++      this.mcpLoadingResults[name] = {
++        status: "success",
++        message: `Successfully connected to MCP server: ${name}`,
++      };
++
++      return { success: true, message: `MCP server ${name} started` };
++    } catch (e) {
++      this.log(`Failed to start single MCP server: ${name}`, {
++        error: e.message,
++        code: e.code,
++        syscall: e.syscall,
++        path: e.path,
++        stack: e.stack,
++      });
++      this.mcpLoadingResults[name] = {
++        status: "failed",
++        message: `Failed to start MCP server: ${name} [${e.code || "NO_CODE"}] ${e.message}`,
++      };
++
++      // Clean up failed connection
++      if (this.mcps[name]) {
++        this.mcps[name].close();
++        delete this.mcps[name];
++      }
++
++      return { success: false, error: e.message };
++    }
++  }
++  /**
++   * Prune a single MCP server by its server name
++   * @param {string} name - The name of the MCP server to prune
++   * @returns {boolean} - True if the MCP server was pruned, false otherwise
++   */
++  pruneMCPServer(name) {
++    if (!name || !this.mcps[name]) return true;
++
++    this.log(`Pruning MCP server: ${name}`);
++    const mcp = this.mcps[name];
++    if (!mcp.transport) return true;
++    const childProcess = mcp.transport._process;
++    if (childProcess) childProcess.kill("SIGTERM");
++    mcp.transport.close();
++
++    delete this.mcps[name];
++    this.mcpLoadingResults[name] = {
++      status: "failed",
++      message: `Server was stopped manually by the administrator.`,
++    };
++    return true;
++  }
++
++  /**
++   * Prune the MCP servers - pkills and forgets all MCP servers
++   * @returns {void}
++   */
++  pruneMCPServers() {
++    this.log(`Pruning ${Object.keys(this.mcps).length} MCP servers...`);
++
++    for (const name of Object.keys(this.mcps)) {
++      if (!this.mcps[name]) continue;
++      const mcp = this.mcps[name];
++      if (!mcp.transport) continue;
++      const childProcess = mcp.transport._process;
++      if (childProcess)
++        this.log(`Killing MCP ${name} (PID: ${childProcess.pid})`, {
++          killed: childProcess.kill("SIGTERM"),
++        });
++
++      mcp.transport.close();
++      mcp.close();
++    }
++    this.mcps = {};
++    this.mcpLoadingResults = {};
++  }
++
++  /**
++   * Build the MCP server environment variables - ensures proper PATH and NODE_PATH
++   * inheritance across all platforms and deployment scenarios.
++   * @param {Object} server - The server definition
++   * @returns {Promise<{env: { [key: string]: string } | {}}}> - The environment variables
++   */
++  async #buildMCPServerENV(server) {
++    const shellEnv = await patchShellEnvironmentPath();
++    let baseEnv = {
++      PATH:
++        shellEnv.PATH ||
++        process.env.PATH ||
++        "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
++      NODE_PATH:
++        shellEnv.NODE_PATH ||
++        process.env.NODE_PATH ||
++        "/usr/local/lib/node_modules",
++      ...shellEnv, // Include all shell environment variables
++    };
++
++    // Docker-specific environment setup
++    if (process.env.ANYTHING_LLM_RUNTIME === "docker") {
++      baseEnv = {
++        // Fixed: NODE_PATH should point to modules directory, not node binary
++        NODE_PATH: "/usr/local/lib/node_modules",
++        PATH: "/usr/local/bin:/usr/bin:/bin",
++        ...baseEnv, // Allow inheritance to override docker defaults if needed
++      };
++    }
++
++    // No custom environment specified - return base environment
++    if (!server?.env || Object.keys(server.env).length === 0) {
++      return { env: baseEnv };
++    }
++
++    // Merge user-specified environment with base environment
++    // User environment takes precedence over defaults
++    return {
++      env: {
++        ...baseEnv,
++        ...server.env,
++      },
++    };
++  }
++
++  /**
++   * Parse the server type from the server definition
++   * @param {Object} server - The server definition
++   * @returns {MCPServerTypes | null} - The server type
++   */
++  #parseServerType(server) {
++    if (
++      server.type === "sse" ||
++      server.type === "streamable" ||
++      server.type === "http"
++    )
++      return "http";
++    if (Object.prototype.hasOwnProperty.call(server, "command")) return "stdio";
++    if (Object.prototype.hasOwnProperty.call(server, "url")) return "http";
++    return null;
++  }
++
++  /**
++   * Validate the server definition by type
++   * - Will throw an error if the server definition is invalid
++   * @param {string} name - The name of the MCP server
++   * @param {Object} server - The server definition
++   * @param {MCPServerTypes} type - The server type
++   * @returns {void}
++   */
++  #validateServerDefinitionByType(name, server, type) {
++    if (type === "http") {
++      // "type" is optional for http servers - when omitted, SSE is assumed
++      // (see createHttpTransport). An explicit unknown value is a config error.
++      if (
++        server.type !== undefined &&
++        !["sse", "streamable", "http"].includes(server.type)
++      ) {
++        throw new Error("MCP server type must have sse or streamable value.");
++      }
++
++      if (!server.url) {
++        throw new Error(
++          `MCP server "${name}": missing required "url" for ${server.type || "sse"} transport`
++        );
++      }
++
++      try {
++        new URL(server.url);
++      } catch {
++        throw new Error(`MCP server "${name}": invalid URL "${server.url}"`);
++      }
++      return;
++    }
++
++    if (type === "stdio") {
++      if (
++        Object.prototype.hasOwnProperty.call(server, "args") &&
++        !Array.isArray(server.args)
++      )
++        throw new Error("MCP server args must be an array");
++    }
++    return;
++  }
++
++  /**
++   * Setup the server transport by type and server definition
++   * @param {Object} server - The server definition
++   * @param {MCPServerTypes} type - The server type
++   * @returns {Promise<StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport>} - The server transport
++   */
++  async #setupServerTransport(server, type) {
++    // if not stdio then it is http or sse
++    if (type !== "stdio") return this.createHttpTransport(server);
++
++    return new StdioClientTransport({
++      command: server.command,
++      args: server?.args ?? [],
++      ...(await this.#buildMCPServerENV(server)),
++    });
++  }
++
++  /**
++   * Create MCP client transport for http MCP server.
++   * @param {Object} server - The server definition
++   * @returns {StreamableHTTPClientTransport | SSEClientTransport} - The server transport
++   */
++  createHttpTransport(server) {
++    const url = new URL(server.url);
++    const options = {
++      requestInit: { headers: server.headers },
++      // Never let a validated endpoint redirect requests or credentials elsewhere.
++      fetch: (input, init) => fetch(input, { ...init, redirect: "error" }),
++    };
++
++    // If the server block has a type property then use that to determine the transport type
++    switch (server.type) {
++      case "streamable":
++      case "http":
++        return new StreamableHTTPClientTransport(url, options);
++      default:
++        return new SSEClientTransport(url, options);
++    }
++  }
++
++  /**
++   * @private Start a single MCP server by its server definition from the JSON file
++   * @param {string} name - The name of the MCP server to start
++   * @param {Object} server - The server definition
++   * @returns {Promise<boolean>}
++   */
++  async #startMCPServer({ name, server }) {
++    if (!name) throw new Error("MCP server name is required");
++    if (!server) throw new Error("MCP server definition is required");
++    const serverType = this.#parseServerType(server);
++    if (!serverType) throw new Error("MCP server command or url is required");
++
++    this.#validateServerDefinitionByType(name, server, serverType);
++    this.log(`Attempting to start MCP server: ${name}`);
++    const mcp = new Client({ name: name, version: "1.0.0" });
++    const transport = await this.#setupServerTransport(server, serverType);
++
++    // Add connection event listeners
++    transport.onclose = () => this.log(`${name} - Transport closed`);
++    transport.onerror = (error) =>
++      this.log(`${name} - Transport error:`, error);
++    transport.onmessage = (message) =>
++      this.log(`${name} - Transport message:`, message);
++
++    // Connect and await the connection with a timeout
++    this.mcps[name] = mcp;
++    const connectionPromise = mcp.connect(transport);
++
++    let timeoutId;
++    const timeoutPromise = new Promise((_, reject) => {
++      timeoutId = setTimeout(
++        () => reject(new Error("Connection timeout")),
++        30_000
++      ); // 30 second timeout
++    });
++
++    try {
++      await Promise.race([connectionPromise, timeoutPromise]);
++      if (timeoutId) clearTimeout(timeoutId);
++    } catch (error) {
++      if (timeoutId) clearTimeout(timeoutId);
++      throw error;
++    }
++    return true;
++  }
++
++  /**
++   * Boot the MCP servers according to the server definitions.
++   * This function will skip booting MCP servers if they are already running.
++   * @returns { Promise<{ [key: string]: {status: string, message: string} }> } The results of the boot process.
++   */
++  async bootMCPServers() {
++    await this.syncPersonalDefinitions();
++    const serverDefinitions = this.mcpServerConfigs;
++    if (
++      serverDefinitions.some(
++        ({ name, server }) =>
++          !server.anythingllm?.perWorkspaceAuth &&
++          !server.anythingllm?.perUserAuth &&
++          this.mcps[name]
++      )
++    ) {
++      this.log("MCP Servers already running, skipping boot.");
++      return this.mcpLoadingResults;
++    }
++
++    for (const { name, server } of serverDefinitions) {
++      if (
++        server.anythingllm?.perWorkspaceAuth ||
++        server.anythingllm?.perUserAuth
++      )
++        continue;
++      if (
++        server.anythingllm?.hasOwnProperty("autoStart") &&
++        server.anythingllm.autoStart === false
++      ) {
++        this.log(
++          `MCP server ${name} has anythingllm.autoStart property set to false, skipping boot!`
++        );
++        this.mcpLoadingResults[name] = {
++          status: "failed",
++          message: `MCP server ${name} has anythingllm.autoStart property set to false, boot skipped!`,
++        };
++        continue;
++      }
++
++      try {
++        await this.#startMCPServer({ name, server });
++        // Verify the connection is alive?
++        // if (!(await mcp.ping())) throw new Error('Connection failed to establish');
++        this.mcpLoadingResults[name] = {
++          status: "success",
++          message: `Successfully connected to MCP server: ${name}`,
++        };
++      } catch (e) {
++        this.log(`Failed to start MCP server: ${name}`, {
++          error: e.message,
++          code: e.code,
++          syscall: e.syscall,
++          path: e.path,
++          stack: e.stack, // Adding stack trace for better debugging
++        });
++        this.mcpLoadingResults[name] = {
++          status: "failed",
++          message: `Failed to start MCP server: ${name} [${e.code || "NO_CODE"}] ${e.message}`,
++        };
++
++        // Clean up failed connection
++        if (this.mcps[name]) {
++          this.mcps[name].close();
++          delete this.mcps[name];
++        }
++      }
++    }
++
++    const runningServers = Object.keys(this.mcps);
++    this.log(
++      `Successfully started ${runningServers.length} MCP servers:`,
++      runningServers
++    );
++    return this.mcpLoadingResults;
++  }
++}
++
++module.exports = MCPHypervisor;
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/endpoints/agentWebsocket.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/endpoints/agentWebsocket.js
+new file mode 100644
+index 00000000..671c3b0f
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/endpoints/agentWebsocket.js
+@@ -0,0 +1,209 @@
++const { Telemetry } = require("../models/telemetry");
++const {
++  WorkspaceAgentInvocation,
++} = require("../models/workspaceAgentInvocation");
++const { AgentHandler } = require("../utils/agents");
++const {
++  WEBSOCKET_BAIL_COMMANDS,
++} = require("../utils/agents/aibitat/plugins/websocket");
++const { safeJsonParse } = require("../utils/http");
++
++/**
++ * Contains what a socket message handler RETURNS: a synchronous throw, and a
++ * rejected promise it returns. `ws` calls the "message" listener from an
++ * EventEmitter, so an escaping throw becomes an `uncaughtException` and an
++ * escaping rejection becomes an `unhandledRejection` - either one kills the
++ * whole server process under Node's default `--unhandled-rejections=throw`.
++ * The handlers run on raw client input and not all of them parse it
++ * defensively (the websocket plugin's `handleFeedback` opens with a bare
++ * `JSON.parse`), which is what this catches.
++ *
++ * WHAT IT DOES NOT CATCH, so nobody trusts it further than it goes: a handler
++ * that launches a promise and returns something else. `handleToolToggle` does
++ * exactly that - it starts an async chain and returns `true` - so a rejection
++ * in that chain is floating and never passes through here. Containing it would
++ * have to happen inside that handler, not at this dispatch point.
++ * @param {function} handler - the socket handler to invoke
++ * @param {string} name - handler name, for the log line
++ * @param {*} message - the raw frame from the client
++ * @returns {*} the handler's return value, or undefined when it threw
++ */
++function runMessageHandler(handler, name, message) {
++  const report = (error) =>
++    console.error(`[agentWebsocket] ${name} failed on client input:`, error);
++  try {
++    const result = handler(message);
++    if (typeof result?.then === "function") result.catch(report);
++    return result;
++  } catch (error) {
++    report(error);
++  }
++}
++
++// Setup listener for incoming messages to relay to socket so it can be handled by agent plugin.
++function relayToSocket(message) {
++  // Tool toggles can arrive while the agent is paused awaiting feedback/approval,
++  // so handle them first. The handler ignores (returns false for) any other message.
++  if (
++    this.handleToolToggle &&
++    runMessageHandler(this.handleToolToggle, "handleToolToggle", message)
++  )
++    return;
++  if (this.handleFeedback)
++    return runMessageHandler(this.handleFeedback, "handleFeedback", message);
++  if (this.handleToolApproval)
++    return runMessageHandler(
++      this.handleToolApproval,
++      "handleToolApproval",
++      message
++    );
++  if (this.handleClarificationResponse)
++    return runMessageHandler(
++      this.handleClarificationResponse,
++      "handleClarificationResponse",
++      message
++    );
++  runMessageHandler(this.checkBailCommand, "checkBailCommand", message);
++}
++
++function agentWebsocket(app) {
++  if (!app) return;
++
++  app.ws("/agent-invocation/:uuid", async function (socket, request) {
++    let privateContext = false,
++      classifyingContext = false,
++      agentHandler;
++    try {
++      const invocation = await WorkspaceAgentInvocation.getWithWorkspace({
++        uuid: String(request.params.uuid),
++      });
++      if (!invocation || invocation.closed) {
++        socket.close();
++        return;
++      }
++      const { PersonalMcpContext } = require("../models/personalMcpContext");
++      const identity = require("../utils/MCP/personalCaller");
++      classifyingContext = true;
++      await PersonalMcpContext.prepare(invocation);
++      privateContext = await PersonalMcpContext.has(invocation);
++      classifyingContext = false;
++      let mcpCaller = null;
++      try {
++        mcpCaller = await identity.fromSocket(request, invocation);
++      } catch {
++        if (privateContext) {
++          socket.close();
++          return;
++        }
++      }
++      const authorized = async () => {
++        privateContext ||=
++          invocation.personalMcpUsed ||
++          (await PersonalMcpContext.has(invocation));
++        if (privateContext)
++          await identity.assert(mcpCaller, invocation.workspace);
++      };
++      // Queue every emission, rechecking actual session expiry/current membership
++      // immediately before transmission. No raw payload is logged on denial.
++      const send = socket.send.bind(socket);
++      let emissions = Promise.resolve();
++      socket.send = (...args) => {
++        emissions = emissions
++          .then(async () => {
++            await authorized();
++            if (socket.readyState === socket.OPEN) send(...args);
++          })
++          .catch(() => {
++            agentHandler?.aibitat?.abort();
++            socket.close();
++          });
++      };
++      agentHandler = await new AgentHandler({
++        uuid: String(request.params.uuid),
++        mcpCaller,
++      }).init();
++
++      if (!agentHandler.invocation) {
++        socket.close();
++        return;
++      }
++
++      agentHandler.invocation.mcpCaller = mcpCaller;
++      if (privateContext) agentHandler.invocation.personalMcpUsed = true;
++
++      // Installed before the "message" listener: a frame that arrives in
++      // between would otherwise reach relayToSocket with no bail handler set.
++      socket.checkBailCommand = (data) => {
++        const content = safeJsonParse(data)?.feedback;
++        if (WEBSOCKET_BAIL_COMMANDS.includes(content)) {
++          agentHandler.log(
++            `User invoked bail command while processing. Closing session now.`
++          );
++          // aibitat may not exist yet if the bail arrives while the session
++          // is still being built - closing the socket alone is enough then.
++          agentHandler.aibitat?.abort();
++          socket.close();
++          return;
++        }
++      };
++
++      socket.on("message", (message) => {
++        authorized()
++          .then(() => relayToSocket.call(socket, message))
++          .catch(() => socket.close());
++      });
++      socket.on("close", () => {
++        // Abort the running agent loop (stop button, tab close, disconnect) so
++        // in-flight LLM requests are cancelled and no further turns run.
++        agentHandler.aibitat?.abort();
++        agentHandler.closeAlert();
++        WorkspaceAgentInvocation.close(String(request.params.uuid));
++        return;
++      });
++
++      // Defence in depth, and READ THE CONDITION BEFORE DELETING THIS.
++      //
++      // With the bootstrap guard present (utils/boot/bootWebSockets.js, which
++      // covers every socket the server makes, including the unauthenticated
++      // route-less ones this listener can never see) this listener is redundant
++      // - removing it alone leaves every test green. That greenness is not
++      // permission to delete it.
++      //
++      // It is kept because it is the ONLY guard if this route is ever mounted on
++      // a ws server booted another way, and on that surface it alone keeps the
++      // process alive: measured with the bootstrap guard removed, a malformed
++      // frame here left the process up, other clients connected, and the close
++      // cleanup run exactly once. It also names the invocation, which the
++      // bootstrap can only see as a path.
++      socket.on("error", (error) => {
++        console.error(
++          `[agentWebsocket] Socket error on invocation ${String(request.params.uuid)}:`,
++          error
++        );
++        socket.close();
++      });
++
++      await Telemetry.sendTelemetry("agent_chat_started");
++      await authorized();
++      await agentHandler.createAIbitat({ socket });
++      // Socket can close while aibitat is being built - don't start a session nobody is listening to.
++      if (socket.readyState !== socket.OPEN) return;
++      await agentHandler.startAgentCluster();
++    } catch (e) {
++      if (
++        privateContext ||
++        classifyingContext ||
++        e.message === "personal_context_unavailable"
++      ) {
++        agentHandler?.aibitat?.abort();
++        socket?.close();
++        return;
++      }
++      console.error(e.message, e);
++      socket?.send(JSON.stringify({ type: "wssFailure", content: e.message }));
++      socket?.close();
++    }
++  });
++}
++
++module.exports = { agentWebsocket };
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/endpoints/personalMcpActualHandler.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/endpoints/personalMcpActualHandler.test.js
+new file mode 100644
+index 00000000..e9e79d5d
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/endpoints/personalMcpActualHandler.test.js
+@@ -0,0 +1,611 @@
++require("../utils/lark/_polyfill");
++jest.mock("../../utils/agents/defaults", () => ({
++  USER_AGENT: { name: "USER", getDefinition: () => ({}) },
++  WORKSPACE_AGENT: {
++    name: "@agent",
++    getDefinition: async () => ({ functions: [] }),
++  },
++}));
++const crypto = require("crypto");
++const JWT = require("jsonwebtoken");
++const { EventEmitter } = require("events");
++const prisma = require("../../utils/prisma");
++const {
++  PersonalMcpContext: Context,
++} = require("../../models/personalMcpContext");
++const {
++  WorkspaceAgentInvocation: Invocation,
++} = require("../../models/workspaceAgentInvocation");
++const { AgentHandler } = require("../../utils/agents");
++const AIbitat = require("../../utils/agents/aibitat");
++const { WorkspaceChats } = require("../../models/workspaceChats");
++const { Telemetry } = require("../../models/telemetry");
++const { agentWebsocket } = require("../../endpoints/agentWebsocket");
++const { WORKSPACE_AGENT } = require("../../utils/agents/defaults");
++const Layer = require("../../utils/MCP");
++const { WorkspaceMcpServer } = require("../../models/workspaceMcpServer");
++const { PersonalMcpGrant: Grant } = require("../../models/personalMcpGrant");
++const { execFileSync } = require("child_process");
++const path = require("path");
++const fs = require("fs");
++const { WorkspaceParsedFiles } = require("../../models/workspaceParsedFiles");
++let workspace, owner, other, route, attachments;
++beforeAll(async () => {
++  process.env.JWT_SECRET = "private-handler-session";
++  process.env.OPEN_AI_KEY = "fixture";
++  process.env.LLM_PROVIDER = "openai";
++  workspace = await prisma.workspaces.create({
++    data: {
++      name: "Private handler",
++      slug: crypto.randomUUID(),
++      agentProvider: "openai",
++      agentModel: "fixture",
++    },
++  });
++  owner = await prisma.users.create({
++    data: { username: crypto.randomUUID(), password: "fixture" },
++  });
++  other = await prisma.users.create({
++    data: { username: crypto.randomUUID(), password: "fixture" },
++  });
++  for (const user of [owner, other])
++    await prisma.workspace_users.create({
++      data: { workspace_id: workspace.id, user_id: user.id },
++    });
++  await Context.mark({
++    workspace_id: workspace.id,
++    user_id: owner.id,
++    thread_id: null,
++  });
++  // No current personal definition remains: durable context alone protects follow-ups.
++  const { WorkspaceMcpServer } = require("../../models/workspaceMcpServer");
++  await WorkspaceMcpServer.create(workspace.id, "removed-personal", {
++    url: "https://fixture.example/mcp",
++    anythingllm: { perUserAuth: true },
++  });
++  await WorkspaceMcpServer.delete(workspace.id, "removed-personal");
++  agentWebsocket({ ws: (_path, fn) => (route = fn) });
++});
++afterEach(() => jest.restoreAllMocks());
++afterAll(async () => {
++  await prisma.workspaces.delete({ where: { id: workspace.id } });
++  for (const user of [owner, other])
++    await prisma.users.delete({ where: { id: user.id } });
++  await prisma.$disconnect();
++});
++function socket() {
++  const s = new EventEmitter();
++  s.OPEN = 1;
++  s.readyState = 1;
++  s.send = jest.fn();
++  s.rawSend = s.send;
++  s.close = jest.fn(() => {
++    s.readyState = 3;
++  });
++  return s;
++}
++function headers(user, expiresIn = "1h") {
++  return user
++    ? {
++        "sec-websocket-protocol":
++          "anythingllm-agent, anythingllm-session." +
++          JWT.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn }),
++      }
++    : {};
++}
++async function followup() {
++  const created = await Invocation.new({
++    workspace,
++    user: owner,
++    prompt: "@agent quoted-private-owner-result",
++  });
++  const { grepAgents } = require("../../utils/chats/agents");
++  const spy = jest.spyOn(Invocation, "new").mockResolvedValue(created);
++  await grepAgents({
++    uuid: "fixture",
++    response: { write: () => {}, flush: () => {} },
++    message: "@agent quoted-private-owner-result",
++    workspace,
++    user: owner,
++    attachments: [{ contentString: "private-owner-attachment" }],
++  });
++  spy.mockRestore();
++  return created.invocation;
++}
++test.each(["anonymous", "other", "expired"])(
++  "actual handler rejects private follow-up before init/files/history/attachments: %s",
++  async (mode) => {
++    const invocation = await followup();
++    expect(invocation.prompt).not.toContain("quoted-private-owner-result");
++    const init = jest.spyOn(AgentHandler.prototype, "init");
++    const history = jest.spyOn(WorkspaceChats, "where");
++    const s = socket();
++    await route(s, {
++      params: { uuid: invocation.uuid },
++      headers:
++        mode === "anonymous"
++          ? {}
++          : headers(
++              mode === "other" ? other : owner,
++              mode === "expired" ? -1 : "1h"
++            ),
++    });
++    expect(s.close).toHaveBeenCalled();
++    expect(s.send).not.toHaveBeenCalled();
++    expect(init).not.toHaveBeenCalled();
++    expect(history).not.toHaveBeenCalled();
++    attachments =
++      require("../../utils/chats/agents").getAndClearInvocationAttachments(
++        invocation.uuid
++      );
++    expect(JSON.stringify(attachments)).toContain("private-owner-attachment");
++  }
++);
++test("actual owner init decrypts private follow-up, real websocket plugin emits only while membership/session valid", async () => {
++  const invocation = await followup();
++  jest.spyOn(Telemetry, "sendTelemetry").mockResolvedValue();
++  jest
++    .spyOn(AIbitat.prototype, "start")
++    .mockImplementation(async function (input) {
++      expect(input.content).toContain("quoted-private-owner-result");
++      expect(JSON.stringify(input.attachments)).toContain(
++        "private-owner-attachment"
++      );
++      this.socket.send("reportStreamEvent", {
++        content: "private-owner-response",
++      });
++    });
++  const s = socket();
++  const request = {
++    params: { uuid: invocation.uuid },
++    headers: headers(owner),
++  };
++  await route(s, request);
++  await new Promise((resolve) => setTimeout(resolve, 50));
++  expect(s.close).not.toHaveBeenCalled();
++  expect(JSON.stringify(s.rawSend.mock.calls)).toContain(
++    "private-owner-response"
++  );
++});
++test.each(["membership", "expiry"])(
++  "actual owner socket stops private emissions after %s revocation",
++  async (mode) => {
++    const invocation = await followup();
++    jest.spyOn(Telemetry, "sendTelemetry").mockResolvedValue();
++    let instance;
++    jest
++      .spyOn(AIbitat.prototype, "start")
++      .mockImplementation(async function () {
++        instance = this;
++      });
++    const s = socket();
++    await route(s, {
++      params: { uuid: invocation.uuid },
++      headers: headers(owner),
++    });
++    if (mode === "membership")
++      await prisma.workspace_users.deleteMany({
++        where: { workspace_id: workspace.id, user_id: owner.id },
++      });
++    else jest.spyOn(Date, "now").mockReturnValue(Date.now() + 7200000);
++    instance.socket.send("reportStreamEvent", {
++      content: "private-after-revoke",
++    });
++    await new Promise((resolve) => setTimeout(resolve, 30));
++    expect(s.close).toHaveBeenCalled();
++    expect(JSON.stringify(s.rawSend.mock.calls)).not.toContain(
++      "private-after-revoke"
++    );
++    if (mode === "membership")
++      await prisma.workspace_users.create({
++        data: { workspace_id: workspace.id, user_id: owner.id },
++      });
++  }
++);
++test("actual handler preserves genuinely legacy-only context for an anonymous socket", async () => {
++  const { invocation } = await Invocation.new({
++    workspace,
++    user: other,
++    prompt: "@agent legacy-only-input",
++  });
++  jest.spyOn(Telemetry, "sendTelemetry").mockResolvedValue();
++  jest
++    .spyOn(AIbitat.prototype, "start")
++    .mockImplementation(async function (input) {
++      expect(this.personalMcpUsed).toBe(false);
++      expect(input.content).toBe("legacy-only-input");
++      this.socket.send("reportStreamEvent", {
++        content: "legacy-only-response",
++      });
++    });
++  const s = socket();
++  await route(s, { params: { uuid: invocation.uuid }, headers: {} });
++  await new Promise((resolve) => setTimeout(resolve, 50));
++  expect(s.close).not.toHaveBeenCalled();
++  expect(JSON.stringify(s.rawSend.mock.calls)).toContain(
++    "legacy-only-response"
++  );
++});
++test.each(["anonymous", "other"])(
++  "first connected-personal preparation reserves owner before deferred discovery; rejects %s competitor",
++  async (mode) => {
++    const config = {
++      url: "https://fixture.example/mcp",
++      anythingllm: { perUserAuth: true },
++    };
++    await WorkspaceMcpServer.create(workspace.id, "first-personal", config);
++    const grant = await Grant.begin(
++      workspace.id,
++      other.id,
++      "first-personal",
++      config
++    );
++    await Grant.save(
++      workspace.id,
++      other.id,
++      "first-personal",
++      grant.version,
++      config,
++      { access_token: "fixture-connected", refresh_token: "fixture-refresh" }
++    );
++    const { invocation } = await Invocation.new({
++      workspace,
++      user: other,
++      prompt: "@agent first-owner-sensitive",
++      thread: { id: mode === "anonymous" ? 987 : 988 },
++    });
++    const { grepAgents } = require("../../utils/chats/agents");
++    const creation = jest
++      .spyOn(Invocation, "new")
++      .mockResolvedValue({ invocation });
++    await grepAgents({
++      uuid: "fixture",
++      response: { write: () => {}, flush: () => {} },
++      message: "@agent first-owner-sensitive",
++      workspace,
++      user: other,
++      attachments: [{ contentString: "first-owner-attachment" }],
++    });
++    creation.mockRestore();
++    let release, entered;
++    const waiting = new Promise((resolve) => (entered = resolve));
++    jest
++      .spyOn(Layer.prototype, "bootPersonalServer")
++      .mockImplementation(async () => {
++        entered();
++        await new Promise((resolve) => (release = resolve));
++        return {};
++      });
++    jest
++      .spyOn(WORKSPACE_AGENT, "getDefinition")
++      .mockImplementation(async (_provider, ws, _user, _prompt, identity) => {
++        await new Layer().activeMCPServers(ws, identity);
++        return { functions: [] };
++      });
++    jest.spyOn(Telemetry, "sendTelemetry").mockResolvedValue();
++    jest.spyOn(AIbitat.prototype, "start").mockResolvedValue();
++    const init = jest.spyOn(AgentHandler.prototype, "init");
++    const history = jest.spyOn(WorkspaceChats, "where");
++    const ownerSocket = socket();
++    const pending = route(ownerSocket, {
++      params: { uuid: invocation.uuid },
++      headers: headers(other),
++    });
++    await waiting;
++    const reserved = await Context.has(invocation);
++    const observed = execFileSync(
++      process.execPath,
++      [
++        "-e",
++        `const b=require('buffer');b.SlowBuffer||=b.Buffer;const {PersonalMcpContext:C}=require('./models/personalMcpContext');C.has(${JSON.stringify(invocation)}).then(v=>{console.log('RESERVED='+v);return require('./utils/prisma').$disconnect();}).catch(()=>process.exit(1));`,
++      ],
++      {
++        cwd: path.resolve(__dirname, "../.."),
++        env: process.env,
++        encoding: "utf8",
++      }
++    );
++    expect(observed).toContain("RESERVED=true");
++    const before = init.mock.calls.length,
++      reads = history.mock.calls.length;
++    const competing = socket();
++    await route(competing, {
++      params: { uuid: invocation.uuid },
++      headers: mode === "anonymous" ? {} : headers(owner),
++    });
++    expect(competing.close).toHaveBeenCalled();
++    expect(competing.rawSend).not.toHaveBeenCalled();
++    expect(init.mock.calls).toHaveLength(before);
++    expect(history.mock.calls).toHaveLength(reads);
++    release();
++    await pending;
++    expect(reserved).toBe(true);
++    await WorkspaceMcpServer.delete(workspace.id, "first-personal");
++    await prisma.personal_mcp_grants.deleteMany({
++      where: { workspace_id: workspace.id, server_name: "first-personal" },
++    });
++  }
++);
++test("disconnected personal definition for creator does not reserve genuinely legacy context", async () => {
++  const config = {
++    url: "https://fixture.example/mcp",
++    anythingllm: { perUserAuth: true },
++  };
++  await WorkspaceMcpServer.create(
++    workspace.id,
++    "disconnected-personal",
++    config
++  );
++  await Grant.begin(workspace.id, other.id, "disconnected-personal", config);
++  const { invocation } = await Invocation.new({
++    workspace,
++    user: other,
++    thread: { id: 989 },
++    prompt: "@agent disconnected-legacy",
++  });
++  jest.spyOn(Telemetry, "sendTelemetry").mockResolvedValue();
++  jest
++    .spyOn(AIbitat.prototype, "start")
++    .mockImplementation(async function (input) {
++      expect(input.content).toBe("disconnected-legacy");
++      this.socket.send("reportStreamEvent", {
++        content: "disconnected-legacy-result",
++      });
++    });
++  const s = socket();
++  await route(s, { params: { uuid: invocation.uuid }, headers: {} });
++  await new Promise((resolve) => setTimeout(resolve, 50));
++  expect(await Context.has(invocation)).toBe(false);
++  expect(s.close).not.toHaveBeenCalled();
++  expect(JSON.stringify(s.rawSend.mock.calls)).toContain(
++    "disconnected-legacy-result"
++  );
++  await WorkspaceMcpServer.delete(workspace.id, "disconnected-personal");
++});
++
++test.each(
++  [
++    "malformed-global",
++    "empty-file",
++    "missing-catalog-block",
++    "null-catalog",
++    "array-catalog",
++    "read-failure",
++    "corrupt-shadow",
++    "shadow-lookup",
++    "corrupt-tokens",
++    "missing-tokens",
++    "grant-list",
++    "grant-find",
++    "config-lookup",
++  ].flatMap((failure) => ["anonymous", "other"].map((mode) => [failure, mode]))
++)(
++  "unknown first-use classification %s rejects %s before context side effects; restored owner works",
++  async (failure, mode) => {
++    const name = `strict-${crypto.randomBytes(6).toString("hex")}`;
++    const config = {
++      url: "https://fixture.example/mcp",
++      anythingllm: { perUserAuth: true },
++    };
++    const catalogPath = new Layer().mcpServerJSONPath;
++    const original = fs.readFileSync(catalogPath, "utf8");
++    const validCatalog = JSON.stringify({ mcpServers: { [name]: config } });
++    let fault;
++    try {
++      fs.writeFileSync(catalogPath, validCatalog);
++      const row = await Grant.begin(workspace.id, other.id, name, config);
++      await Grant.save(workspace.id, other.id, name, row.version, config, {
++        access_token: "strict-owner-token",
++      });
++      const saved = await prisma.personal_mcp_grants.findUnique({
++        where: {
++          workspace_id_user_id_server_name: {
++            workspace_id: workspace.id,
++            user_id: other.id,
++            server_name: name,
++          },
++        },
++      });
++      const { invocation } = await Invocation.new({
++        workspace,
++        user: other,
++        thread: { id: 10000 + Math.floor(Math.random() * 1000000) },
++        prompt: "@agent strict-private-input",
++      });
++      const {
++        grepAgents,
++        getAndClearInvocationAttachments,
++      } = require("../../utils/chats/agents");
++      const creation = jest
++        .spyOn(Invocation, "new")
++        .mockResolvedValue({ invocation });
++      await grepAgents({
++        uuid: "fixture",
++        response: { write: () => {}, flush: () => {} },
++        message: "@agent strict-private-input",
++        workspace,
++        user: other,
++        attachments: [{ contentString: "strict-private-attachment" }],
++      });
++      creation.mockRestore();
++      if (failure === "malformed-global")
++        fs.writeFileSync(catalogPath, "this is not a JSON catalog");
++      if (failure === "empty-file") fs.writeFileSync(catalogPath, "");
++      if (failure === "missing-catalog-block")
++        fs.writeFileSync(catalogPath, "{}");
++      if (failure === "null-catalog") fs.writeFileSync(catalogPath, "null");
++      if (failure === "array-catalog") fs.writeFileSync(catalogPath, "[]");
++      if (failure === "read-failure") {
++        const read = fs.readFileSync.bind(fs);
++        fault = jest
++          .spyOn(fs, "readFileSync")
++          .mockImplementation((file, ...args) => {
++            if (file === catalogPath)
++              throw new Error("fixture-secret-read-failure");
++            return read(file, ...args);
++          });
++      }
++      if (failure === "corrupt-shadow") {
++        await WorkspaceMcpServer.create(workspace.id, name, config);
++        await prisma.workspace_mcp_servers.update({
++          where: { workspace_id_name: { workspace_id: workspace.id, name } },
++          data: { config: "corrupt-ciphertext" },
++        });
++      }
++      if (failure === "corrupt-tokens")
++        await prisma.personal_mcp_grants.update({
++          where: { id: saved.id },
++          data: { tokens: "corrupt-tokens" },
++        });
++      if (failure === "missing-tokens")
++        await prisma.personal_mcp_grants.update({
++          where: { id: saved.id },
++          data: { tokens: null },
++        });
++      if (failure === "grant-list")
++        fault = jest
++          .spyOn(prisma.personal_mcp_grants, "findMany")
++          .mockRejectedValue(new Error("fixture-secret-grant-failure"));
++      if (failure === "grant-find")
++        fault = jest
++          .spyOn(Grant, "find")
++          .mockRejectedValue(new Error("fixture-secret-token-failure"));
++      if (failure === "shadow-lookup")
++        fault = jest
++          .spyOn(prisma.workspace_mcp_servers, "findUnique")
++          .mockRejectedValue(new Error("fixture-secret-shadow-failure"));
++      if (failure === "config-lookup")
++        fault = jest
++          .spyOn(Layer, "findServerConfigStrict")
++          .mockRejectedValue(new Error("fixture-secret-config-failure"));
++      const init = jest.spyOn(AgentHandler.prototype, "init");
++      const history = jest.spyOn(WorkspaceChats, "where");
++      const files = jest.spyOn(WorkspaceParsedFiles, "getContextFiles");
++      const provider = jest.spyOn(AgentHandler.prototype, "checkSetup");
++      const definition = jest.spyOn(WORKSPACE_AGENT, "getDefinition");
++      jest.spyOn(Telemetry, "sendTelemetry").mockResolvedValue();
++      const start = jest
++        .spyOn(AIbitat.prototype, "start")
++        .mockImplementation(async function (input) {
++          this.socket.send("reportStreamEvent", { content: input.content });
++        });
++      const denied = socket();
++      await route(denied, {
++        params: { uuid: invocation.uuid },
++        headers: mode === "anonymous" ? {} : headers(owner),
++      });
++      expect(denied.close).toHaveBeenCalled();
++      expect(denied.rawSend).not.toHaveBeenCalled();
++      for (const spy of [init, history, files, provider, definition, start])
++        expect(spy).not.toHaveBeenCalled();
++      expect(await Context.has(invocation)).toBe(false);
++      const stored = await prisma.workspace_agent_invocations.findUnique({
++        where: { uuid: invocation.uuid },
++      });
++      expect(stored.closed).toBe(false);
++      // Independent init must also reject before provider/attachment consumption.
++      await expect(
++        new AgentHandler({ uuid: invocation.uuid }).init()
++      ).rejects.toThrow("personal_context_unavailable");
++      for (const spy of [history, files, provider, definition, start])
++        expect(spy).not.toHaveBeenCalled();
++      fault?.mockRestore();
++      fs.writeFileSync(catalogPath, validCatalog);
++      if (failure === "corrupt-shadow")
++        await WorkspaceMcpServer.update(workspace.id, name, config);
++      if (["corrupt-tokens", "missing-tokens"].includes(failure))
++        await prisma.personal_mcp_grants.update({
++          where: { id: saved.id },
++          data: { tokens: saved.tokens },
++        });
++      const allowed = socket();
++      await route(allowed, {
++        params: { uuid: invocation.uuid },
++        headers: headers(other),
++      });
++      await new Promise((resolve) => setTimeout(resolve, 30));
++      expect(allowed.close).not.toHaveBeenCalled();
++      expect(await Context.has(invocation)).toBe(true);
++      expect(JSON.stringify(allowed.rawSend.mock.calls)).toContain(
++        "strict-private-input"
++      );
++      expect(JSON.stringify(start.mock.calls[0][0].attachments)).toContain(
++        "strict-private-attachment"
++      );
++      expect(getAndClearInvocationAttachments(invocation.uuid)).toEqual([]);
++    } finally {
++      fault?.mockRestore();
++      fs.writeFileSync(catalogPath, original);
++      await prisma.workspace_mcp_servers.deleteMany({
++        where: { workspace_id: workspace.id, name },
++      });
++      await prisma.personal_mcp_grants.deleteMany({
++        where: { workspace_id: workspace.id, server_name: name },
++      });
++    }
++  }
++);
++
++test.each(["deleted", "disabled", "nonpersonal", "unrelated-user"])(
++  "actual endpoint preserves healthy %s legacy access without owner reservation",
++  async (mode) => {
++    const name = `legacy-${crypto.randomBytes(6).toString("hex")}`;
++    const config = {
++      url: "https://fixture.example/mcp",
++      anythingllm: { perUserAuth: true },
++    };
++    const catalogPath = new Layer().mcpServerJSONPath;
++    const original = fs.readFileSync(catalogPath, "utf8");
++    try {
++      const grantUser = mode === "unrelated-user" ? owner : other;
++      const row = await Grant.begin(workspace.id, grantUser.id, name, config);
++      await Grant.save(workspace.id, grantUser.id, name, row.version, config, {
++        access_token: "fixture",
++      });
++      if (mode === "disabled")
++        await Grant.clear(workspace.id, grantUser.id, name);
++      fs.writeFileSync(
++        catalogPath,
++        JSON.stringify({
++          mcpServers:
++            mode === "deleted"
++              ? {}
++              : {
++                  [name]:
++                    mode === "nonpersonal"
++                      ? { command: "node", args: ["fixture.js"] }
++                      : config,
++                },
++        })
++      );
++      // An unrelated creator must not consult even an unreadable catalog.
++      if (mode === "unrelated-user")
++        fs.writeFileSync(catalogPath, "not a catalog");
++      const { invocation } = await Invocation.new({
++        workspace,
++        user: other,
++        thread: { id: 2000000 + Math.floor(Math.random() * 1000000) },
++        prompt: "@agent strict-legacy-input",
++      });
++      jest.spyOn(Telemetry, "sendTelemetry").mockResolvedValue();
++      jest
++        .spyOn(AIbitat.prototype, "start")
++        .mockImplementation(async function (input) {
++          this.socket.send("reportStreamEvent", { content: input.content });
++        });
++      const s = socket();
++      await route(s, { params: { uuid: invocation.uuid }, headers: {} });
++      await new Promise((resolve) => setTimeout(resolve, 30));
++      expect(await Context.has(invocation)).toBe(false);
++      expect(s.close).not.toHaveBeenCalled();
++      expect(JSON.stringify(s.rawSend.mock.calls)).toContain(
++        "strict-legacy-input"
++      );
++    } finally {
++      fs.writeFileSync(catalogPath, original);
++      await prisma.personal_mcp_grants.deleteMany({
++        where: { workspace_id: workspace.id, server_name: name },
++      });
++    }
++  }
++);
+
+diff --git a/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalStrictConfig.test.js b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalStrictConfig.test.js
+new file mode 100644
+index 00000000..426c2aa2
+--- /dev/null
++++ b/Users/jintawattuitemwong/Documents/GitHub/anything-llm-v2-mcp-oauth/personal-mcp-oauth/server/__tests__/utils/MCP/personalStrictConfig.test.js
+@@ -0,0 +1,212 @@
++require("../../utils/lark/_polyfill");
++const fs = require("fs");
++const crypto = require("crypto");
++const prisma = require("../../../utils/prisma");
++const Layer = require("../../../utils/MCP");
++const {
++  WorkspaceMcpServer: Servers,
++} = require("../../../models/workspaceMcpServer");
++const { PersonalMcpGrant: Grant } = require("../../../models/personalMcpGrant");
++const {
++  PersonalMcpContext: Context,
++} = require("../../../models/personalMcpContext");
++let workspace, user, catalogPath, original;
++const name = "strict-target";
++const personal = {
++  url: "https://fixture.example/mcp",
++  anythingllm: { perUserAuth: true },
++};
++beforeAll(async () => {
++  workspace = await prisma.workspaces.create({
++    data: { name: "Strict classifier", slug: crypto.randomUUID() },
++  });
++  user = await prisma.users.create({
++    data: { username: crypto.randomUUID(), password: "fixture" },
++  });
++  catalogPath = new Layer().mcpServerJSONPath;
++  original = fs.readFileSync(catalogPath, "utf8");
++});
++afterEach(async () => {
++  jest.restoreAllMocks();
++  fs.writeFileSync(catalogPath, original);
++  await prisma.workspace_mcp_servers.deleteMany({
++    where: { workspace_id: workspace.id },
++  });
++  await prisma.personal_mcp_grants.deleteMany({
++    where: { workspace_id: workspace.id },
++  });
++});
++afterAll(async () => {
++  await prisma.workspaces.delete({ where: { id: workspace.id } });
++  await prisma.users.delete({ where: { id: user.id } });
++  await prisma.$disconnect();
++});
++test.each([
++  "",
++  " ",
++  "null",
++  "[]",
++  "{}",
++  '{"mcpServers":null}',
++  '{"mcpServers":[]}',
++  '{"mcpServers":',
++  'prefix {"mcpServers":{}} suffix',
++])("strict global read rejects invalid current format: %j", async (text) => {
++  fs.writeFileSync(catalogPath, text);
++  await expect(
++    Layer.findServerConfigStrict(name, workspace.id)
++  ).rejects.toThrow("personal_config_unavailable");
++});
++test("strict global read accepts actual empty current catalog and uses own-property target lookup", async () => {
++  fs.writeFileSync(catalogPath, '{"mcpServers":{}}');
++  expect(await Layer.findServerConfigStrict(name, workspace.id)).toBeNull();
++  expect(
++    await Layer.findServerConfigStrict("constructor", workspace.id)
++  ).toBeNull();
++});
++test.each([
++  null,
++  [],
++  "invalid",
++  { anythingllm: null },
++  { anythingllm: { perUserAuth: "true" } },
++])(
++  "malformed relevant definition is unknown, not nonpersonal: %j",
++  async (config) => {
++    fs.writeFileSync(
++      catalogPath,
++      JSON.stringify({ mcpServers: { [name]: config } })
++    );
++    await expect(
++      Layer.findServerConfigStrict(name, workspace.id)
++    ).rejects.toThrow("personal_config_unavailable");
++  }
++);
++test("strict read does not validate unrelated definitions or change lenient repair", async () => {
++  fs.writeFileSync(
++    catalogPath,
++    JSON.stringify({ mcpServers: { [name]: personal, unrelated: null } })
++  );
++  expect(await Layer.findServerConfigStrict(name, workspace.id)).toEqual({
++    name,
++    server: personal,
++    owner: "global",
++  });
++  fs.writeFileSync(catalogPath, "not a catalog");
++  expect(new Layer().mcpServerConfigs).toEqual([]);
++  fs.writeFileSync(catalogPath, '{"mcpServers":{}} trailing');
++  expect(new Layer().mcpServerConfigs).toEqual([]);
++});
++test("workspace override is authoritative without reading unhealthy global; absent file is unknown without creation", async () => {
++  await Servers.create(workspace.id, name, personal);
++  fs.writeFileSync(catalogPath, "not a catalog");
++  expect(await Layer.findServerConfigStrict(name, workspace.id)).toEqual({
++    name,
++    server: personal,
++    owner: "workspace",
++  });
++  await Servers.delete(workspace.id, name);
++  fs.unlinkSync(catalogPath);
++  await expect(
++    Layer.findServerConfigStrict(name, workspace.id)
++  ).rejects.toThrow("personal_config_unavailable");
++  expect(fs.existsSync(catalogPath)).toBe(false);
++});
++test.each(["SIG_KEY", "SIG_SALT"])(
++  "strict workspace decrypt requires original %s and never generates/writes replacement keys",
++  async (missing) => {
++    await Servers.create(workspace.id, name, personal);
++    const saved = {
++      SIG_KEY: process.env.SIG_KEY,
++      SIG_SALT: process.env.SIG_SALT,
++    };
++    const write = jest.spyOn(fs, "writeFileSync");
++    delete process.env[missing];
++    try {
++      await expect(
++        Layer.findServerConfigStrict(name, workspace.id)
++      ).rejects.toThrow("personal_config_unavailable");
++      expect(process.env[missing]).toBeUndefined();
++      expect(process.env[missing === "SIG_KEY" ? "SIG_SALT" : "SIG_KEY"]).toBe(
++        saved[missing === "SIG_KEY" ? "SIG_SALT" : "SIG_KEY"]
++      );
++      expect(write).not.toHaveBeenCalled();
++    } finally {
++      Object.assign(process.env, saved);
++    }
++    expect(
++      (await Layer.findServerConfigStrict(name, workspace.id)).server
++    ).toEqual(personal);
++  }
++);
++test.each(["null", "[]", "not json"])(
++  "decryptable invalid workspace shadow %s never falls back to global",
++  async (plaintext) => {
++    await Servers.create(workspace.id, name, personal);
++    const { EncryptionManager } = require("../../../utils/EncryptionManager");
++    await prisma.workspace_mcp_servers.update({
++      where: { workspace_id_name: { workspace_id: workspace.id, name } },
++      data: { config: new EncryptionManager().encrypt(plaintext) },
++    });
++    fs.writeFileSync(
++      catalogPath,
++      JSON.stringify({ mcpServers: { [name]: personal } })
++    );
++    await expect(
++      Layer.findServerConfigStrict(name, workspace.id)
++    ).rejects.toThrow("personal_config_unavailable");
++  }
++);
++test.each([
++  "empty",
++  "deleted",
++  "disabled",
++  "nonpersonal",
++  "fingerprint-changed",
++  "unrelated-user",
++])(
++  "healthy %s classification preserves unmarked legacy context",
++  async (mode) => {
++    const row = await Grant.begin(workspace.id, user.id, name, personal);
++    await Grant.save(workspace.id, user.id, name, row.version, personal, {
++      access_token: "fixture",
++    });
++    let config = personal;
++    if (mode === "nonpersonal")
++      config = { command: "node", args: ["fixture.js"] };
++    if (mode === "fingerprint-changed")
++      config = { ...personal, url: "https://changed.example/mcp" };
++    fs.writeFileSync(
++      catalogPath,
++      JSON.stringify({
++        mcpServers:
++          mode === "empty" || mode === "deleted" ? {} : { [name]: config },
++      })
++    );
++    if (mode === "disabled") await Grant.clear(workspace.id, user.id, name);
++    const invocation = {
++      workspace_id: workspace.id,
++      user_id: mode === "unrelated-user" ? user.id + 10000 : user.id,
++      thread_id: 999,
++      workspace: { id: workspace.id },
++    };
++    await Context.prepare(invocation);
++    expect(await Context.has(invocation)).toBe(false);
++  }
++);
++test("classifier uses persisted workspace id, never an embedded workspace override", async () => {
++  const row = await Grant.begin(workspace.id, user.id, name, personal);
++  await Grant.save(workspace.id, user.id, name, row.version, personal, {
++    access_token: "fixture",
++  });
++  await Servers.create(workspace.id, name, personal);
++  fs.writeFileSync(catalogPath, '{"mcpServers":{}}');
++  const invocation = {
++    workspace_id: workspace.id,
++    user_id: user.id,
++    thread_id: 777,
++    workspace: { id: workspace.id + 10000 },
++  };
++  await Context.prepare(invocation);
++  expect(await Context.has(invocation)).toBe(true);
++});

@@ -6,6 +6,8 @@
 **/collector/hotdir/**
 **/collector/outputs/**
 **/node_modules/
+server/generated/prisma-postgresql/
+.scratch/
 **/dist/
 **/v-env/
 **/__pycache__/

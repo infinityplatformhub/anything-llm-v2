@@ -15,6 +15,7 @@ import ServerModal from "./ServerModal";
 import ToolTester from "./ToolTester";
 import paths from "@/utils/paths";
 import showToast from "@/utils/toast";
+import PersonalMcpConnections from "@/components/WorkspaceChat/ChatContainer/PersonalMcpConnections";
 
 const buttonClass =
   "rounded-lg border border-theme-modal-border px-4 py-2 text-sm font-semibold hover:bg-theme-bg-primary disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2";
@@ -161,6 +162,13 @@ export default function McpConnectors({ workspace, canManage }) {
         <h2 className="text-sm font-bold uppercase tracking-widest">
           MCP Connectors
         </h2>
+        <button
+          type="button"
+          className={`${buttonClass} ml-auto`}
+          onClick={() => setModal({ action: "personal" })}
+        >
+          My MCP connections
+        </button>
         {canManage && (
           <button
             type="button"
@@ -172,8 +180,8 @@ export default function McpConnectors({ workspace, canManage }) {
         )}
       </div>
       <p className="mt-2 mb-4 text-sm text-theme-text-secondary">
-        Choose which connectors this workspace can use. OAuth connections belong
-        to this workspace only.
+        Choose which connectors this workspace can use. Each member enters their
+        own API key or connects their own account in My MCP connections.
       </p>
       {loading ? (
         <Skeleton.default
@@ -226,6 +234,7 @@ export default function McpConnectors({ workspace, canManage }) {
               ...server,
             };
             const oauth = server.config?.anythingllm?.perWorkspaceAuth === true;
+            const personal = server.config?.anythingllm?.perUserAuth === true;
             const expiry = connection?.expiresAt
               ? new Date(connection.expiresAt)
               : null;
@@ -268,6 +277,13 @@ export default function McpConnectors({ workspace, canManage }) {
                   {oauth && (
                     <span className="rounded-full border border-theme-modal-border px-2 py-0.5 text-xs text-theme-text-secondary">
                       OAuth · per workspace
+                    </span>
+                  )}
+                  {personal && (
+                    <span className="rounded-full border border-theme-modal-border px-2 py-0.5 text-xs text-theme-text-secondary">
+                      {server.config.anythingllm.personalAuth?.type === "apiKey"
+                        ? "API key · per member"
+                        : "OAuth · per member"}
                     </span>
                   )}
                   {canManage && server.owner === "workspace" ? (
@@ -408,11 +424,13 @@ export default function McpConnectors({ workspace, canManage }) {
                   </div>
                 ) : (
                   <p className="mt-2 text-xs text-theme-text-secondary">
-                    {t(
-                      server.owner === "workspace"
-                        ? "agent.mcp.workspace-credentials"
-                        : "agent.mcp.shared-credentials"
-                    )}
+                    {personal
+                      ? "Each member uses their own credentials. Open My MCP connections to enter your API key or connect your account."
+                      : t(
+                          server.owner === "workspace"
+                            ? "agent.mcp.workspace-credentials"
+                            : "agent.mcp.shared-credentials"
+                        )}
                   </p>
                 )}
                 <div className="mt-4 border-t border-theme-modal-border pt-4">
@@ -450,7 +468,14 @@ export default function McpConnectors({ workspace, canManage }) {
           slug={slug}
           server={modal.server}
           onClose={() => setModal(null)}
+          onOpenPersonalConnections={() => setModal({ action: "personal" })}
           onSaved={refresh}
+        />
+      )}
+      {modal?.action === "personal" && (
+        <PersonalMcpConnections
+          workspaceSlug={slug}
+          onClose={() => setModal(null)}
         />
       )}
       {canManage && modal?.action === "test" && (

@@ -1,4 +1,5 @@
 const prisma = require("../utils/prisma");
+const { configuration } = require("../utils/prisma/client");
 
 const ScheduledJobRun = {
   statuses: {
@@ -20,7 +21,7 @@ const ScheduledJobRun = {
    * if a `queued` or `running` row already exists, this returns null and the
    * caller should drop the request. The check + insert run inside an
    * interactive transaction so two concurrent callers cannot both pass;
-   * SQLite serializes writes.
+   * SQLite serializes writes; PostgreSQL explicitly locks the parent job.
    *
    * The row is created in `queued` status; the worker transitions it to
    * `running` via markRunning() once it actually begins executing.
@@ -32,6 +33,12 @@ const ScheduledJobRun = {
   start: async function (jobId) {
     try {
       return await prisma.$transaction(async (tx) => {
+        if (configuration.provider === "postgresql") {
+          const jobs = await tx.$queryRaw`
+            SELECT id FROM scheduled_jobs WHERE id = ${Number(jobId)} FOR UPDATE
+          `;
+          if (!jobs.length) return null;
+        }
         const existing = await tx.scheduled_job_runs.findFirst({
           where: {
             jobId: Number(jobId),

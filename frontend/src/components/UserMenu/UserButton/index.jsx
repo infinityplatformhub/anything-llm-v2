@@ -15,15 +15,19 @@ import {
   USER_PROMPT_INPUT_MAP,
 } from "@/utils/constants";
 import { useTranslation } from "react-i18next";
+import { useParams } from "react-router-dom";
+import PersonalMcpConnections from "@/components/WorkspaceChat/ChatContainer/PersonalMcpConnections";
 
 export default function UserButton() {
   const { t } = useTranslation();
   const mode = useLoginMode();
   const { user } = useUser();
+  const { slug } = useParams();
   const menuRef = useRef();
   const buttonRef = useRef();
   const [showMenu, setShowMenu] = useState(false);
   const [showAccountSettings, setShowAccountSettings] = useState(false);
+  const [showPersonalMcp, setShowPersonalMcp] = useState(false);
   const [supportEmail, setSupportEmail] = useState("");
 
   const handleClose = (event) => {
@@ -67,6 +71,8 @@ export default function UserButton() {
         ref={buttonRef}
         onClick={() => setShowMenu(!showMenu)}
         type="button"
+        aria-label="User menu"
+        aria-expanded={showMenu}
         className="uppercase transition-all duration-300 w-[35px] h-[35px] text-base font-semibold rounded-full flex items-center bg-theme-action-menu-bg hover:bg-theme-action-menu-item-hover justify-center text-white p-2 hover:border-slate-100 hover:border-opacity-50 border-transparent border"
       >
         {mode === "multi" ? <UserDisplay /> : <Person size={14} />}
@@ -79,12 +85,24 @@ export default function UserButton() {
         >
           <div className="flex flex-col gap-y-2">
             {mode === "multi" && !!user && (
-              <button
-                onClick={handleOpenAccountModal}
-                className="border-none text-white hover:bg-theme-action-menu-item-hover w-full text-left px-4 py-1.5 rounded-md"
-              >
-                {t("profile_settings.account")}
-              </button>
+              <>
+                <button
+                  onClick={handleOpenAccountModal}
+                  className="border-none text-white hover:bg-theme-action-menu-item-hover w-full text-left px-4 py-1.5 rounded-md"
+                >
+                  {t("profile_settings.account")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMenu(false);
+                    setShowPersonalMcp(true);
+                  }}
+                  className="border-none text-white hover:bg-theme-action-menu-item-hover w-full text-left px-4 py-1.5 rounded-md whitespace-nowrap"
+                >
+                  My MCP connections
+                </button>
+              </>
             )}
             <a
               href={supportEmail}
@@ -113,6 +131,12 @@ export default function UserButton() {
         <AccountModal
           user={user}
           hideModal={() => setShowAccountSettings(false)}
+        />
+      )}
+      {user && showPersonalMcp && (
+        <PersonalMcpConnections
+          workspaceSlug={slug}
+          onClose={() => setShowPersonalMcp(false)}
         />
       )}
     </div>

@@ -1,0 +1,18 @@
+ARG RUNTIME_IMAGE
+FROM ${RUNTIME_IMAGE}
+
+USER anythingllm
+WORKDIR /app/maintenance
+
+RUN mkdir -p server && \
+    ln -s /app/server/node_modules server/node_modules && \
+    ln -s /app/server/generated server/generated && \
+    ln -s /app/server/utils server/utils
+
+COPY --chown=anythingllm:anythingllm scripts/database/*.cjs scripts/database/*.py ./scripts/database/
+COPY --chown=anythingllm:anythingllm server/prisma/ ./server/prisma/
+
+RUN python3 --version && node /app/maintenance/scripts/database/cli.cjs --help
+
+ENTRYPOINT ["node", "/app/maintenance/scripts/database/cli.cjs"]
+CMD ["--help"]

@@ -1,4 +1,4 @@
-const { PrismaClient } = require("@prisma/client");
+const { PrismaClient, configuration } = require("./client");
 
 // npx prisma introspect
 // npx prisma generate
@@ -8,7 +8,7 @@ const { PrismaClient } = require("@prisma/client");
 const logLevels = ["error", "info", "warn"]; // add "query" to debug query logs
 // Deliberately not DATABASE_URL: PaaS hosts inject that automatically, which
 // would silently redirect the database of an existing deployment.
-const databaseUrl = process.env.ANYTHINGLLM_DATABASE_URL;
+const databaseUrl = configuration.url;
 const prisma = new PrismaClient({
   log: logLevels,
   ...(databaseUrl ? { datasources: { db: { url: databaseUrl } } } : {}),
