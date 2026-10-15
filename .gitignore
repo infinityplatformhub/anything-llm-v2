@@ -19,3 +19,4 @@ e2e/.state/
 e2e/logs/
 test-results/
 playwright-report/
+kube.yml
